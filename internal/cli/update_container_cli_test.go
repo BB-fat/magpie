@@ -17,6 +17,7 @@ import (
 // the rename's "permission denied"; it now says to pull the new image.
 // Outside a container it goes on to the download as before.
 func TestUpdateInContainerSaysPullTheImage(t *testing.T) {
+	t.Setenv("MAGPIE_UPDATE_ALLOW_OFFICIAL", "1")
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs a folder this user may not write to")
 	}

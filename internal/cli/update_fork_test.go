@@ -11,7 +11,7 @@ import (
 )
 
 func TestUpdateCmdDisabledInFork(t *testing.T) {
-	os.Unsetenv("MAGPIE_UPDATE_ALLOW_OFFICIAL")
+	t.Setenv("MAGPIE_UPDATE_ALLOW_OFFICIAL", "")
 	var buf bytes.Buffer
 	old := os.Stdout
 	r, w, _ := os.Pipe()
@@ -30,7 +30,7 @@ func TestUpdateCmdDisabledInFork(t *testing.T) {
 }
 
 func TestUpdateAutoOnRejectedInFork(t *testing.T) {
-	os.Unsetenv("MAGPIE_UPDATE_ALLOW_OFFICIAL")
+	t.Setenv("MAGPIE_UPDATE_ALLOW_OFFICIAL", "")
 	groupsHome(t)
 	if err := updateCmd([]string{"update", "auto", "on"}); err == nil {
 		t.Fatal("update auto on = nil, want error")
@@ -38,7 +38,7 @@ func TestUpdateAutoOnRejectedInFork(t *testing.T) {
 }
 
 func TestUpdateAutoOnCannotPersistInFork(t *testing.T) {
-	os.Unsetenv("MAGPIE_UPDATE_ALLOW_OFFICIAL")
+	t.Setenv("MAGPIE_UPDATE_ALLOW_OFFICIAL", "")
 	groupsHome(t)
 	if err := os.MkdirAll(settings.Dir(), 0o755); err != nil {
 		t.Fatal(err)

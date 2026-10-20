@@ -237,7 +237,14 @@ func TestClaudeRunEndsWhenTheClientLeaves(t *testing.T) {
 // whole conversation in one message, which wrote all of it to the cache
 // again while what the old run wrote was still there to read (#463).
 func TestClaudeIdleRunKeptWhileItsCacheLasts(t *testing.T) {
-	if claudeCacheTTL < time.Hour || idleLongest < claudeCacheTTL {
-		t.Fatalf("an idle run is let go after %s, before the cache it wrote, kept %s, expires", idleLongest, claudeCacheTTL)
+	ResetClaudeIdleConfigForTest()
+	t.Setenv(claudeIdleMaxEnv, "")
+	t.Setenv(claudeIdleTTLEnv, "")
+	if err := LoadClaudeIdleConfig(); err != nil {
+		t.Fatal(err)
+	}
+	// Upstream default: idle TTL matches the 1h prompt cache Claude Code keeps.
+	if claudeCacheTTL != time.Hour || idleLongest != time.Hour {
+		t.Fatalf("defaults: cache TTL %s, idle longest %s", claudeCacheTTL, idleLongest)
 	}
 }

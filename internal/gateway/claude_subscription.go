@@ -98,11 +98,7 @@ type subscriptionBridge struct {
 // while what the old run wrote is still there to read (#463: a turn
 // after 39 minutes idle wrote the conversation again). Past the hour the cache is gone
 // either way, and the run would only hold a process.
-const (
-	claudeCacheTTL = time.Hour
-	idleLongest    = claudeCacheTTL
-	idleMost       = 6
-)
+const claudeCacheTTL = time.Hour
 
 // parkLongest is how long a run started anew for each turn (Cursor)
 // waits on its caller's tool results. A caller that quit, or was stopped,
@@ -405,6 +401,9 @@ func evalSymlinks(path string) string {
 
 func newSubscriptionBridge() *subscriptionBridge {
 	if err := claudebridge.LoadMCPConfig(); err != nil {
+		log.Fatal(err)
+	}
+	if err := LoadClaudeIdleConfig(); err != nil {
 		log.Fatal(err)
 	}
 	b := &subscriptionBridge{runs: map[string]*subscriptionRun{}, calls: map[string]*subscriptionRun{}, idle: map[string]*subscriptionRun{}, shelf: map[string]*savedSession{}}
