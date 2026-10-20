@@ -237,6 +237,7 @@ func TestClaudeRunEndsWhenTheClientLeaves(t *testing.T) {
 // whole conversation in one message, which wrote all of it to the cache
 // again while what the old run wrote was still there to read (#463).
 func TestClaudeIdleRunKeptWhileItsCacheLasts(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	ResetClaudeIdleConfigForTest()
 	t.Setenv(claudeIdleMaxEnv, "")
 	t.Setenv(claudeIdleTTLEnv, "")

@@ -24,6 +24,7 @@ import (
 // it, and its calls are handed back under the name the client declared, on
 // every API the bridge serves, streamed or whole.
 func TestClaudeToolNamesComeBackAsDeclared(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("a shell script stands in for Claude Code")
 	}

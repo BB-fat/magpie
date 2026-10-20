@@ -116,6 +116,7 @@ func isolatedTests(m *testing.M) (int, error) {
 	// and no rest waits on a reading in the background: it would ask a
 	// test's fake upstream after the test ended (#2036, CodeAlex52)
 	awaitAllowance = func(context.Context, string, string) bool { return false }
+	restoreDefaultClaudeBridgeEnv()
 	return m.Run(), nil
 }
 
