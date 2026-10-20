@@ -26,10 +26,10 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
-	"github.com/yetone/magpie/internal/forkbuild"
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/fonts"
+	"github.com/yetone/magpie/internal/forkbuild"
 	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/steady"
