@@ -14,6 +14,7 @@ import (
 // and a host started in a home without a models.dev catalog fetched the
 // real one for up to 30s (#1922).
 func TestMain(m *testing.M) {
+	os.Setenv("MAGPIE_UPDATE_ALLOW_OFFICIAL", "1")
 	os.Exit(testenv.RunIn(m, func(string) { testenv.Offline() }))
 }
 

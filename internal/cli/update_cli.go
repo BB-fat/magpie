@@ -174,16 +174,6 @@ func updateCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	if update.SelfUpdateDisabled() {
-		if len(args) > 1 && args[1] == "auto" {
-			return updateAutoCmd(args[2:])
-		}
-		if len(args) > 1 && args[1] == "mirror" {
-			return updateMirrorCmd(args[2:])
-		}
-		fmt.Println(update.DisabledMessage())
-		return nil
-	}
 	if len(args) > 1 && args[1] == "auto" {
 		return updateAutoCmd(args[2:])
 	}
@@ -192,6 +182,10 @@ func updateCmd(args []string) error {
 	}
 	if len(args) > 2 || len(args) == 2 && args[1] != "check" {
 		return fmt.Errorf("usage: magpie update [check] [--proxy <url>] [--mirror <prefix>]")
+	}
+	if update.SelfUpdateDisabled() {
+		fmt.Println(update.DisabledMessage())
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()

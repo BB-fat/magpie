@@ -30,6 +30,20 @@ Enterprise gateways may block the default MCP server name `magpie`. Set
 `MAGPIE_CLAUDE_MCP_NAME` to a permitted name before starting magpie; see
 [Claude subscription bridge](subsystems/claude-subscription-bridge.md).
 
+## Claude subscription idle pool (memory)
+
+On small VPS hosts, idle Claude Code processes kept for the next turn can use
+a lot of RAM. Optional env vars (read once at gateway startup; invalid values
+stop magpie with an error):
+
+| Variable | Default (unset) | Meaning |
+| --- | --- | --- |
+| `MAGPIE_CLAUDE_IDLE_MAX` | `6` | Max idle Claude Code processes kept in memory (`keepIdle`). **`0` is allowed:** new idle runs are shelved immediately (session on disk, no live process). |
+| `MAGPIE_CLAUDE_IDLE_TTL` | `1h` | How long an idle run may stay alive before its timer ends it. Independent of prompt-cache TTL (`claudeCacheTTL`); shortening this does not change cache marks. |
+
+Example for a 1GB box: `MAGPIE_CLAUDE_IDLE_MAX=1` and/or
+`MAGPIE_CLAUDE_IDLE_TTL=10m`.
+
 ## Automation
 
 - `.github/workflows/upstream-sync.yml` — daily (and manual) check for a new

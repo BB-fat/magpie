@@ -2,7 +2,6 @@ package update
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
@@ -10,7 +9,7 @@ import (
 )
 
 func TestSelfUpdateDisabledInCustomFork(t *testing.T) {
-	os.Unsetenv(forkbuild.AllowOfficialEnv)
+	t.Setenv(forkbuild.AllowOfficialEnv, "")
 	if !SelfUpdateDisabled() {
 		t.Fatal("SelfUpdateDisabled = false, want true without test escape env")
 	}
