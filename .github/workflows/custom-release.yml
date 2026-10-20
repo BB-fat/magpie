@@ -44,15 +44,24 @@ jobs:
           [[ "$REF" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]] || { echo "bad ref: $REF" >&2; exit 1; }
           VERSION="${REF#v}"
           git remote add upstream https://github.com/yetone/magpie.git 2>/dev/null || true
-          git fetch upstream --tags 2>/dev/null || true
-          UPSTREAM=$(git tag -l 'v0.1.*' | sort -V | tail -1)
-          UPSTREAM="${UPSTREAM#v}"
-          CUSTOM=$(git rev-list --count "$(git merge-base HEAD origin/custom 2>/dev/null || git rev-parse HEAD)"..HEAD 2>/dev/null || echo 0)
+          git fetch upstream --tags --force 2>/dev/null || true
+          # Plain upstream release tags only (v0.1.N), not fork tags like v0.1.1295-custom.1
+          UPSTREAM_TAG=""
+          while read -r tag; do
+            [[ "$tag" =~ ^v0\.1\.[0-9]+$ ]] || continue
+            if git merge-base --is-ancestor "$tag" HEAD 2>/dev/null; then
+              UPSTREAM_TAG="$tag"
+            fi
+          done < <(git tag -l 'v0.1.*' | sort -V)
+          [ -n "$UPSTREAM_TAG" ] || { echo "no upstream base tag found on this commit" >&2; exit 1; }
+          UPSTREAM="${UPSTREAM_TAG#v}"
+          CUSTOM=$(git rev-list --count "${UPSTREAM_TAG}..HEAD")
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
           echo "custom_commits=$CUSTOM" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Upstream base ${UPSTREAM_TAG}, custom commits since: ${CUSTOM}"
 
   build-linux-amd64:
     needs: meta
@@ -123,6 +132,7 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           REF: ${{ needs.meta.outputs.ref }}
           VERSION: ${{ needs.meta.outputs.version }}
           UPSTREAM: ${{ needs.meta.outputs.upstream }}
@@ -132,7 +142,7 @@ jobs:
           notes="## Custom fork release
 
           - **Upstream base:** v${UPSTREAM}
-          - **Custom commits on branch:** ${CUSTOM_COMMITS}
+          - **Custom commits since upstream tag:** ${CUSTOM_COMMITS}
           - **Built from:** \`${SHA}\`
 
           ### Assets (2)
@@ -149,11 +159,11 @@ jobs:
           \`\`\`
 
           Built-in self-update to the official feed is **disabled** in this fork (\`forkbuild.CustomFork\`); install upgrades from this repo's Releases. See [docs/custom-fork.md](https://github.com/BB-fat/magpie/blob/custom/docs/custom-fork.md)."
-          if gh release view "$REF" >/dev/null 2>&1; then
-            gh release upload "$REF" dist/magpie-cli-linux-amd64 dist/magpie-darwin-arm64.zip --clobber
-            gh release edit "$REF" --notes "$notes"
+          if gh release view "$REF" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$REF" --repo "$GITHUB_REPOSITORY" dist/magpie-cli-linux-amd64 dist/magpie-darwin-arm64.zip --clobber
+            gh release edit "$REF" --repo "$GITHUB_REPOSITORY" --notes "$notes"
           else
-            gh release create "$REF" dist/magpie-cli-linux-amd64 dist/magpie-darwin-arm64.zip \
+            gh release create "$REF" --repo "$GITHUB_REPOSITORY" dist/magpie-cli-linux-amd64 dist/magpie-darwin-arm64.zip \
               --title "Custom ${VERSION}" \
               --notes "$notes"
           fi

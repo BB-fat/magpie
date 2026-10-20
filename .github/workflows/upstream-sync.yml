@@ -21,12 +21,19 @@ jobs:
       - name: Add upstream remote
         run: |
           git remote add upstream https://github.com/yetone/magpie.git 2>/dev/null || true
-          git fetch upstream --tags
+          git fetch upstream --tags --force
 
       - name: Find newest upstream release tag
         id: tag
         run: |
-          latest=$(git tag -l 'v0.1.*' | sort -V | tail -1)
+          # yetone/magpie plain release tags (v0.1.N), not fork tags like v0.1.1295-custom.1
+          latest=$(git ls-remote --tags upstream 'v0.1.*' \
+            | awk '{print $2}' \
+            | sed 's|refs/tags/||' \
+            | grep -v '\^{}$' \
+            | grep -E '^v0\.1\.[0-9]+$' \
+            | sort -V \
+            | tail -1)
           [ -n "$latest" ] || { echo "no upstream tag" >&2; exit 1; }
           echo "tag=$latest" >> "$GITHUB_OUTPUT"
           echo "Newest upstream tag: $latest"
@@ -46,8 +53,9 @@ jobs:
         id: open
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          n=$(gh pr list --base custom --head 'upstream/sync-*' --state open --json number -q 'length')
+          n=$(gh pr list --repo "$GITHUB_REPOSITORY" --base custom --head 'upstream/sync-*' --state open --json number -q 'length')
           if [ "$n" != "0" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Open upstream sync PR already exists"
@@ -91,8 +99,9 @@ jobs:
         if: steps.merge.outputs.merge_conflict == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          gh pr create --base custom --head "${{ steps.merge.outputs.branch }}" \
+          gh pr create --repo "$GITHUB_REPOSITORY" --base custom --head "${{ steps.merge.outputs.branch }}" \
             --title "Sync upstream ${{ steps.tag.outputs.tag }}" \
             --body "Automated merge of yetone/magpie tag ${{ steps.tag.outputs.tag }} into custom. Tests passed on the sync branch."
 
