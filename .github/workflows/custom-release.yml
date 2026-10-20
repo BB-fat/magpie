@@ -1,0 +1,85 @@
+name: Custom release
+
+# Pushing v* on custom builds BB-fat release assets. Self-update still reads
+# usemagpie.ai unless MAGPIE_UPDATE_FEED is set; see docs/custom-fork.md.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag to build (e.g. v0.1.1295-custom.1), must exist on custom'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag and versions
+        id: ver
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            REF="$GITHUB_REF_NAME"
+          else
+            REF="$INPUT_VERSION"
+          fi
+          [[ "$REF" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]] || { echo "bad ref: $REF" >&2; exit 1; }
+          VERSION="${REF#v}"
+          UPSTREAM=$(git describe --tags --abbrev=0 --match 'v0.1.*' "$(git merge-base HEAD upstream/main 2>/dev/null || echo HEAD)" 2>/dev/null || git tag -l 'v0.1.*' | sort -V | tail -1)
+          UPSTREAM="${UPSTREAM#v}"
+          CUSTOM=$(git log --oneline "$(git merge-base HEAD origin/custom 2>/dev/null || echo HEAD)"..HEAD 2>/dev/null | wc -l | tr -d ' ')
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+          echo "custom_commits=$CUSTOM" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build CLI targets
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          make release-cli
+          mkdir -p dist/checksums
+          (cd dist && sha256sum magpie-cli-* > checksums/sha256.txt)
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          notes="## Custom fork release
+
+          - **Upstream base:** v${{ steps.ver.outputs.upstream }}
+          - **Upstream commit at merge-base:** (see git log)
+          - **Custom commits on branch:** ${{ steps.ver.outputs.custom_commits }}
+          - **Built from:** \`${{ steps.ver.outputs.sha }}\`
+
+          ### SHA-256 (CLI builds)
+
+          \`\`\`
+          $(cat dist/checksums/sha256.txt)
+          \`\`\`
+
+          Official magpie self-update still uses [usemagpie.ai](https://usemagpie.ai). To keep this build, use \`magpie update auto off\` or set \`MAGPIE_UPDATE_FEED\`; see [docs/custom-fork.md](docs/custom-fork.md)."
+          if gh release view "${{ steps.ver.outputs.ref }}" >/dev/null 2>&1; then
+            gh release upload "${{ steps.ver.outputs.ref }}" dist/magpie-cli-* --clobber
+          else
+            gh release create "${{ steps.ver.outputs.ref }}" dist/magpie-cli-* \
+              --title "Custom ${{ steps.ver.outputs.version }}" \
+              --notes "$notes"
+          fi

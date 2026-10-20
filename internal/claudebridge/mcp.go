@@ -56,6 +56,9 @@ var listWait = 5 * time.Second
 // (Grok), MAGPIE_MCP_CALLBACK and MAGPIE_MCP_TOOLS in the environment it
 // hands down. It intentionally implements only the MCP methods Claude Code needs.
 func RunMCP(args []string) error {
+	if err := LoadMCPConfig(); err != nil {
+		return err
+	}
 	if len(args) == 0 && os.Getenv("MAGPIE_MCP_CALLBACK") != "" {
 		args = []string{os.Getenv("MAGPIE_MCP_CALLBACK"), os.Getenv("MAGPIE_MCP_TOOLS")}
 	}
@@ -136,7 +139,7 @@ func RunMCP(args []string) error {
 				result = map[string]any{
 					"protocolVersion": "2025-06-18",
 					"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
-					"serverInfo":      map[string]any{"name": "magpie", "version": "1"},
+					"serverInfo":      map[string]any{"name": MCPServerName(), "version": "1"},
 				}
 			case "tools/list":
 				toolsMu.Lock()
