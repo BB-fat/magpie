@@ -1,7 +1,7 @@
 name: Custom release
 
-# Pushing v* on custom builds BB-fat release assets. Self-update still reads
-# usemagpie.ai unless MAGPIE_UPDATE_FEED is set; see docs/custom-fork.md.
+# Pushing v* builds two assets for BB-fat/magpie Releases. Official
+# self-update is disabled in this fork; see docs/custom-fork.md.
 
 on:
   push:
@@ -18,8 +18,14 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  meta:
     runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.ver.outputs.ref }}
+      version: ${{ steps.ver.outputs.version }}
+      upstream: ${{ steps.ver.outputs.upstream }}
+      custom_commits: ${{ steps.ver.outputs.custom_commits }}
+      sha: ${{ steps.ver.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,49 +43,117 @@ jobs:
           fi
           [[ "$REF" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]] || { echo "bad ref: $REF" >&2; exit 1; }
           VERSION="${REF#v}"
-          UPSTREAM=$(git describe --tags --abbrev=0 --match 'v0.1.*' "$(git merge-base HEAD upstream/main 2>/dev/null || echo HEAD)" 2>/dev/null || git tag -l 'v0.1.*' | sort -V | tail -1)
+          git remote add upstream https://github.com/yetone/magpie.git 2>/dev/null || true
+          git fetch upstream --tags 2>/dev/null || true
+          UPSTREAM=$(git tag -l 'v0.1.*' | sort -V | tail -1)
           UPSTREAM="${UPSTREAM#v}"
-          CUSTOM=$(git log --oneline "$(git merge-base HEAD origin/custom 2>/dev/null || echo HEAD)"..HEAD 2>/dev/null | wc -l | tr -d ' ')
+          CUSTOM=$(git rev-list --count "$(git merge-base HEAD origin/custom 2>/dev/null || git rev-parse HEAD)"..HEAD 2>/dev/null || echo 0)
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
           echo "custom_commits=$CUSTOM" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+  build-linux-amd64:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Build CLI targets
+      - name: Build static CLI (linux/amd64)
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.meta.outputs.version }}
         run: |
-          make release-cli
+          mkdir -p dist
+          LDFLAGS="-s -w -X main.version=${VERSION}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nogui -trimpath -ldflags="$LDFLAGS" -o dist/magpie-cli-linux-amd64 .
+          file dist/magpie-cli-linux-amd64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: dist/magpie-cli-linux-amd64
+
+  build-darwin-arm64:
+    needs: meta
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Same deliverable as yetone/magpie-releases: magpie-darwin-arm64.zip
+      # (magpie.app menu bar bundle, not the nogui CLI).
+      - name: Build magpie.app and zip
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          make app
+          mkdir -p dist
+          ditto -c -k --keepParent magpie.app dist/magpie-darwin-arm64.zip
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-arm64
+          path: dist/magpie-darwin-arm64.zip
+
+  release:
+    needs: [meta, build-linux-amd64, build-darwin-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release files
+        run: |
           mkdir -p dist/checksums
-          (cd dist && sha256sum magpie-cli-* > checksums/sha256.txt)
+          cp artifacts/linux-amd64/magpie-cli-linux-amd64 dist/
+          cp artifacts/darwin-arm64/magpie-darwin-arm64.zip dist/
+          (cd dist && sha256sum magpie-cli-linux-amd64 magpie-darwin-arm64.zip > checksums/sha256.txt)
+          cat dist/checksums/sha256.txt
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF: ${{ needs.meta.outputs.ref }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          UPSTREAM: ${{ needs.meta.outputs.upstream }}
+          CUSTOM_COMMITS: ${{ needs.meta.outputs.custom_commits }}
+          SHA: ${{ needs.meta.outputs.sha }}
         run: |
           notes="## Custom fork release
 
-          - **Upstream base:** v${{ steps.ver.outputs.upstream }}
-          - **Upstream commit at merge-base:** (see git log)
-          - **Custom commits on branch:** ${{ steps.ver.outputs.custom_commits }}
-          - **Built from:** \`${{ steps.ver.outputs.sha }}\`
+          - **Upstream base:** v${UPSTREAM}
+          - **Custom commits on branch:** ${CUSTOM_COMMITS}
+          - **Built from:** \`${SHA}\`
 
-          ### SHA-256 (CLI builds)
+          ### Assets (2)
+
+          | File | Platform |
+          | --- | --- |
+          | \`magpie-darwin-arm64.zip\` | macOS Apple Silicon — \`magpie.app\` menu bar bundle (same shape as [yetone/magpie-releases](https://github.com/yetone/magpie-releases)) |
+          | \`magpie-cli-linux-amd64\` | Linux x86_64 — static \`nogui\` CLI (\`CGO_ENABLED=0\`), suitable for \`/usr/local/bin/magpie\` on Ubuntu 24.04 |
+
+          ### SHA-256
 
           \`\`\`
           $(cat dist/checksums/sha256.txt)
           \`\`\`
 
-          Built-in self-update to the official feed is **disabled** in this fork (\`update.CustomFork\`); install upgrades from this repo's Releases. See [docs/custom-fork.md](docs/custom-fork.md)."
-          if gh release view "${{ steps.ver.outputs.ref }}" >/dev/null 2>&1; then
-            gh release upload "${{ steps.ver.outputs.ref }}" dist/magpie-cli-* --clobber
+          Built-in self-update to the official feed is **disabled** in this fork (\`forkbuild.CustomFork\`); install upgrades from this repo's Releases. See [docs/custom-fork.md](https://github.com/BB-fat/magpie/blob/custom/docs/custom-fork.md)."
+          if gh release view "$REF" >/dev/null 2>&1; then
+            gh release upload "$REF" dist/magpie-cli-linux-amd64 dist/magpie-darwin-arm64.zip --clobber
+            gh release edit "$REF" --notes "$notes"
           else
-            gh release create "${{ steps.ver.outputs.ref }}" dist/magpie-cli-* \
-              --title "Custom ${{ steps.ver.outputs.version }}" \
+            gh release create "$REF" dist/magpie-cli-linux-amd64 dist/magpie-darwin-arm64.zip \
+              --title "Custom ${VERSION}" \
               --notes "$notes"
           fi

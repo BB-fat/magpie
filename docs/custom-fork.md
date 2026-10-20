@@ -34,5 +34,6 @@ Enterprise gateways may block the default MCP server name `magpie`. Set
 
 - `.github/workflows/upstream-sync.yml` — daily (and manual) check for a new
   upstream release tag, merge into `custom` via a PR when tests pass.
-- `.github/workflows/custom-release.yml` — build and publish a GitHub Release
-  when a `v*` tag is pushed on `custom`.
+- `.github/workflows/custom-release.yml` — on `v*` tag, publish two assets:
+  `magpie-darwin-arm64.zip` (macOS Apple Silicon `magpie.app`, same as upstream)
+  and `magpie-cli-linux-amd64` (static Linux x86_64 CLI).
