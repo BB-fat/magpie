@@ -75,7 +75,7 @@ jobs:
           $(cat dist/checksums/sha256.txt)
           \`\`\`
 
-          Official magpie self-update still uses [usemagpie.ai](https://usemagpie.ai). To keep this build, use \`magpie update auto off\` or set \`MAGPIE_UPDATE_FEED\`; see [docs/custom-fork.md](docs/custom-fork.md)."
+          Built-in self-update to the official feed is **disabled** in this fork (\`update.CustomFork\`); install upgrades from this repo's Releases. See [docs/custom-fork.md](docs/custom-fork.md)."
           if gh release view "${{ steps.ver.outputs.ref }}" >/dev/null 2>&1; then
             gh release upload "${{ steps.ver.outputs.ref }}" dist/magpie-cli-* --clobber
           else

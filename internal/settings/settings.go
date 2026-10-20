@@ -26,6 +26,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/forkbuild"
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/fonts"
@@ -1218,6 +1219,9 @@ func SetRedactModel(on bool) error {
 func save(s Settings, recording bool) error {
 	defer filememo.Forget() // read again, where a request holds it
 	s = s.normal()
+	if forkbuild.SelfUpdateDisabled() {
+		s.NoAutoUpdate = true
+	}
 	if !slices.Contains(Themes, s.Theme) {
 		return fmt.Errorf("theme must be one of %v, not %q", Themes, s.Theme)
 	}

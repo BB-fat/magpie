@@ -81,6 +81,9 @@ func Latest(ctx context.Context) (*Release, error) { return LatestIn(ctx, "") }
 // LatestIn asks the feed for the newest release, its notes in lang (see
 // InLang): the app's language, which What's new follows.
 func LatestIn(ctx context.Context, lang string) (*Release, error) {
+	if err := guardSelfUpdate(); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", withLang(Feed(), lang), nil)
 	if err != nil {
 		return nil, err
@@ -257,6 +260,9 @@ func Writable(dir string) bool {
 // Stage downloads the app in rel and unpacks it next to the installed
 // bundle, ready for Install. It returns the unpacked app.
 func Stage(ctx context.Context, rel *Release, bundle string) (string, error) {
+	if err := guardSelfUpdate(); err != nil {
+		return "", err
+	}
 	a, ok := rel.Assets[AppAsset()]
 	if !ok {
 		return "", fmt.Errorf("release %s has no %s", rel.Version, AppAsset())
@@ -382,6 +388,9 @@ func relaunchOpen(bundle string, window bool) string {
 // ReplaceBinary puts the release's build for this binary where the
 // running one is.
 func ReplaceBinary(ctx context.Context, rel *Release) error {
+	if err := guardSelfUpdate(); err != nil {
+		return err
+	}
 	exe, err := Executable()
 	if err != nil {
 		return err
@@ -400,6 +409,9 @@ func ReplaceBinary(ctx context.Context, rel *Release) error {
 // StageBinary downloads the release's build for this binary next to it (or
 // to the cache, where magpie may not write there), ready for InstallBinary.
 func StageBinary(ctx context.Context, rel *Release) (string, error) {
+	if err := guardSelfUpdate(); err != nil {
+		return "", err
+	}
 	a, ok := rel.Assets[BinaryAsset()]
 	if !ok {
 		return "", fmt.Errorf("release %s has no %s", rel.Version, BinaryAsset())

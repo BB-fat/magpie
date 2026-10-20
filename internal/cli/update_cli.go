@@ -31,6 +31,37 @@ var updateEveries = map[string]int{"30m": 30, "1h": 60, "6h": 360, "24h": 1440}
 // be out, downloaded on a click (notify, #2296). With none, it says how it
 // is set.
 func updateAutoCmd(args []string) error {
+	if update.SelfUpdateDisabled() {
+		for _, a := range args {
+			if a == "on" {
+				return fmt.Errorf("%s; magpie update auto on has no effect in this fork", update.DisabledMessage())
+			}
+		}
+		s := settings.Load()
+		for _, a := range args {
+			switch a {
+			case "off":
+				s.NoAutoUpdate = true
+			case "download", "notify":
+				s.NoAutoDownload = a == "notify"
+			default:
+				m, ok := updateEveries[a]
+				if !ok {
+					return fmt.Errorf("magpie update auto takes on, off, download, notify or how often (30m, 1h, 6h or 24h), not %q", a)
+				}
+				s.UpdateEvery = m
+			}
+		}
+		if len(args) > 0 {
+			s.NoAutoUpdate = true
+			if err := settings.Save(s); err != nil {
+				return err
+			}
+		}
+		fmt.Println(update.DisabledMessage())
+		fmt.Println("automatic updates are off", muted.Render("· cannot be turned on in this fork"))
+		return nil
+	}
 	s := settings.Load()
 	for _, a := range args {
 		switch a {
@@ -142,6 +173,16 @@ func updateCmd(args []string) error {
 	args, proxy, mirror, err := updateFlags(args)
 	if err != nil {
 		return err
+	}
+	if update.SelfUpdateDisabled() {
+		if len(args) > 1 && args[1] == "auto" {
+			return updateAutoCmd(args[2:])
+		}
+		if len(args) > 1 && args[1] == "mirror" {
+			return updateMirrorCmd(args[2:])
+		}
+		fmt.Println(update.DisabledMessage())
+		return nil
 	}
 	if len(args) > 1 && args[1] == "auto" {
 		return updateAutoCmd(args[2:])

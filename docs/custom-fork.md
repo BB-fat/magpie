@@ -4,31 +4,25 @@ This fork tracks [yetone/magpie](https://github.com/yetone/magpie) from the
 latest upstream release tag on branch `custom`, with BB-fat-specific changes
 merged on top.
 
-## Self-update and official releases
+## Self-update (disabled in code)
 
-magpie's built-in update checks `https://usemagpie.ai/api/latest`, which
-describes **yetone/magpie-releases** builds (`internal/update/update.go`,
-`Feed()`). A custom GitHub Release from **BB-fat/magpie** does not replace
-that feed unless you point magpie at one.
+**Built-in self-update is turned off in this fork.** `internal/update/fork.go`
+sets `CustomFork = true`, which makes `update.SelfUpdateDisabled()` true in
+production builds:
 
-Custom release binaries are built with a version like
-`0.1.1295+custom.N` (build metadata after `+` does not affect semver
-ordering). The official `0.1.1296` release is still **newer** than
-`0.1.1295+custom.N`, so an unchanged install may download and replace the
-custom binary with the official one.
+- No requests to `usemagpie.ai` / **yetone/magpie-releases** for updates
+  (`Latest`, `Stage`, `ReplaceBinary`, … return `update.ErrSelfUpdateDisabled`).
+- The app's background update timer never runs (`updateDue` is always false).
+- `magpie update` and `magpie update check` print `update.DisabledMessage()`
+  and do not download.
+- `magpie update auto on` is rejected; saving settings forces
+  `noAutoUpdate` true so the GUI cannot re-enable official updates.
 
-To keep a custom build:
+Install newer custom builds from
+[BB-fat/magpie Releases](https://github.com/BB-fat/magpie/releases).
 
-1. Turn off automatic updates: `magpie update auto off` (or Settings ›
-   General › Updates), **or**
-2. Point the feed elsewhere for testing or a private mirror:
-   `MAGPIE_UPDATE_FEED=<url>` (`internal/update/update.go`), **or**
-3. Install only from [BB-fat/magpie Releases](https://github.com/BB-fat/magpie/releases)
-   and avoid “Check for updates” in the app.
-
-There is no separate “fork channel” in upstream magpie; preventing overwrite
-is an install/update policy choice, not a compile-time switch in yetone/magpie
-v0.1.1295.
+Tests may set `MAGPIE_UPDATE_ALLOW_OFFICIAL=1` to exercise the upstream
+update path against a httptest feed; release builds do not set that.
 
 ## Claude subscription MCP server name
 
