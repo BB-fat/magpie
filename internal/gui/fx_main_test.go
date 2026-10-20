@@ -25,5 +25,6 @@ func TestMain(m *testing.M) {
 		l.Close() // refused at once from here on
 		fx.SetRateURL("http://" + addr + "/")
 	}
+	os.Setenv("MAGPIE_UPDATE_ALLOW_OFFICIAL", "1")
 	os.Exit(testenv.Run(m))
 }

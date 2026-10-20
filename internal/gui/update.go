@@ -113,6 +113,9 @@ var updates = &updater{}
 // settings' interval is up. The settings are read again each minute, so
 // one changed (in Settings or the CLI) counts from the last check.
 func updateDue(s settings.Settings, last, now time.Time) bool {
+	if update.SelfUpdateDisabled() {
+		return false
+	}
 	return !s.NoAutoUpdate && now.Sub(last) >= time.Duration(s.UpdateEvery)*time.Minute
 }
 
@@ -269,6 +272,10 @@ func (u *updater) freshen() {
 func (u *updater) begin() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if update.SelfUpdateDisabled() {
+		u.state, u.err = "disabled", update.DisabledMessage()
+		return false
+	}
 	if u.state == "checking" || u.state == "downloading" {
 		return false
 	}

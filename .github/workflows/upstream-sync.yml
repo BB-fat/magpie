@@ -1,0 +1,103 @@
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: custom
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/yetone/magpie.git 2>/dev/null || true
+          git fetch upstream --tags
+
+      - name: Find newest upstream release tag
+        id: tag
+        run: |
+          latest=$(git tag -l 'v0.1.*' | sort -V | tail -1)
+          [ -n "$latest" ] || { echo "no upstream tag" >&2; exit 1; }
+          echo "tag=$latest" >> "$GITHUB_OUTPUT"
+          echo "Newest upstream tag: $latest"
+
+      - name: Skip if custom already contains tag
+        id: skip
+        run: |
+          if git merge-base --is-ancestor "${{ steps.tag.outputs.tag }}" HEAD; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Branch custom already contains ${{ steps.tag.outputs.tag }}"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if open sync PR exists
+        if: steps.skip.outputs.skip != 'true'
+        id: open
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          n=$(gh pr list --base custom --head 'upstream/sync-*' --state open --json number -q 'length')
+          if [ "$n" != "0" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Open upstream sync PR already exists"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream tag
+        if: steps.skip.outputs.skip != 'true' && steps.open.outputs.skip != 'true'
+        id: merge
+        run: |
+          branch="upstream/sync-${{ steps.tag.outputs.tag }}"
+          git checkout -B "$branch"
+          if ! git merge --no-edit "${{ steps.tag.outputs.tag }}"; then
+            echo "merge_conflict=true" >> "$GITHUB_OUTPUT"
+            git merge --abort || true
+            exit 0
+          fi
+          echo "merge_conflict=false" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          git push -u origin "$branch"
+
+      - uses: actions/setup-go@v5
+        if: steps.merge.outputs.merge_conflict == 'false'
+        with:
+          go-version-file: go.mod
+
+      - name: Install GTK and WebKitGTK
+        if: steps.merge.outputs.merge_conflict == 'false' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Test suite
+        if: steps.merge.outputs.merge_conflict == 'false'
+        run: |
+          go vet -tags nogui ./...
+          go test -tags nogui ./...
+
+      - name: Open PR into custom
+        if: steps.merge.outputs.merge_conflict == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create --base custom --head "${{ steps.merge.outputs.branch }}" \
+            --title "Sync upstream ${{ steps.tag.outputs.tag }}" \
+            --body "Automated merge of yetone/magpie tag ${{ steps.tag.outputs.tag }} into custom. Tests passed on the sync branch."
+
+      - name: Report merge conflict
+        if: steps.merge.outputs.merge_conflict == 'true'
+        run: |
+          echo "Merge of ${{ steps.tag.outputs.tag }} conflicted; fix manually." >&2
+          exit 1

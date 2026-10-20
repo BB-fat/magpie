@@ -54,7 +54,19 @@ user's own Claude Code sessions leaves a SOCKS proxy out (see
 [Providers and accounts](providers-accounts.md)).
 
 The helper offers each of the client's tools under `bridgeToolName`
-(`bridgeTools`), which Claude Code calls `mcp__magpie__<name>`. Claude Code
+(`bridgeTools`), which Claude Code calls `mcp__<server>__<name>`. With no
+`MAGPIE_CLAUDE_MCP_NAME`, `<server>` is `magpie` (`internal/claudebridge`,
+`MCPServerName`). The env var names that server for the Claude subscription
+bridge only (v1): the `mcpServers` key passed to Claude Code, the MCP
+`initialize` `serverInfo.name`, the tool prefix, and return detection /
+history replay (`claudebridge.MCPToolPrefix`, `bridgeName`, `toolStart`).
+It is read once when the gateway first makes the subscription bridge or the
+helper starts; invalid values stop startup with an error, and a change needs
+a restart. The name must match `[A-Za-z][A-Za-z0-9_-]{0,31}` and leave room
+under Claude Code's 64-character full tool name for offered and hashed names
+(`MaxOfferedToolNameLen`, `MaxHashedToolStemLen`). A different name is part
+of the run key (`turnKey`), so idle runs and saved sessions from another
+name are not reused. Claude Code
 keeps only `[A-Za-z0-9_-]` of an MCP tool's name, so a name it would change
 (`spawn.agent`, `fs/read`), one longer than 51 (64 with the prefix) or one
 ending as a changed name ends (`_` and 12 hex digits) is cut, made of those
@@ -65,7 +77,7 @@ run was offered it. `subscriptionRun.names` (`bridgeNames`) maps it back
 to the declared name in `toolStart`, for streamed and whole messages, and
 in `mcpCall` (#2649).
 
-The run's MCP server is magpie itself (`magpie claude-mcp-helper`,
+The run's MCP server is magpie itself, under that name (`magpie claude-mcp-helper`,
 `internal/claudebridge`), which hands each tool call back to the gateway
 at `POST /_magpie/claude-mcp/<token>` (`mcpCall`), where the call is
 registered in `b.calls` for the turn with its results to find. The token
@@ -547,7 +559,8 @@ go test -tags nogui ./internal/claudecode/ -count=1
 go test -tags nogui ./internal/gateway/ -run '^TestClaudeCodeGivenTheBridgeForASOCKSProxy$' -count=1
 go test -tags nogui ./internal/provider/ -run '^TestClaudeSignInBridgesASOCKSProxy$' -count=1
 go test -tags nogui ./internal/netproxy/ -run '^TestEnvForBunWith' -count=1
-go test -tags nogui ./internal/gateway/ -run '^TestClaudeToolNamesComeBackAsDeclared$' -count=1
+go test -tags nogui ./internal/claudebridge/ -run '^TestMCP' -count=1
+go test -tags nogui ./internal/gateway/ -run '^TestClaude(MCPName|ToolNames)' -count=1
 go test -tags nogui ./internal/gateway/ -run 'ClaudeSubscriptionRunsTheDownloaded|ClaudeSubscriptionWithoutClaudeCode|ClaudeRewritten|LostMedia|ImagesTakenOut|RunLetGoWhenTheClientRewrote|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns|ClaudeHistoryCachedAcrossNewRuns|ClaudeUnloadableSession|ClaudeEndedRunSaysWhy|ClaudeIdle|ClaudeSideQuestion|ClaudeNoRunSaysWhy|ClaudeToolResultsNoRunSaysWhy|ClaudePromptToldUserText|ClaudePromptKeepsInstructions|ClaudeToolResultsGoOnWithTheUsersWords|ClaudeToolResultsKeepInstructions|ToolResultKeepsUserTextSentMidTurn' -count=1
 ```
 

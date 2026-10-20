@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yetone/magpie/internal/claudebridge"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/testenv"
 )
@@ -26,6 +27,12 @@ func TestClaudeToolNamesComeBackAsDeclared(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("a shell script stands in for Claude Code")
 	}
+	claudebridge.ResetMCPConfigForTest()
+	t.Setenv(claudebridge.ClaudeMCPEnv, "")
+	if err := claudebridge.LoadMCPConfig(); err != nil {
+		t.Fatal(err)
+	}
+	prefix := claudebridge.MCPToolPrefix()
 	long := "tools.example.com/" + strings.Repeat("very_long_segment.", 5) + "end"
 	declared := []string{"spawn.agent", "fs/read", "has space", long, "a.b", "a_b"}
 
@@ -47,14 +54,14 @@ while read -r line; do
     for n in $names; do
       i=$((i+1))
       [ -n "$content" ] && content="$content,"
-      content="$content"'{"type":"tool_use","id":"toolu_'$i'","name":"mcp__magpie__'$n'","input":{"n":'$i'}}'
+      content="$content"'{"type":"tool_use","id":"toolu_'$i'","name":"` + prefix + `'$n'","input":{"n":'$i'}}'
     done
     echo '{"type":"assistant","message":{"id":"m","model":"claude-sonnet-5","content":['"$content"'],"stop_reason":"tool_use","usage":{"output_tokens":3}}}' ;;
   *)
     echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m","model":"claude-sonnet-5","usage":{"input_tokens":1}}}}'
     i=0
     for n in $names; do
-      echo '{"type":"stream_event","event":{"type":"content_block_start","index":'$i',"content_block":{"type":"tool_use","id":"toolu_'$i'","name":"mcp__magpie__'$n'"}}}'
+      echo '{"type":"stream_event","event":{"type":"content_block_start","index":'$i',"content_block":{"type":"tool_use","id":"toolu_'$i'","name":"` + prefix + `'$n'"}}}'
       echo '{"type":"stream_event","event":{"type":"content_block_delta","index":'$i',"delta":{"type":"input_json_delta","partial_json":"{\"n\":'$i'}"}}}'
       echo '{"type":"stream_event","event":{"type":"content_block_stop","index":'$i'}}'
       i=$((i+1))
@@ -94,7 +101,7 @@ done
 	}
 	paths := map[provider.Protocol]string{provider.Anthropic: "/v1/messages", provider.Chat: "/v1/chat/completions", provider.Responses: "/v1/responses"}
 	nameRe := regexp.MustCompile(`"name":"((?:[^"\\]|\\.)*)"`)
-	validRe := regexp.MustCompile(`^[A-Za-z0-9_-]{1,51}$`)
+	validRe := regexp.MustCompile(`^[A-Za-z0-9_-]{1,` + fmt.Sprint(claudebridge.MaxOfferedToolNameLen()) + `}$`)
 	p := provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: "u"}}
 	for _, from := range []provider.Protocol{provider.Anthropic, provider.Chat, provider.Responses} {
 		for _, stream := range []bool{false, true} {
@@ -145,15 +152,15 @@ done
 	if len(offer) != 1 || !validRe.MatchString(offer[0].Name) || offer[0].Name == "a_b" {
 		t.Fatalf("tool_choice a.b offers %+v", offer)
 	}
-	if got, want := toolChoiceAsk(req), "You must call the mcp__magpie__"+offer[0].Name+" tool."; !strings.Contains(got, want) {
+	if got, want := toolChoiceAsk(req), "You must call the "+prefix+offer[0].Name+" tool."; !strings.Contains(got, want) {
 		t.Errorf("tool choice %q, want %q", got, want)
 	}
 	var text strings.Builder
 	renderParts(nil, &text, []Part{{Kind: ToolCall, ID: "c1", Name: "a.b", Args: json.RawMessage(`{}`)}, {Kind: ToolCall, ID: "c2", Name: long, Args: json.RawMessage(`{}`)}}, offeredTools(req.Tools))
-	if !strings.Contains(text.String(), "[tool call mcp__magpie__"+offer[0].Name+" id=c1 ") {
+	if !strings.Contains(text.String(), "[tool call "+prefix+offer[0].Name+" id=c1 ") {
 		t.Errorf("history tells a.b otherwise than it is offered (%s): %q", offer[0].Name, text.String())
 	}
-	if !strings.Contains(text.String(), "[tool call mcp__magpie__"+bridgeToolName(long)+" id=c2 ") || len("mcp__magpie__"+bridgeToolName(long)) > 64 {
+	if !strings.Contains(text.String(), "[tool call "+prefix+bridgeToolName(long)+" id=c2 ") || len(prefix+bridgeToolName(long)) > 64 {
 		t.Errorf("history tells the long name as %q", text.String())
 	}
 }

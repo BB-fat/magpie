@@ -60,6 +60,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/claudebridge"
 	"github.com/yetone/magpie/internal/claudecode"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/proc"
@@ -403,6 +404,9 @@ func evalSymlinks(path string) string {
 }
 
 func newSubscriptionBridge() *subscriptionBridge {
+	if err := claudebridge.LoadMCPConfig(); err != nil {
+		log.Fatal(err)
+	}
 	b := &subscriptionBridge{runs: map[string]*subscriptionRun{}, calls: map[string]*subscriptionRun{}, idle: map[string]*subscriptionRun{}, shelf: map[string]*savedSession{}}
 	bridges.Store(b, true)
 	return b
@@ -637,8 +641,9 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		cleanup()
 		return nil, nil, err
 	}
+	mcpServer := claudebridge.MCPServerName()
 	mcpConfig, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		"magpie": map[string]any{"command": exe, "args": []string{"claude-mcp-helper", callbackPath, toolsPath}},
+		mcpServer: map[string]any{"command": exe, "args": []string{"claude-mcp-helper", callbackPath, toolsPath}},
 	}})
 	args := claudeCLIArgs(model, string(mcpConfig), req.Effort, req.WebSearch)
 	if req.leanPrompt {
@@ -1815,7 +1820,7 @@ func (r *subscriptionRun) park() {
 func turnKey(owner string, req *Request, msgs []Message) string {
 	h := sha256.New()
 	tools, _ := json.Marshal(req.Tools)
-	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), tools, req.WebSearch, req.Format.schema())
+	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), tools, req.WebSearch, req.Format.schema(), claudebridge.MCPServerName())
 	cacheIdentity(h, req)
 	hashMessages(h, msgs, nil)
 	return hex.EncodeToString(h.Sum(nil))
@@ -2120,7 +2125,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			own[index] = true
 			return "", false
 		}
-		name, ok := strings.CutPrefix(name, "mcp__magpie__")
+		name, ok := strings.CutPrefix(name, claudebridge.MCPToolPrefix())
 		r.mu.Lock()
 		name = declaredName(r.names, name)
 		search := r.search != nil && name == r.searchName
@@ -2782,30 +2787,38 @@ func historyEnd(msgs []Message) int {
 // "Bash is disabled for this session, in subagents as well as here.",
 // which the model takes for a fact and gives up (#958).
 func bridgeName(name string) string {
-	return "mcp__magpie__" + bridgeToolName(name)
+	return claudebridge.MCPToolPrefix() + bridgeToolName(name)
 }
 
 // bridgeToolName is the name the MCP helper offers a tool of the caller's
 // under. Claude Code takes an MCP tool's name as [A-Za-z0-9_-] only, with
-// mcp__magpie__ before it in at most 64: it made "spawn.agent" its
+// the MCP server prefix before it in at most 64: it made "spawn.agent" its
 // spawn_agent, which the client never offered (#2649). A name it would
 // change, or one ending as a changed name ends, is told apart by a hash of
 // it, the same in every run, so a resumed session and a conversation's
 // history name the tool as before; declaredName maps it back.
 func bridgeToolName(name string) string {
-	if bridgeToolNameOK.MatchString(name) && !bridgeToolNameHashed.MatchString(name) {
+	if bridgeToolNameOK(name) && !bridgeToolNameHashed.MatchString(name) {
 		return name
 	}
 	sum := sha256.Sum256([]byte(name))
 	short := bridgeToolNameBad.ReplaceAllString(name, "_")
-	if len(short) > 38 {
-		short = short[:38]
+	if max := claudebridge.MaxHashedToolStemLen(); len(short) > max {
+		short = short[:max]
 	}
 	return short + "_" + hex.EncodeToString(sum[:6])
 }
 
+func bridgeToolNameOK(name string) bool {
+	max := claudebridge.MaxOfferedToolNameLen()
+	if len(name) < 1 || len(name) > max {
+		return false
+	}
+	return bridgeToolNameChars.MatchString(name)
+}
+
 var (
-	bridgeToolNameOK     = regexp.MustCompile(`^[A-Za-z0-9_-]{1,51}$`)
+	bridgeToolNameChars  = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 	bridgeToolNameBad    = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 	bridgeToolNameHashed = regexp.MustCompile(`_[0-9a-f]{12}$`)
 )

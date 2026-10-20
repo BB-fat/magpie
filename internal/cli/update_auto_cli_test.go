@@ -74,6 +74,7 @@ func TestUpdateAutoWithBOMSettings(t *testing.T) {
 // magpie update auto turns the app's own update checks off and on and sets
 // how often they run, from the presets only (#472).
 func TestUpdateAutoCmd(t *testing.T) {
+	t.Setenv("MAGPIE_UPDATE_ALLOW_OFFICIAL", "1")
 	groupsHome(t)
 	if err := updateCmd([]string{"update", "auto"}); err != nil {
 		t.Fatal(err)

@@ -63,9 +63,13 @@ func TestNewToolsListedBeforeTheAnswer(t *testing.T) {
 	}
 
 	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
-	caps, _ := next()["result"].(map[string]any)["capabilities"].(map[string]any)["tools"].(map[string]any)
+	init := next()["result"].(map[string]any)
+	caps, _ := init["capabilities"].(map[string]any)["tools"].(map[string]any)
 	if caps["listChanged"] != true {
 		t.Errorf("tools capability = %v, no listChanged", caps)
+	}
+	if info, _ := init["serverInfo"].(map[string]any); info["name"] != MCPServerName() {
+		t.Errorf("serverInfo.name = %v, want %q", info["name"], MCPServerName())
 	}
 	send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ToolSearch","arguments":{"query":"select:WebFetch"},"_meta":{"claudecode/toolUseId":"toolu_1"}}}`)
 	if m := next(); m["method"] != "notifications/tools/list_changed" {
