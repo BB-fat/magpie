@@ -7,6 +7,7 @@ import (
 )
 
 func TestClaudeIdleConfigDefaults(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	ResetClaudeIdleConfigForTest()
 	t.Setenv(claudeIdleMaxEnv, "")
 	t.Setenv(claudeIdleTTLEnv, "")
@@ -19,6 +20,7 @@ func TestClaudeIdleConfigDefaults(t *testing.T) {
 }
 
 func TestClaudeIdleConfigCustom(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	ResetClaudeIdleConfigForTest()
 	t.Setenv(claudeIdleMaxEnv, "2")
 	t.Setenv(claudeIdleTTLEnv, "10m")
@@ -31,6 +33,7 @@ func TestClaudeIdleConfigCustom(t *testing.T) {
 }
 
 func TestClaudeIdleConfigZeroMax(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	ResetClaudeIdleConfigForTest()
 	t.Setenv(claudeIdleMaxEnv, "0")
 	if err := LoadClaudeIdleConfig(); err != nil {
@@ -42,6 +45,7 @@ func TestClaudeIdleConfigZeroMax(t *testing.T) {
 }
 
 func TestClaudeIdleConfigInvalid(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	for _, tc := range []struct {
 		env, val string
 	}{
@@ -61,6 +65,7 @@ func TestClaudeIdleConfigInvalid(t *testing.T) {
 }
 
 func TestClaudeIdleMostZeroEvictsImmediately(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	ResetClaudeIdleConfigForTest()
 	t.Setenv(claudeIdleMaxEnv, "0")
 	if err := LoadClaudeIdleConfig(); err != nil {
@@ -77,6 +82,7 @@ func TestClaudeIdleMostZeroEvictsImmediately(t *testing.T) {
 }
 
 func TestClaudeIdleMostCapEviction(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	ResetClaudeIdleConfigForTest()
 	t.Setenv(claudeIdleMaxEnv, "2")
 	if err := LoadClaudeIdleConfig(); err != nil {

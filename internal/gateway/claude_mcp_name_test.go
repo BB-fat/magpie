@@ -16,6 +16,7 @@ import (
 )
 
 func TestClaudeMCPNameUnsetMatchesUpstream(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	claudebridge.ResetMCPConfigForTest()
 	t.Setenv(claudebridge.ClaudeMCPEnv, "")
 	if err := claudebridge.LoadMCPConfig(); err != nil {
@@ -27,6 +28,7 @@ func TestClaudeMCPNameUnsetMatchesUpstream(t *testing.T) {
 }
 
 func TestClaudeMCPNameInvalidFailsAtBridgeInit(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	claudebridge.ResetMCPConfigForTest()
 	t.Setenv(claudebridge.ClaudeMCPEnv, "no spaces")
 	if err := claudebridge.LoadMCPConfig(); err == nil {
@@ -35,6 +37,7 @@ func TestClaudeMCPNameInvalidFailsAtBridgeInit(t *testing.T) {
 }
 
 func TestClaudeMCPNameCustomAcrossBridge(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("a shell script stands in for Claude Code")
 	}
@@ -119,6 +122,7 @@ done
 }
 
 func TestBridgeToolNameCollisionWithCustomPrefix(t *testing.T) {
+	restoreDefaultClaudeBridgeEnvAfterTest(t)
 	claudebridge.ResetMCPConfigForTest()
 	t.Setenv(claudebridge.ClaudeMCPEnv, "")
 	if err := claudebridge.LoadMCPConfig(); err != nil {
