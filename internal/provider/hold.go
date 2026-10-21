@@ -5,6 +5,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
@@ -155,6 +156,29 @@ func dropHeld() {
 	held.Unlock()
 }
 
+// Stamp marks what the catalog is built from, read without building it.
+// Two equal stamps mean nothing magpie wrote or was told of came between
+// them: no Changed (a provider, an account, a setting saved), no plugin's
+// change, no catalog.Reset or Touched, no filememo.Forget, the same
+// environment, and the providers', the settings' and the catalog's own
+// files with the same time and size, as another process leaves them.
+// What it can't see — another app rewriting an account's file, a model
+// retired by its date — a caller that keeps what it built across stamps
+// builds again now and then all the same.
+type Stamp struct {
+	gen, fgen, env uint64
+	roots          [3]rootStamp
+}
+
+// StampNow is the Stamp as things are now.
+func StampNow() Stamp {
+	held.Lock()
+	gen := held.gen
+	held.Unlock()
+	return Stamp{gen: gen, fgen: filememo.Gen(), env: environSum(),
+		roots: [3]rootStamp{stampOf(Path()), stampOf(settings.Path()), stampOf(catalog.CachePath())}}
+}
+
 // heldOf is what build gives, built once while a request holds it.
 func heldOf[T any](key string, build func() T) T {
 	held.Lock()
@@ -183,7 +207,79 @@ func heldOf[T any](key string, build func() T) T {
 
 func heldEntries(build func() []Entry) []Entry {
 	// clipped: a caller's append copies
-	return heldOf("entries", func() []Entry { return slices.Clip(build()) })
+	return heldOf("entries", func() []Entry {
+		return keptOf("entries", func() []Entry {
+			entriesBuilt.Add(1)
+			return slices.Clip(build())
+		})
+	})
+}
+
+// entriesBuilt counts the catalogs built through heldEntries, for a test
+// that counts them.
+var entriesBuilt atomic.Int64
+
+// keptFor is how long what kept has is used while the Stamp stays the
+// same: an account another program signed in to or out of, or a model
+// retired by its date, moves no stamp, and is seen this long after.
+var keptFor = time.Minute
+
+// kept is what a request built from every provider's models (the catalog,
+// the switched-off providers' models, the groups and their entries), for
+// the requests after it while StampNow stays the same and keptFor hasn't
+// gone by. Held for heldFor alone, an agent's requests a few seconds apart
+// each built them all again from every provider's models and accounts
+// (~725 MB of allocations in 300s of a gateway in use). What it gives is
+// shared, as what heldOf gives: only for reading. Two requests building
+// one at once each build it; none waits on another.
+var kept struct {
+	sync.Mutex
+	stamp Stamp
+	at    time.Time
+	of    map[string]any
+}
+
+// keptOf is what build gives, kept across requests (kept) while one holds
+// the catalog, and built afresh outside one.
+func keptOf[T any](key string, build func() T) T {
+	return keptFit(key, func(any) bool { return true }, build)
+}
+
+// keptFit is keptOf, taking what is kept only where fits says it is
+// still the one wanted.
+func keptFit[T any](key string, fits func(any) bool, build func() T) T {
+	if !holdingNow() {
+		return build()
+	}
+	st := StampNow()
+	kept.Lock()
+	if kept.stamp != st || time.Since(kept.at) >= keptFor {
+		kept.stamp, kept.at, kept.of = st, time.Now(), nil
+	}
+	if v, ok := kept.of[key]; ok && fits(v) {
+		kept.Unlock()
+		return v.(T)
+	}
+	kept.Unlock()
+	// built from what is there after st was taken: never older than st,
+	// and a write meanwhile moves the stamp the next look takes
+	v := build()
+	kept.Lock()
+	if kept.stamp == st {
+		if kept.of == nil {
+			kept.of = map[string]any{}
+		}
+		kept.of[key] = v
+	}
+	kept.Unlock()
+	return v
+}
+
+// holdingNow is whether a request holds the catalog now.
+func holdingNow() bool {
+	held.Lock()
+	defer held.Unlock()
+	return held.holds > 0
 }
 
 // heldPlugins is plugin.Cached, which reads the plugins' list and
@@ -225,13 +321,17 @@ func heldFrom[T any](key string, entries []Entry, build func([]Entry) T) T {
 	}
 	gen := held.gen
 	held.Unlock()
-	v := build(entries)
+	f := keptFit(key, func(v any) bool {
+		f, ok := v.(fromEntries[T])
+		return ok && f.at == at && f.n == len(entries)
+	}, func() fromEntries[T] { return fromEntries[T]{at, len(entries), build(entries)} })
+	v := f.v
 	held.Lock()
 	if held.holds > 0 && held.gen == gen {
 		if held.built == nil {
 			held.built = map[string]heldValue{}
 		}
-		held.built[key] = heldValue{fromEntries[T]{at, len(entries), v}, time.Now()}
+		held.built[key] = heldValue{f, time.Now()}
 	}
 	held.Unlock()
 	return v

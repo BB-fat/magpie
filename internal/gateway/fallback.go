@@ -1612,6 +1612,10 @@ type holdWriter struct {
 	// thinkingShown: the model's vendor never refuses after reasoning
 	// (refusesAfterThinking), so its reasoning goes through as it comes
 	thinkingShown bool
+	// thoughtThrough: the try went through on its reasoning alone
+	// (thinkingShown) while the request could still have asked again, so
+	// an empty reply is asked again in place as often (emptyRetries)
+	thoughtThrough bool
 
 	ended bool   // the stream's last event was written: the reply is whole
 	tail  []byte // the end of the last write, for a marker split across two
@@ -2025,6 +2029,7 @@ func (h *holdWriter) scan() {
 			continue
 		case eventThinking:
 			if h.thinkingShown && !h.wantWhole {
+				h.thoughtThrough = h.hold
 				h.flow()
 				return
 			}
@@ -2338,6 +2343,14 @@ func (h *holdWriter) mayAskAgain() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.hold && !h.passing
+}
+
+// thoughtOnly tells whether the try went through on its reasoning while
+// it was still held for the request to ask again (thoughtThrough).
+func (h *holdWriter) thoughtOnly() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.thoughtThrough
 }
 
 // handBack sends a refusal held with nothing said as the vendor's own

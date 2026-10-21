@@ -117,7 +117,9 @@ func isolatedTests(m *testing.M) (int, error) {
 	// test's fake upstream after the test ended (#2036, CodeAlex52)
 	awaitAllowance = func(context.Context, string, string) bool { return false }
 	restoreDefaultClaudeBridgeEnv()
-	return m.Run(), nil
+	// no route writes a request body in place while it is held
+	guardHeldBodies()
+	return heldWrittenAfter(m.Run()), nil
 }
 
 // The package's tests run as an isolated test binary: nothing the marker

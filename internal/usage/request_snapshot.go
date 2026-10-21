@@ -24,17 +24,34 @@ import (
 // read out of them; nothing keeps a reference to one after unpack.
 var rowDecodes = sync.Pool{New: func() any { return new([]byte) }}
 
+// rowEncodes are pack's scratch: the rows' bytes before compression and
+// S2's output. s2.Encode makes its output as large as the worst case
+// (MaxEncodedLen, more than the input), and an archive cut from it kept
+// that whole allocation, several times the compressed bytes: the largest
+// thing a started magpie held, ~17 MB for ~380k calls, and uncounted in
+// Bytes. The archive is copied out of the scratch at its own length.
+var rowEncodes = sync.Pool{New: func() any { return new([2][]byte) }}
+
 func (c *rowChunk) pack() *rowChunk {
 	if c == nil || len(c.Rows) < 64 || len(c.Archive) != 0 {
 		return c
 	}
-	data := make([]byte, 0, len(c.Rows)*64)
+	scratch := rowEncodes.Get().(*[2][]byte)
+	defer rowEncodes.Put(scratch)
+	data := scratch[0][:0]
+	defer func() { scratch[0] = data[:0] }()
 	put := func(v uint64) { data = binary.AppendUvarint(data, v) }
 	put(uint64(len(c.Rows)))
 	put(uint64(len(c.Strings)))
 	for _, s := range c.Strings {
 		put(uint64(len(s)))
 		data = append(data, s...)
+	}
+	put(uint64(len(c.Shapes)))
+	for _, shape := range c.Shapes {
+		for _, n := range shape {
+			put(uint64(n))
+		}
 	}
 	var locations []*time.Location
 	locs := map[*time.Location]uint64{}
@@ -50,7 +67,8 @@ func (c *rowChunk) pack() *rowChunk {
 		put(uint64(p.Time.Unix()))
 		put(uint64(p.Time.Nanosecond()))
 		put(id)
-		for _, n := range p.Text {
+		put(uint64(p.Shape))
+		for _, n := range p.Varied {
 			put(uint64(n))
 		}
 		for _, n := range p.Tokens {
@@ -67,13 +85,14 @@ func (c *rowChunk) pack() *rowChunk {
 			put(math.Float64bits(p.Credits))
 		}
 	}
-	archive := s2.Encode(nil, data)
-	if int64(len(archive)) >= c.Bytes {
+	encoded := s2.Encode(scratch[1][:cap(scratch[1])], data)
+	scratch[1] = encoded[:0]
+	if int64(len(encoded)) >= c.Bytes {
 		return c
 	}
 	next := *c
-	next.Rows, next.Strings, next.dict = nil, nil, nil
-	next.Archive, next.Locations = slices.Clip(archive), locations
+	next.Rows, next.Strings, next.Shapes, next.dict, next.shapeIDs = nil, nil, nil, nil, nil
+	next.Archive, next.Locations = slices.Clone(encoded), locations
 	next.Bytes = int64(len(next.Archive)+len(locations)*8) + codexActorBytes(next.codexActors)
 	return &next
 }
@@ -158,6 +177,21 @@ func (c *rowChunk) unpackInto(into []packedRow) *rowChunk {
 		next.Strings[i] = text[from : from+n]
 		next.Bytes += int64(n) + 16
 	}
+	shapes := take()
+	if shapes > uint64(len(data)) {
+		return nil
+	}
+	next.Shapes, next.shapeIDs = make([][rowTexts]uint32, int(shapes)), nil
+	for i := range next.Shapes {
+		for j := range next.Shapes[i] {
+			n := take()
+			if n >= strs {
+				return nil
+			}
+			next.Shapes[i][j] = uint32(n)
+		}
+	}
+	next.Bytes += int64(len(next.Shapes)) * int64(unsafe.Sizeof([rowTexts]uint32{}))
 	for i := range next.Rows {
 		p := &next.Rows[i]
 		sec, nano, loc := int64(take()), int64(take()), take()
@@ -165,12 +199,16 @@ func (c *rowChunk) unpackInto(into []packedRow) *rowChunk {
 			return nil
 		}
 		p.Time = time.Unix(sec, nano).In(c.Locations[loc])
-		for j := range p.Text {
+		p.Shape = uint32(take())
+		if int(p.Shape) >= len(next.Shapes) {
+			return nil
+		}
+		for j := range p.Varied {
 			n := take()
 			if n >= strs {
 				return nil
 			}
-			p.Text[j] = uint32(n)
+			p.Varied[j] = uint32(n)
 		}
 		for j := range p.Tokens {
 			p.Tokens[j] = int64(take())

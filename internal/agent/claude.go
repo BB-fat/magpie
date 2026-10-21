@@ -1142,13 +1142,13 @@ func claudeIn(at place) *Agent {
 			for _, t := range claudeTiers {
 				refs = append(refs, tiers[t])
 			}
-			for i, v := range refs {
+			for _, v := range refs {
 				m, _ := tierAt(v)
 				bare := strings.TrimSuffix(m, "[1m]")
 				if v == "" || claudeModel(bare) || provider.ClaudeGroup(bare) {
 					continue
 				}
-				models = append(models, claudeBudget{id: spell(v), window: window[bare], long: strings.HasSuffix(v, "[1m]"), main: i == 0, compact: work(bare)})
+				models = append(models, claudeBudget{id: spell(v), window: window[bare], long: strings.HasSuffix(v, "[1m]"), compact: work(bare)})
 			}
 			// the one for every model else, as the variable gave it: none
 			// on a Claude main model, which Anthropic runs to its own
@@ -2390,11 +2390,13 @@ func claude1MFor(agent string) func(ref string) string {
 
 // claudeModel says a model ref (magpie/v/claude-opus-5-5[1m], or Claude
 // Code's own claude-opus-5-5) is one of Anthropic's Claude models, by
-// whichever provider it comes.
+// whichever provider it comes and by whatever name it gives it: Amazon
+// Bedrock's us.anthropic.claude-opus-… too, which Claude Code knows by the
+// same "opus-…" it looks for, and which a group of was already taken for
+// Claude's (provider.ClaudeGroup) while the model alone was held to the
+// working window (划船不靠桨 on Discord).
 func claudeModel(ref string) bool {
-	m := strings.TrimSuffix(ref, "[1m]")
-	m = m[strings.LastIndex(m, "/")+1:]
-	return strings.HasPrefix(strings.ToLower(m), "claude")
+	return provider.ClaudeModel(strings.TrimSuffix(ref, "[1m]"))
 }
 
 // claudeOwnCompact says the settings.json at path has an auto-compact

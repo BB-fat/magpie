@@ -111,7 +111,7 @@ type wiresKey struct{}
 // only where something asks for one: a request refused before any name is
 // looked up pays for nothing.
 func withWires(r *http.Request) *http.Request {
-	load := sync.OnceValue(func() map[string]string { return settings.Load().ModelWires })
+	load := sync.OnceValue(func() map[string]string { return settings.Shared().ModelWires })
 	return r.WithContext(context.WithValue(r.Context(), wiresKey{}, load))
 }
 
@@ -122,7 +122,7 @@ func wiresOf(ctx context.Context) map[string]string {
 	if load, ok := ctx.Value(wiresKey{}).(func() map[string]string); ok {
 		return load()
 	}
-	return settings.Load().ModelWires
+	return settings.Shared().ModelWires
 }
 
 // standIn is StandIn's model for one magpie shows no entry for: not a
@@ -197,10 +197,8 @@ func unserved(asked string) bool {
 		return false
 	}
 	id := strings.TrimSuffix(asked, "[1m]")
-	for _, e := range provider.Catalog() {
-		if e.ID == id || e.Model == id {
-			return false
-		}
+	if catalogNames.get(struct{}{}, namesInCatalog)[id] {
+		return false
 	}
 	if pid, _, ok := strings.Cut(id, "/"); ok {
 		if p, err := provider.Find(pid); err == nil && p.On() {
@@ -208,6 +206,22 @@ func unserved(asked string) bool {
 		}
 	}
 	return true
+}
+
+// catalogNames is every catalog entry's id and model id, kept by
+// provider.StampNow. unserved asks it on every request an agent sends
+// (standIn), and each one built the whole catalog to look: 2.26 GB of the
+// 9.8 GB a sandbox gateway allocated in 10 minutes of ~1,000 requests
+// (procmem heap profile), with nothing changed between them.
+var catalogNames stamped[struct{}, map[string]bool]
+
+func namesInCatalog() map[string]bool {
+	cat := provider.Catalog()
+	out := make(map[string]bool, 2*len(cat))
+	for i := range cat {
+		out[cat[i].ID], out[cat[i].Model] = true, true
+	}
+	return out
 }
 
 // switchedOff says a request for model went nowhere because p, which
@@ -325,7 +339,9 @@ type Call struct {
 	// a Codex subagent's (callKind) — "" for a turn
 	Kind string `json:"kind,omitempty"`
 	// For: the request a call of magpie's own (a web search) was made for
-	For      *CallFor          `json:"for,omitempty"`
+	For *CallFor `json:"for,omitempty"`
+	// Masked: what masking swapped in it, nil for nothing
+	Masked   *Masked           `json:"masked,omitempty"`
 	Model    string            `json:"model"`
 	Provider string            `json:"provider"`
 	From     provider.Protocol `json:"from"`
@@ -470,13 +486,28 @@ func (s *Server) record(c Call) {
 	defer s.mu.Unlock()
 	s.calls++
 	c.ID = s.calls
-	s.recent = append(s.recent, c)
-	if len(s.recent) > 40 {
-		s.recent = s.recent[len(s.recent)-40:]
-	}
+	s.recent = keepRecent(s.recent, c)
 	if s.debug {
 		log.Printf("%s %s → %s (%s→%s) %d %dms %s", c.Model, c.Provider, c.Provider, c.From, c.To, c.Status, c.Millis, c.Error)
 	}
+}
+
+// recentMost is how many calls the Recent-calls ring keeps.
+const recentMost = 40
+
+// keepRecent appends c to the ring and drops the oldest past recentMost,
+// in place. Re-slicing the oldest off (ring[1:]) left it in the backing
+// array, bodies and all, until an append outgrew the array and copied the
+// ring to a new one, about twice its size: up to ~80 calls of up to
+// 2×256 KiB of bodies each were kept for a page that shows 40.
+func keepRecent(ring []Call, c Call) []Call {
+	if len(ring) < recentMost {
+		return append(ring, c)
+	}
+	n := copy(ring, ring[len(ring)-recentMost+1:])
+	clear(ring[n:])
+	ring = ring[:n]
+	return append(ring, c)
 }
 
 // WhileServing is work only the magpie serving the gateway does, begun
@@ -642,6 +673,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/version", s.ollamaVersion)
 	mux.HandleFunc("GET /api/tags", s.ollamaTags)
 	mux.HandleFunc("POST /api/show", s.ollamaShow)
+	// and its chat routes, for a client that chats only through them
+	// (Zed's Ollama provider; ollama_chat.go)
+	mux.HandleFunc("POST /api/chat", s.ollamaChat(false))
+	mux.HandleFunc("POST /api/generate", s.ollamaChat(true))
 	mux.HandleFunc("GET /v1/magpie/quotas", s.quotas)
 	mux.HandleFunc("GET /v1/magpie/usage", s.usageSummary)
 	mux.HandleFunc("GET /v1/magpie/usage/requests", s.usageRequests)
@@ -722,8 +757,15 @@ func responsesOverHTTP(w http.ResponseWriter, r *http.Request) {
 	writeError(w, provider.Responses, http.StatusMethodNotAllowed, "POST /v1/responses")
 }
 
+// catalogSize is how many models the catalog has, as info says, kept by
+// provider.StampNow: every magpie on this computer asks another which
+// it is (ServedBy, a window's every 15s, each look at its state while it
+// doesn't serve), and each question built the whole catalog to count it,
+// 5.4 GB of a day's 36 GB of allocations.
+var catalogSize stamped[struct{}, int]
+
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"name": "magpie", "version": Version, "models": len(provider.Catalog()), "window": Window,
+	out := map[string]any{"name": "magpie", "version": Version, "models": catalogSize.get(struct{}{}, func() int { return len(provider.Catalog()) }), "window": Window,
 		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", "/v1/embeddings", "/v1/rerank", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/magpie/quotas", "/v1/magpie/quotas/history", "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", "/v1/magpie/trace", SearchMCPPath, VisionMCPPath, ToolsMCPPath}}
 	// which process serves, for another magpie on this computer to name it
 	// on its Routing page (#2606); not told to another machine
@@ -1105,7 +1147,10 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		data = append(data, videomakerObjects(r)...)
 	}
 	if r.Header.Get(provider.DecidersHeader) != "" {
-		deciders := keyAllowed(r, provider.Deciders())
+		// the decision models its own pickers offer: of a provider with
+		// picks (OpenRouter's twenty-odd), the picked ones, so another
+		// magpie lists what its Gateway page shows (GokoShiki on Discord)
+		deciders := keyAllowed(r, provider.OfferedDeciders(nil))
 		for i := range deciders {
 			deciders[i].Name = cmp.Or(deciders[i].Name, deciders[i].Model)
 		}
@@ -1313,7 +1358,7 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 	}
 	// the names in force, read at most once however many candidates are
 	// counted, and not at all where there are none
-	wires := sync.OnceValue(func() map[string]string { return settings.Load().ModelWires })
+	wires := sync.OnceValue(func() map[string]string { return settings.Shared().ModelWires })
 	for i, c := range counts {
 		res, err := s.forward(r.Context(), c.p, provider.Anthropic, "/v1/messages/count_tokens", rewriteModel(body, provider.UpstreamNameIn(wires(), c.p.ID, model)), r.Header)
 		if tooMany := (*errRPM)(nil); errors.As(err, &tooMany) {
@@ -1561,7 +1606,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// unmasked (unredactedRoute)
 	plain := body
 	var masked []byte // the masked body, when plain goes instead
-	w, body, unmask, err := redacted(w, body)
+	w, body, unmask, maskedHits, err := redactedHits(w, body)
 	defer unmask()
 	if err != nil { // fails closed: never sent unmasked
 		log.Printf("gateway: %v", err)
@@ -1791,9 +1836,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// works in; one that says none is outside every folder
 		folder := ""
 		if provider.PausesByFolder(g, ms) {
-			if req, err := parse(from, body); err == nil {
-				folder = workDir(req)
-			}
+			folder = factsOf(from, body).dir
 		}
 		ms, paused = provider.PausedOut(g, ms, agent, folder, ruleClock())
 		if len(ms) == 0 && len(paused) > 0 {
@@ -2255,6 +2298,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	if watched != nil {
 		watched.routeID = tr.ID
 	}
+	// what masking swapped, recorded for Settings → Privacy, unless the
+	// request went as written
+	if masked == nil {
+		if m := noteMasked(r, "chat", maskedHits, string(body), tr.ID, p.ID, call.Model); m != nil {
+			s.trace.update(tr, func(t *Route) { t.Masked = m })
+		}
+	}
 	// the card's text is the masked body, even where the request went
 	// unmasked
 	textBody := body
@@ -2369,9 +2419,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// while another candidate could answer instead: the last one's
 		// refusal isn't asked again, so holding it only kept a lone relay's
 		// thinking from Claude Code and Codex until the text began, all at
-		// once (iTianbao on X). Gemini's stays held on the last one too,
-		// for a reply that only reasoned to be asked again (#667).
-		hw.thinkingShown = !refusesAfterThinking(c.model) || last && modelFamily(c.model) != ""
+		// once (iTianbao on X). Gemini's goes as it comes there too: a
+		// reply that only reasoned is asked again in place, its reasoning
+		// kept and the next try's after it (streamTranslated, #667), so
+		// holding it kept Codex on a Gemini model with nothing at all,
+		// not even response.created, for the whole of its thinking
+		// (LuckymanJC on Discord).
+		hw.thinkingShown = !refusesAfterThinking(c.model) || last
 		hw.ctx, hw.alive, hw.streams = r.Context(), kept, streams
 		report := cacheReport
 		if c.p.Account == nil || c.p.Account.Agent != "claude" {
@@ -3131,7 +3185,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// rests — it answers as soon as the switch is off. Another member,
 		// its other models among them, is asked
 		zdr := !hw.passing && !hw.refused && hw.code() >= 400 && hw.header.Get(zdrHeader) != ""
-		if protected || zdr {
+		// no room on this computer for another Claude Code process
+		// (#2956): no account's fault, and each Claude account would wait
+		// for the same room, so none rests, none is asked next, nor this
+		// one again after a moment. Another provider left is asked
+		noRoom := hw.failed() && claudeNoRoom(hw.code(), hw.errBody())
+		if protected || zdr || noRoom {
 			if other == nil {
 				other = &Try{Status: call.Status, Error: call.Error}
 			}
@@ -3141,7 +3200,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				left = notMates(cands[i+1:], c)
 			}
 			if len(left) > 0 {
-				try.Fail = failShape
+				if !noRoom {
+					try.Fail = failShape
+				}
 				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 				skipped = append(skipped, c.label()+": "+call.Error)
 				cands = append(cands[:i+1:i+1], left...)
@@ -3151,7 +3212,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			last = true
 		}
 		// nor is it asked again after a moment
-		protected = protected || zdr
+		protected = protected || zdr || noRoom
 		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !protected && !last && hw.failed() && spentAfter(cands[i+1:]) {
 			// the others left are out of their allowance (Discord, waroy: a
 			// Codex account run out, Grok busy a moment): this one is the
@@ -3544,6 +3605,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		t.Archive = call.archiveName()
 	})
 	call.Route = tr.ID
+	call.Masked = s.trace.maskedOf(tr)
 	s.record(call)
 	if call.To != "" {
 		rec := usage.Record{RouteID: tr.ID, Time: start, Agent: call.Agent, Via: call.Via, Provider: call.Provider, Host: where, Model: model,
@@ -4183,7 +4245,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// 400: Codex's compaction summary goes without its tools (#378).
 		// Anywhere else it goes as asked, which a relay checking Codex's
 		// shape wants (#292).
-		if p.Host() == "api.x.ai" || p.Account != nil && p.Account.Agent == "copilot" {
+		if refusesLoneToolChoice(p) {
 			body = withoutLoneToolChoice(body)
 		}
 	case provider.Chat:
@@ -5016,6 +5078,10 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			r := *req
 			r.CacheKey, req = "", &r
 		}
+		if want := to == provider.Responses && loadsInPlace(p) && s.fits(p.ID, additionalToolsItem, to); want != req.LoadedInPlace {
+			r := *req
+			r.LoadedInPlace, req = want, &r
+		}
 		if offEffort(req.Effort) && !s.fits(p.ID, offRefused(model), to) {
 			r := *req
 			r.Effort, req = onEffort(p, model), &r
@@ -5130,6 +5196,15 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 		if to == provider.Chat && (p.IsBedrock() || p.IsAzure()) {
 			body = asCompletionTokens(body)
 		}
+		if to == provider.Responses && !keepsLoneNone(p) {
+			// the "none" buildResponses keeps for a request that turned
+			// tools off with none declared goes to the Grok plugin alone,
+			// which reads it before adding x_search and drops it before
+			// Grok (0.1.18, #3110). Any other upstream was never sent it:
+			// xAI turns it away (#378), and no other plugin's vendor has
+			// been tried with it
+			body = withoutLoneToolChoice(body)
+		}
 		if to == provider.Chat && req.WebSearch && p.IsRemoteMagpie() {
 			// the other magpie searches for it (search_remote.go)
 			body = withFields(body, map[string]any{"web_search_options": map[string]any{}})
@@ -5168,6 +5243,17 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		res.Body.Close()
 		res.Body = io.NopCloser(bytes.NewReader(b))
+		if req.LoadedInPlace && refusesField(res.StatusCode, b, additionalToolsItem) && bytes.Contains(body, []byte(`"`+additionalToolsItem+`"`)) {
+			// an upstream that turns the item away is asked again with the
+			// loaded tools among the others, and not sent it again: the
+			// prompt's prefix changes from here, as before #2660, and the
+			// log says so rather than the cache seeming kept
+			log.Printf("gateway: %s turned away additional_tools (%d); loaded tools go in tools from now on", p.ID, res.StatusCode)
+			s.markUnfit(p.ID, additionalToolsItem, to)
+			r := *req
+			r.LoadedInPlace, req = false, &r
+			continue
+		}
 		if to == provider.Anthropic && res.StatusCode == http.StatusBadRequest &&
 			samplingDeprecated.Match(b) && (req.Temp != nil || req.TopP != nil) {
 			// a Claude by a name samplingAsTaken can't read refuses the
@@ -5365,6 +5451,28 @@ var mandatoryReasoning = regexp.MustCompile(`(?i)reasoning is mandatory for this
 // that hasn't turned it away.
 func (s *Server) servesElsewhere(p provider.Provider, model string, proto provider.Protocol) bool {
 	return slices.ContainsFunc(s.usable(p, model), func(x provider.Protocol) bool { return x != proto })
+}
+
+// additionalToolsItem is the Responses input item a deferred tool goes to
+// the upstream in where a result loaded it (Request.LoadedInPlace); a
+// provider that refused it is remembered under it in unfit.
+const additionalToolsItem = "additional_tools"
+
+// loadsInPlace is whether p's Responses API is sent a tool an Anthropic
+// client's tool search loaded in an additional_tools item at the place it
+// was loaded (#2660): OpenAI's own API with a key, whose tool search guide
+// documents the item and that its tools load at the end of the context
+// so the cached prefix is kept, and a provider the user said takes it
+// (provider.Provider.AdditionalTools). Nothing else is: xAI's Responses
+// API answers 422 "unknown item type" (#350), the ChatGPT backend has
+// been seen to take it only for Codex's Responses Lite, and a relay or
+// plugin's vendor hasn't been tried.
+func loadsInPlace(p provider.Provider) bool {
+	if p.AdditionalTools {
+		return true
+	}
+	h := p.Host()
+	return p.Account == nil && !p.IsPlugin() && !p.IsAzure() && (h == "api.openai.com" || strings.HasSuffix(h, ".api.openai.com"))
 }
 
 // cacheKeyField is the client's prompt cache key as a request carries it
@@ -6382,20 +6490,22 @@ func conversationID(in http.Header, body []byte) string {
 		}
 	}
 	var m struct {
-		Messages []json.RawMessage `json:"messages"`
-		Input    json.RawMessage   `json:"input"`
-		Contents []json.RawMessage `json:"contents"`
+		Messages json.RawMessage `json:"messages"`
+		Input    json.RawMessage `json:"input"`
+		Contents json.RawMessage `json:"contents"`
 	}
 	// An undecodable body still gets an id: the hash of the whole body.
 	_ = decodeJSON(body, &m)
-	items := m.Messages
-	geminiContents := len(items) == 0 && len(m.Contents) > 0
+	// The turns are the body's own bytes, not a copy of each: this runs on
+	// every request, and a 1.5 MB conversation's copy was ~2.8 MB of each
+	// request's allocations (yg6888 on X).
+	items, contents := elementsOf(m.Messages), elementsOf(m.Contents)
+	geminiContents := len(items) == 0 && len(contents) > 0
 	if geminiContents {
-		items = m.Contents // Gemini generateContent repeats the first user turn.
+		items = contents // Gemini generateContent repeats the first user turn.
 	}
-	if len(items) == 0 && len(m.Input) > 0 && m.Input[0] == '[' {
-		// A malformed input array leaves items empty, and the whole body is hashed.
-		_ = decodeJSON(m.Input, &items)
+	if len(items) == 0 {
+		items = elementsOf(m.Input)
 	}
 	first := []byte(m.Input)
 	if len(items) > 0 {
@@ -6683,6 +6793,20 @@ func withoutFields(body []byte, fields ...string) []byte {
 		return body
 	}
 	return out
+}
+
+// keepsLoneNone is whether p is sent the lone tool_choice "none" a
+// request that turned tools off with none declared keeps (#3110): only the
+// Grok plugin, which reads it and leaves it out before Grok itself.
+func keepsLoneNone(p provider.Provider) bool {
+	return p.PluginProvider() == "grok" && !refusesLoneToolChoice(p)
+}
+
+// refusesLoneToolChoice is whether p's Responses API turns away a
+// tool_choice with no tools beside it: xAI's, and Copilot's /responses in
+// front of it for Grok (#378).
+func refusesLoneToolChoice(p provider.Provider) bool {
+	return p.Host() == "api.x.ai" || p.Account != nil && p.Account.Agent == "copilot"
 }
 
 // withoutLoneToolChoice leaves out a tool_choice sent with no tools; with

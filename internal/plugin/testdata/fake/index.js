@@ -88,7 +88,11 @@ export const FakePlugin = async ({ client }) => ({
     // $FAKE_DEEPSEEK: a DeepSeek model, as Cline's cline-pass/deepseek-v4-pro
     if (process.env.FAKE_DEEPSEEK) cfg.provider[ID].models["deepseek-v4-pro"] = { name: "DeepSeek V4 Pro", limit: { context: 1000, output: 100 } }
     // $FAKE_GLM: a GLM model, as Cline's cline-pass/glm-5.3
-    if (process.env.FAKE_GLM) cfg.provider[ID].models["glm-5.3"] = { name: "GLM 5.3", limit: { context: 1000, output: 100 } }
+    if (process.env.FAKE_GLM) {
+      cfg.provider[ID].models["glm-5.3"] = { name: "GLM 5.3", limit: { context: 1000, output: 100 } }
+      // Cline sends glm-5.3-flash through OpenRouter, not Vercel's gateway
+      cfg.provider[ID].models["glm-5.3-flash"] = { name: "GLM 5.3 Flash", limit: { context: 1000, output: 100 } }
+    }
     // $FAKE_SEARCHES: the provider's upstream searches by itself (#2027),
     // as a plugin in front of Claude's API says
     if (process.env.FAKE_SEARCHES) cfg.provider[ID].searches = true
@@ -213,7 +217,8 @@ export const FakePlugin = async ({ client }) => ({
       }
     },
     // $FAKE_CHECKIN: the plugin presses the daily check-in itself, each
-    // press written as a line of the account's key to that file, and the
+    // press written as a line of the account's key to that file (a signed-in
+    // account's name/uid, so two of one name tell apart), and the
     // answer said by the key: ck-claim gives 50 on a 3-day streak, ck-done
     // is in already, ck-captcha is asked a captcha, ck-throw can't reach
     // the vendor, ck-odd answers no outcome magpie knows
@@ -222,7 +227,7 @@ export const FakePlugin = async ({ client }) => ({
           checkin: async (getAuth) => {
             const a = await getAuth()
             const fs = await import("node:fs")
-            fs.appendFileSync(process.env.FAKE_CHECKIN, (a.key ?? a.accountId ?? "") + "\n")
+            fs.appendFileSync(process.env.FAKE_CHECKIN, (a.key ?? (a.uid ? a.accountId + "/" + a.uid : a.accountId) ?? "") + "\n")
             switch (a.key) {
               case "ck-claim":
                 return { outcome: "claimed", credit: 50, streak: 3 }

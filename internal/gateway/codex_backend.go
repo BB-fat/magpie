@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +20,7 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/codexcat"
+	"github.com/yetone/magpie/internal/codexsummary"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
@@ -40,8 +40,8 @@ const CodexPath = "/backend-api/codex"
 var codexAPIBase = "https://api.openai.com/v1"
 
 // magpieCompaction marks a compaction item magpie made: its summary, which
-// only magpie reads back.
-const magpieCompaction = "magpie1:"
+// only magpie reads back (codexsummary).
+const magpieCompaction = codexsummary.Mark
 
 var nativeSealedAgentPayload = regexp.MustCompile(`^gAAAAA[A-Za-z0-9_-]+={0,2}$`)
 
@@ -57,7 +57,7 @@ Include:
 
 Be concise, structured, and focused on helping the next LLM seamlessly continue the work.`
 
-const codexSummaryPrefix = `Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:`
+const codexSummaryPrefix = codexsummary.Prefix
 
 func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 	// Responses over a WebSocket: 426 sends Codex to plain HTTP at once
@@ -162,6 +162,13 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		// the ChatGPT backend checks every item id as OpenAI does
 		body = plainItemIDs(boundCallIDs(callItemIDs(body)))
 		if rest == "/responses/compact" {
+			// Codex compacts a thread before its first turn back on one of
+			// its own models; the thread's reasoning from another vendor
+			// goes, as it does from a turn: with its text in it, the
+			// backend refuses the whole compaction over "input[n].content:
+			// array too long", and Codex shows it as the turn's error
+			// (jue on Discord). A summary magpie made goes as its text.
+			body, _ = codexInput(body, false)
 			// a key held to some accounts (#905) may not spend the sign-in
 			// compaction still relays on: refused as its turns are (#967),
 			// with nothing asked of OpenAI — and refused when the sign-in
@@ -804,18 +811,28 @@ func sealedCompact(r *http.Request, model string, body []byte) (writer *provider
 	return nil, "", false
 }
 
-// withModel is a request body asking for another model.
+// withModel is a request body asking for another model; a body of null
+// goes as it came (it was a panic, writing into no map).
 func withModel(body []byte, model string) []byte {
-	var q map[string]json.RawMessage
-	if json.Unmarshal(body, &q) != nil {
+	q, err := rawObject(body)
+	if err != nil || q == nil {
 		return body
 	}
 	q["model"], _ = json.Marshal(model)
-	b, err := json.Marshal(q)
+	b, err := marshalJSON(q)
 	if err != nil {
 		return body
 	}
 	return b
+}
+
+// marshalJSON is json.Marshal, a request body split at its members or
+// items written back without encoding/json's scanner (marshalRaw).
+func marshalJSON(v any) ([]byte, error) {
+	if b, ok := marshalRaw(v, true); ok {
+		return b, nil
+	}
+	return json.Marshal(v)
 }
 
 // codexUpstream relays a request as it came, the sign-in included, to where
@@ -830,10 +847,11 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	start := time.Now()
 	usage.Saw(agentOf(r))
 	w0, body0 := w, body // as they came, for the fallbacks (codexFallBack)
+	var maskedHits maskHits
 	if r.Method == http.MethodPost {
 		var unmask func()
 		var err error
-		w, body, unmask, err = redacted(w, body)
+		w, body, unmask, maskedHits, err = redactedHits(w, body)
 		defer unmask()
 		if err != nil {
 			writeError(w, provider.Responses, http.StatusServiceUnavailable, err.Error())
@@ -878,6 +896,10 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	effort := "" // the reasoning Codex asked for, which goes on as it is
 	end := func(status int, msg string, tokens, out int) {}
 	var tools *toolScan // whether the reply calls a tool, for a turn's end
+	if rest != "/responses" {
+		// no route of its own (a compaction, a memory): recorded alone
+		noteMasked(r, "chat", maskedHits, string(body), 0, "openai", modelOf(body))
+	}
 	if rest == "/responses" {
 		imageProvider := ""
 		if !apiKey(r.Header) {
@@ -896,6 +918,9 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 		tools = scan
 		tr = s.trace.beginFor(r, Route{turn: turn, dirOf: dirOf(provider.Responses, body), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, callerOf(r).agent), imageProvider: imageProvider, TitleLink: link, Time: start, Agent: agentOf(r), Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, kind), Kind: kind, Model: model, Effort: effort, Tier: bodyTier(provider.Responses, body), Provider: "openai", Subagent: subagentPickOf(r),
 			Order: []Weighed{seat}, Tries: []Try{{ID: seat.ID, Model: model, Effort: effort, Start: start}}})
+		if m := noteMasked(r, "chat", maskedHits, string(body), tr.ID, "openai", model); m != nil {
+			s.trace.update(tr, func(t *Route) { t.Masked = m })
+		}
 		promptRead := s.inspectPrompt(tr, provider.Responses, body, body)
 		end = func(status int, msg string, tokens, out int) {
 			ms := time.Since(start).Milliseconds()
@@ -1277,6 +1302,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	}
 	end(call.Status, call.Error, uu.Input+uu.Output+uu.CacheRead+uu.CacheWrite, uu.Output)
 	call.Route = tr.ID
+	call.Masked = s.trace.maskedOf(tr)
 	s.record(call)
 	servedProvider, servedAccount := codexServed(base, r.Header, on)
 	rec := usage.Record{RouteID: tr.ID, Time: start, Agent: call.Agent,
@@ -1796,6 +1822,9 @@ func codexInput(body []byte, magpieModel bool) (_ []byte, compact bool) {
 // when native says its provider compacts natively (NativeCompaction,
 // #1099): the summaries magpie made before are still restored.
 func codexInputAs(body []byte, magpieModel, native bool) (_ []byte, compact bool) {
+	if !anyInputItem(body, func(it []byte) bool { return codexInputItemChanges(it, magpieModel, native) }) {
+		return body, false
+	}
 	var q map[string]json.RawMessage
 	if json.Unmarshal(body, &q) != nil {
 		return body, false
@@ -1810,14 +1839,14 @@ func codexInputAs(body []byte, magpieModel, native bool) (_ []byte, compact bool
 		switch it["type"] {
 		case "compaction", "compaction_summary":
 			enc, _ := it["encrypted_content"].(string)
-			sum, ok := strings.CutPrefix(enc, magpieCompaction)
-			if !ok {
+			msg, ours := codexsummary.Message(enc)
+			if !ours {
 				out = append(out, it) // OpenAI's own, for OpenAI
 				continue
 			}
 			changed = true
-			if b, err := base64.StdEncoding.DecodeString(sum); err == nil {
-				out = append(out, userMessage(codexSummaryPrefix+"\n"+string(b)))
+			if msg != nil {
+				out = append(out, msg)
 			}
 		case "compaction_trigger":
 			if !magpieModel || native {
@@ -1869,11 +1898,42 @@ func codexInputAs(body []byte, magpieModel, native bool) (_ []byte, compact bool
 			q["client_metadata"] = cm
 		}
 	}
-	nb, err := json.Marshal(q)
+	nb, err := marshalJSON(q)
 	if err != nil {
 		return body, false
 	}
 	return nb, compact
+}
+
+// codexInputItemChanges reports whether codexInputAs would put another in
+// the place of it, an input item, or leave it out: read as the rewrite
+// reads it (a map[string]any), without decoding the conversation.
+func codexInputItemChanges(it []byte, magpieModel, native bool) bool {
+	typ, _ := stringBytes(memberOrNil(it, "type"))
+	switch {
+	case string(typ) == "compaction" || string(typ) == "compaction_summary":
+		enc, _ := stringBytes(memberOrNil(it, "encrypted_content"))
+		return hasPrefix(enc, magpieCompaction)
+	case string(typ) == "compaction_trigger":
+		return magpieModel && !native
+	case string(typ) == "reasoning":
+		if magpieModel {
+			return false
+		}
+		if c := memberOrNil(it, "content"); c != nil && string(c) != "null" {
+			if c[0] != '[' {
+				return true
+			}
+			empty := true
+			eachElement(c, func([]byte) bool { empty = false; return false })
+			if !empty {
+				return true
+			}
+		}
+		enc, _ := stringBytes(memberOrNil(it, "encrypted_content"))
+		return len(enc) == 0
+	}
+	return false
 }
 
 // turnMetadataHeader is where Codex says what a request is for, as it does
@@ -1967,7 +2027,10 @@ func refusesInput(status int, b []byte) bool {
 // request goes back 400 "Item with id 'rs_…' not found" (#1008); its
 // summary was the model's notes to itself, which no model reads back.
 func withoutBareReasoning(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"reasoning"`)) {
+	if !bytes.Contains(body, []byte(`"reasoning"`)) || !anyInputItem(body, func(it []byte) bool {
+		r := reasoningOf(it)
+		return r.typeOK && r.encOK && r.reasoning && !r.sealed
+	}) {
 		return body
 	}
 	var q map[string]json.RawMessage
@@ -1996,12 +2059,92 @@ func withoutBareReasoning(body []byte) []byte {
 	if len(kept) == len(items) {
 		return body
 	}
-	q["input"], _ = json.Marshal(kept)
-	b, err := json.Marshal(q)
+	q["input"], _ = marshalJSON(kept)
+	b, err := marshalJSON(q)
 	if err != nil {
 		return body
 	}
 	return b
+}
+
+// reasoningLook is what decoding an input item into the structs the
+// reasoning rewrites read it by gives: its type is reasoning, something
+// is sealed in it, it has its text; and whether a decode of its type
+// beside each other field succeeds.
+type reasoningLook struct {
+	reasoning, sealed, text  bool
+	typeOK, encOK, contentOK bool
+}
+
+// reasoningOf is reasoningLook of it, an input item. Its keys are matched
+// as encoding/json matches a field's name (bytes.EqualFold), the last one
+// standing. A plain item is read where it lies, nothing decoded; one with
+// a key escaped or past ASCII, a type that is, or a null where a field
+// is, is decoded.
+func reasoningOf(it []byte) reasoningLook {
+	if len(it) == 0 {
+		return reasoningLook{}
+	}
+	switch it[0] {
+	case 'n':
+		return reasoningLook{typeOK: true, encOK: true, contentOK: true}
+	case '{':
+	default:
+		return reasoningLook{}
+	}
+	r := reasoningLook{typeOK: true, encOK: true, contentOK: true}
+	slow := false
+	eachMember(it, func(k, v []byte) bool {
+		name := k[1 : len(k)-1]
+		if !plainASCII(name) {
+			slow = true
+			return false
+		}
+		field := bytes.EqualFold(name, []byte("type")) || bytes.EqualFold(name, []byte("encrypted_content")) || bytes.EqualFold(name, []byte("content"))
+		if field && v[0] == 'n' {
+			slow = true
+			return false
+		}
+		switch {
+		case bytes.EqualFold(name, []byte("type")):
+			if v[0] != '"' {
+				r.typeOK = false
+				return true
+			}
+			typ := v[1 : len(v)-1]
+			if !plainASCII(typ) {
+				slow = true
+				return false
+			}
+			r.reasoning = string(typ) == "reasoning"
+		case bytes.EqualFold(name, []byte("encrypted_content")):
+			r.encOK = r.encOK && v[0] == '"'
+			r.sealed = len(v) > 2
+		case bytes.EqualFold(name, []byte("content")):
+			r.contentOK = r.contentOK && v[0] == '['
+			r.text = false
+			eachElement(v, func([]byte) bool { r.text = true; return false })
+		}
+		return true
+	})
+	if !slow {
+		return r
+	}
+	var te struct {
+		Type string `json:"type"`
+		Enc  string `json:"encrypted_content"`
+	}
+	var tc struct {
+		Type    string            `json:"type"`
+		Content []json.RawMessage `json:"content"`
+	}
+	errE, errC := decodeJSON(it, &te), decodeJSON(it, &tc)
+	var tt struct {
+		Type string `json:"type"`
+	}
+	errT := decodeJSON(it, &tt)
+	return reasoningLook{reasoning: tt.Type == "reasoning", sealed: te.Enc != "", text: len(tc.Content) > 0,
+		typeOK: errT == nil, encOK: errE == nil, contentOK: errC == nil}
 }
 
 // reasoningTextRefused is how unfit remembers a provider turning away, for
@@ -2038,7 +2181,10 @@ func refusesReasoningText(status int, b, body []byte) bool {
 // than its text, so the item goes, as codexInput leaves it out for one of
 // Codex's own models.
 func withoutReasoningText(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"reasoning"`)) {
+	if !bytes.Contains(body, []byte(`"reasoning"`)) || !anyInputItem(body, func(it []byte) bool {
+		r := reasoningOf(it)
+		return r.typeOK && r.contentOK && r.reasoning && r.text
+	}) {
 		return body
 	}
 	var q map[string]json.RawMessage
@@ -2063,8 +2209,8 @@ func withoutReasoningText(body []byte) []byte {
 	if len(kept) == len(items) {
 		return body
 	}
-	q["input"], _ = json.Marshal(kept)
-	b, err := json.Marshal(q)
+	q["input"], _ = marshalJSON(kept)
+	b, err := marshalJSON(q)
 	if err != nil {
 		return body
 	}
@@ -2089,6 +2235,14 @@ var openaiItemPrefix = map[string]string{
 // for byte.
 func callItemIDs(body []byte) []byte {
 	if !bytes.Contains(body, []byte(`"tool_search_call"`)) && !bytes.Contains(body, []byte(`"custom_tool_call"`)) {
+		return body
+	}
+	if !anyInputItem(body, func(it []byte) bool {
+		typ, _ := stringBytes(memberOrNil(it, "type"))
+		prefix := openaiItemPrefix[string(typ)]
+		id, _ := stringBytes(memberOrNil(it, "id"))
+		return prefix != "" && len(id) > 0 && !hasPrefix(id, prefix)
+	}) {
 		return body
 	}
 	var q map[string]json.RawMessage
@@ -2165,6 +2319,12 @@ func validatesItemIDs(p provider.Provider) bool {
 // call's call_id, which its output names it by, stays as it was.
 func plainItemIDs(body []byte) []byte {
 	if !bytes.Contains(body, []byte(`"id"`)) {
+		return body
+	}
+	if !anyInputItem(body, func(it []byte) bool {
+		id, _ := stringBytes(memberOrNil(it, "id"))
+		return len(id) > 0 && !safeID(id)
+	}) {
 		return body
 	}
 	var q map[string]json.RawMessage
@@ -2273,18 +2433,17 @@ func forVendor(p provider.Provider, body []byte) []byte {
 	if p.Account != nil && p.Account.Agent == "codex" || strings.HasSuffix(p.Host(), "openai.com") {
 		return body
 	}
-	if !slices.ContainsFunc(openaiOnly, func(k []byte) bool { return bytes.Contains(body, k) }) {
+	if !slices.ContainsFunc(openaiOnly, func(k []byte) bool { return bytes.Contains(body, k) }) || !forVendorChanges(body) {
 		return body
 	}
-	var q map[string]json.RawMessage
-	if json.Unmarshal(body, &q) != nil {
+	q, err := rawObject(body)
+	if err != nil {
 		return body
 	}
 	changed := false
 	// Codex's stream_options holds reasoning_summary_delivery alone; another
 	// client's other options stay
-	var so map[string]json.RawMessage
-	if json.Unmarshal(q["stream_options"], &so) == nil {
+	if so, err := rawObject(q["stream_options"]); err == nil {
 		if _, ok := so["reasoning_summary_delivery"]; ok {
 			changed = true
 			delete(so, "reasoning_summary_delivery")
@@ -2293,12 +2452,11 @@ func forVendor(p provider.Provider, body []byte) []byte {
 			}
 		}
 	}
-	var items []json.RawMessage
-	if json.Unmarshal(q["input"], &items) == nil {
+	if items, err := rawArray(q["input"]); err == nil {
 		out := items[:0]
 		for _, raw := range items {
-			var it map[string]json.RawMessage
-			if json.Unmarshal(raw, &it) != nil {
+			it, err := rawObject(raw)
+			if err != nil {
 				out = append(out, raw)
 				continue
 			}
@@ -2330,10 +2488,34 @@ func forVendor(p provider.Provider, body []byte) []byte {
 	return nb
 }
 
-func userMessage(text string) map[string]any {
-	return map[string]any{"type": "message", "role": "user",
-		"content": []map[string]any{{"type": "input_text", "text": text}}}
+// forVendorChanges reports whether forVendor has anything to leave out of
+// body, read as it reads it, without decoding the conversation: Codex
+// sends what the rewrite looks for by name in every request, and its
+// metadata on every message, so a word in the body said little.
+func forVendorChanges(body []byte) bool {
+	so, found, ok := topMember(body, "stream_options")
+	if !ok {
+		return false
+	}
+	if found && len(so) > 0 && so[0] == '{' {
+		if _, has := memberOf(so, "reasoning_summary_delivery"); has {
+			return true
+		}
+	}
+	return anyInputItem(body, func(it []byte) bool {
+		if len(it) == 0 || it[0] != '{' {
+			return false
+		}
+		if string(memberOrNil(it, "type")) == `"configuration_update"` {
+			return true
+		}
+		_, meta := memberOf(it, "internal_chat_message_metadata_passthrough")
+		_, sealed := memberOf(it, "encrypted_function_args")
+		return meta || sealed
+	})
 }
+
+func userMessage(text string) map[string]any { return codexsummary.UserMessage(text) }
 
 // codexCompact compacts a conversation held by a magpie model: the model
 // summarises it, and the summary goes back to Codex as the compaction item
@@ -2458,7 +2640,7 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 		id = fmt.Sprintf("resp_magpie_%d", time.Now().UnixNano())
 	}
 	item := map[string]any{"type": "compaction", "id": "cmp_" + strings.TrimPrefix(id, "resp_"),
-		"encrypted_content": magpieCompaction + base64.StdEncoding.EncodeToString([]byte(sum.String()))}
+		"encrypted_content": codexsummary.Encrypted(sum.String())}
 	done := map[string]any{"id": id, "object": "response", "status": "completed", "output": []any{item}}
 	if len(res.Usage) > 0 {
 		done["usage"] = res.Usage
