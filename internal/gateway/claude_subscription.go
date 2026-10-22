@@ -2603,7 +2603,7 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 	var blocks []map[string]any
 	var text strings.Builder
 	// a lean run has them as its system prompt (leanSystem)
-	if !req.leanPrompt && (req.System != "" || req.ClientOS != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:")) {
+	if !req.leanPrompt && (req.System != "" || clientOSLine(req) != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:")) {
 		text.WriteString("<external_system_instructions>\n")
 		system := withoutBillingHeader(req.System)
 		pos := 0

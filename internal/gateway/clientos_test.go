@@ -58,6 +58,23 @@ func TestClientOSPrompt(t *testing.T) {
 	if got = text(&Request{System: "Be brief.", Messages: msgs}); strings.Contains(got, "MCP server runs") {
 		t.Errorf("no OS: %q", got)
 	}
+	unknown := "The MCP server runs on a remote machine with an unknown OS. Check its OS with a tool before running OS-specific commands."
+	tools := []Tool{{Name: "shell"}}
+	if got = text(&Request{System: "Be brief.", Tools: tools, Messages: msgs}); !strings.Contains(got, "Be brief.\n"+unknown+"\n</external_system_instructions>") {
+		t.Errorf("unknown OS with tools: %q", got)
+	}
+	if got = text(&Request{Tools: tools, Messages: msgs}); !strings.Contains(got, "<external_system_instructions>\n\n"+unknown+"\n</external_system_instructions>") {
+		t.Errorf("unknown OS alone: %q", got)
+	}
+	if got = text(&Request{System: "Be brief.", ClientOS: "Linux x64", Tools: tools, Messages: msgs}); strings.Contains(got, "unknown OS") {
+		t.Errorf("known OS: %q", got)
+	}
+	if got := leanSystem(&Request{System: "S", Tools: tools}); got != "S\n"+unknown {
+		t.Errorf("lean unknown: %q", got)
+	}
+	if got := leanSystem(&Request{System: "S"}); got != "S" {
+		t.Errorf("lean no tools: %q", got)
+	}
 	if got := leanSystem(&Request{System: "S", ClientOS: "Linux x64"}); got != "S\nThe MCP server runs on a remote machine: Linux x64." {
 		t.Errorf("lean: %q", got)
 	}

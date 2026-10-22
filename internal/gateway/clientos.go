@@ -87,7 +87,10 @@ func normalizeArch(s string) string {
 // clientOSLine tells a run where the client's tools run.
 func clientOSLine(req *Request) string {
 	if req.ClientOS == "" {
-		return ""
+		if len(req.Tools) == 0 {
+			return ""
+		}
+		return "\nThe MCP server runs on a remote machine with an unknown OS. Check its OS with a tool before running OS-specific commands."
 	}
 	return "\nThe MCP server runs on a remote machine: " + req.ClientOS + "."
 }
