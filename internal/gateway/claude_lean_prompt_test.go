@@ -92,7 +92,7 @@ func TestClaudeLeanPromptIsTheRunsSystemPrompt(t *testing.T) {
 		t.Fatalf("the run's system prompt (given %t): %q\n%s", one.hasSys, one.system, one.log)
 	}
 	two := told(t, runs(), "two")
-	if two.system != "Rules.\nYou must call at least one available tool before answering." {
+	if two.system != "Rules.\nThe MCP server runs on a remote machine with an unknown OS. Check its OS with a tool before running OS-specific commands.\nYou must call at least one available tool before answering." {
 		t.Fatalf("the tool choice is not in the system prompt: %q", two.system)
 	}
 	for _, r := range []leanRun{one, two} {
