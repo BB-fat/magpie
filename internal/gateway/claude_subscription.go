@@ -1112,7 +1112,7 @@ func newLooseTurn(owner string, req *Request, msgs []Message, sealed bool) *loos
 		}
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), req.WebSearch, req.Format.schema(), start)
+	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), req.WebSearch, req.Format.schema(), start, req.ClientOS)
 	cacheIdentity(h, req)
 	hashMessages(h, msgs[:start], nil)
 	l := &looseTurn{key: hex.EncodeToString(h.Sum(nil)), runs: heardRuns(msgs[start:], sealed)}
@@ -1839,7 +1839,7 @@ func (r *subscriptionRun) park() {
 func turnKey(owner string, req *Request, msgs []Message) string {
 	h := sha256.New()
 	tools, _ := json.Marshal(req.Tools)
-	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), tools, req.WebSearch, req.Format.schema(), claudebridge.MCPServerName())
+	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s\x00%s\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), tools, req.WebSearch, req.Format.schema(), claudebridge.MCPServerName(), req.ClientOS)
 	cacheIdentity(h, req)
 	hashMessages(h, msgs, nil)
 	return hex.EncodeToString(h.Sum(nil))
@@ -2603,7 +2603,7 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 	var blocks []map[string]any
 	var text strings.Builder
 	// a lean run has them as its system prompt (leanSystem)
-	if !req.leanPrompt && (req.System != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:")) {
+	if !req.leanPrompt && (req.System != "" || req.ClientOS != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:")) {
 		text.WriteString("<external_system_instructions>\n")
 		system := withoutBillingHeader(req.System)
 		pos := 0
@@ -2622,6 +2622,7 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 			}
 		}
 		text.WriteString(system[pos:])
+		text.WriteString(clientOSLine(req))
 		text.WriteString(toolChoiceAsk(req))
 		text.WriteString("\n</external_system_instructions>\n\n")
 		// The caller's instructions are a block of their own, marked for the
@@ -2727,7 +2728,7 @@ func toolChoiceAsk(req *Request) string {
 // with its tool choice. Claude Code still puts its billing line and its
 // identity line before it, and marks it for the cache itself.
 func leanSystem(req *Request) string {
-	return strings.TrimSpace(withoutBillingHeader(req.System) + toolChoiceAsk(req))
+	return strings.TrimSpace(withoutBillingHeader(req.System) + clientOSLine(req) + toolChoiceAsk(req))
 }
 
 // historyChunk is how many messages of the history renderClaudePrompt puts
@@ -4106,6 +4107,7 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 		// in words
 		req = req.inSystem()
 	}
+	req.ClientOS = clientOS(r)
 	if len(req.Safeguards) > 0 {
 		req.SafeguardBeta = "dangerous-tool-use-2026-09-03"
 		for _, beta := range strings.Split(r.Header.Get("anthropic-beta"), ",") {

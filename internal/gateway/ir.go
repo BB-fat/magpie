@@ -222,6 +222,9 @@ type Request struct {
 	// Safeguards are the caller's safety context, opaque to the gateway.
 	Safeguards    json.RawMessage
 	SafeguardBeta string
+	// ClientOS is the OS of the machine the client's tools run on, as its
+	// request headers tell it (clientOS); empty when they do not.
+	ClientOS string
 	// Format is the shape the client asked the answer in (structured
 	// output: format.go), nil for plain text. Text, a Responses client's,
 	// holds it no more: it is asked for again in the upstream's own words.
