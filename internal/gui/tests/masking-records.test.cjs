@@ -2,12 +2,14 @@
 // Settings › Privacy opens on what masking kept from vendors: the number,
 // the days, the kinds, agents to providers and the values masked most, a
 // value shown only while pointed at (and said gone when this magpie no
-// longer knows it). Its records open from the card, filtered by what was
+// longer knows it), and the newest request as the vendor got it or, asked
+// for, as it is here. Its records open from the card, filtered by what was
 // clicked, each one opening on the text the vendor saw. A masked call on
 // the Gateway page opens its own record. Nothing in the card or the
 // records is left in English, nothing is wider than the window, and a
 // click scrolls nothing.
-// Every language, Chromium and WebKit, 1100 and 640px; the API is faked.
+// Every language, Chromium and WebKit, 1100 and 640px, tall enough that
+// pointing at a row needs no scroll; the API is faked.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -62,7 +64,8 @@ function serve(lang, sum, asked) {
     if (url.pathname === "/api/settings") return json(settings);
     if (url.pathname === "/api/providers") return json({ providers: [{ id: "anthropic", name: "Anthropic", icon: "anthropic", agents: [], models: [] }, { id: "openai", name: "OpenAI", icon: "openai", agents: [], models: [] }], presets: [], excluded: [],
       gateway: { running: true, window: true, mine: true, url: "http://127.0.0.1:3999", models: 0, groups: [],
-        calls: [{ id: 7, time: ago(120e3), agent: "claude", model: "claude-opus-4-1", from: "anthropic", to: "anthropic", status: 200, ms: 900, masked: { n: 3, distinct: 2, kinds: { API_KEY: 2, EMAIL: 1 }, by: { rule: 2 }, key: 1002 } }] } });
+        calls: [{ id: 7, time: ago(120e3), agent: "claude", model: "claude-opus-4-1", from: "anthropic", to: "anthropic", status: 200, ms: 900, masked: { n: 3, distinct: 2, kinds: { API_KEY: 2, EMAIL: 1 }, by: { rule: 2 }, key: 1002 } },
+          { id: 8, time: ago(60e3), agent: "claude", model: "claude-opus-4-1", from: "anthropic", to: "anthropic", status: 200, ms: 700, masked: { n: 0, distinct: 0, warned: 2, key: 1003 } }] } });
     if (url.pathname === "/api/groups") return json({ groups: [], models: [] });
     if (url.pathname === "/api/plugins") return json({ plugins: [] });
     if (url.pathname === "/api/privacy-model") return json({ supported: true, installed: false, size: 1.6e9 });
@@ -90,7 +93,7 @@ function serve(lang, sum, asked) {
 
 async function open(engine, lang, width, sum, where) {
   const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
-  const page = await (await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: "reduce" })).newPage();
+  const page = await (await browser.newContext({ viewport: { width, height: 1800 }, reducedMotion: "reduce" })).newPage();
   page.setDefaultTimeout(8000);
   const errors = [], asked = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -102,7 +105,7 @@ async function open(engine, lang, width, sum, where) {
 }
 
 // English that a translated page must not show
-const english = ["Kept from vendors", "What the vendor saw", "values masked", "What was kept", "Masked most", "View records", "What was masked", "Every kind", "Found by", "Local model", "Not in memory", "This request"];
+const english = ["Kept from vendors", "What the vendor saw", "As written here", "Latest request", "Different values", "values masked", "What was kept", "Masked most", "View records", "What was masked", "Every kind", "Found by", "Local model", "Not in memory", "This request"];
 const wide = (page) => page.evaluate(() => {
   const over = [...document.querySelectorAll("#maskObs *, #maskRecs *")].filter((n) => n.getClientRects().length && n.getBoundingClientRect().right > innerWidth + 1).map((n) => n.className?.baseVal ?? n.className);
   return { page: document.documentElement.scrollWidth > document.documentElement.clientWidth, over };
@@ -130,6 +133,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await page.evaluate(() => [document.querySelector("#maskObs"), ...document.querySelectorAll("#maskObs *")].some((n) => /gradient/.test(getComputedStyle(n).backgroundImage + getComputedStyle(n, "::before").backgroundImage))), false, "flat: no gradient");
         assert.deepEqual(await card.locator(".mo-col.agent .nm").allTextContents(), ["Claude Code", "Codex"]);
         assert.deepEqual(await card.locator(".mo-col.provider .nm").allTextContents(), ["Anthropic", "OpenAI"]);
+        // hairlines into this computer and out of it, drawn once it is laid out
+        await card.locator(".mo-flow path.mo-th:not(.out)").first().waitFor({ state: "attached" });
+        await card.locator(".mo-flow path.mo-th.out").first().waitFor({ state: "attached" });
+        assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector("#maskObs")).boxShadow), "none", "no shadow");
         assert.deepEqual(await card.locator(".mo-val .sh").allTextContents(), ["sk-p••••••••", "•••"]);
         assert.equal((await card.textContent()).includes(SECRET), false, "no value until pointed at");
         assert.equal(asked.filter((a) => a.startsWith("value")).length, 0, "nothing asked until pointed at");
@@ -154,6 +161,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForFunction((s) => document.querySelector(".mask-tip .v")?.textContent === s, SECRET);
         await page.mouse.move(1, 1);
         await page.locator(".mask-tip").waitFor({ state: "detached" });
+
+        // asked for, the newest request as it is here: each value read then,
+        // one this magpie no longer knows said so; and back
+        await card.locator(".mo-saw .segs .opt").nth(1).click();
+        await page.waitForFunction((s) => document.querySelector("#maskObs .mo-orig:not(.gone)")?.textContent === s, SECRET);
+        await card.locator(".mo-saw .mo-orig.gone").waitFor();
+        assert.equal(await card.locator(".mo-saw mark.mo-ph").count(), 0);
+        await card.locator(".mo-saw .segs .opt").first().click();
+        assert.deepEqual(await card.locator(".mo-saw mark.mo-ph").allTextContents(), [KEY, MAIL]);
 
         // a kind's row opens its records, filtered by it
         await card.locator(".mo-ledg.kind .mo-row").nth(1).click();
@@ -206,8 +222,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
   test(`${engine}: a masked call on the Gateway page opens its record`, async (t) => {
     const { browser, page, errors } = await open(engine, "en", 1100, summary, "?view=gateway");
     t.after(() => browser.close());
-    const badge = page.locator("#activity .call .mask-badge");
+    const badge = page.locator("#activity .call .mask-badge:not(.warn)");
     await badge.waitFor();
+    // a call whose values only went as written, as the user set (#1977)
+    const warned = page.locator("#activity .call .mask-badge.warn");
+    assert.equal(await warned.textContent(), "2");
+    assert.equal(await warned.getAttribute("title"), "2 values went to the vendor as written, as you set");
     assert.equal(await badge.textContent(), "3");
     assert.match(await badge.getAttribute("title"), /^3 values masked before it went to the vendor: API keys 2, Emails 1$/);
     await badge.click();

@@ -83,10 +83,12 @@ var (
 	partnerFetches bool
 )
 
-const (
-	partnerEvery = 6 * time.Hour
-	partnerRetry = 10 * time.Minute
-)
+// A list is fetched again after partnerEvery, so a partner added reaches
+// an app left running within the hour; the list is a couple of KB and its
+// icons aren't fetched again (partnerIcon). A var, so a test can shorten it.
+var partnerEvery = time.Hour
+
+const partnerRetry = 10 * time.Minute
 
 var partnerID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,40}$`)
 
@@ -106,8 +108,9 @@ func partnersSource() string {
 }
 
 // Partners are the partners listed now, in the list's order: what was
-// fetched last, never waited for. A list older than six hours is fetched
-// again behind the call, and the page asked again shows it.
+// fetched last, never waited for. A list this process hasn't fetched, or
+// fetched an hour ago, is fetched again behind the call, and the page
+// asked again shows it.
 func Partners() []Partner {
 	if partnersSource() == "off" {
 		return nil
@@ -154,6 +157,42 @@ func PartnersNow(wait time.Duration) []Partner {
 	return Partners()
 }
 
+// KeepPartnersFresh fetches the partner list when the magpie serving the
+// gateway starts, and again whenever it is due (every hour, ten minutes
+// after a failed fetch), whether or not a page asks for it, so a partner
+// added reaches an app left running within the hour, and the list kept on
+// disk is fresh for the next start.
+func KeepPartnersFresh(ctx context.Context) {
+	if partnersSource() == "off" {
+		return
+	}
+	t := time.NewTimer(0)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		partnerMu.Lock()
+		loadPartners()
+		due := !partnerFetches && !time.Now().Before(partnerNext)
+		if due {
+			partnerFetches = true
+		}
+		partnerMu.Unlock()
+		if due {
+			refreshPartners()
+		}
+		partnerMu.Lock()
+		wait := time.Until(partnerNext)
+		partnerMu.Unlock()
+		// a fetch Partners started is still running when partnerNext
+		// has passed: look again in a second
+		t.Reset(max(wait, time.Second))
+	}
+}
+
 // loadPartners reads the list kept on disk the first time it's asked for;
 // partnerMu held.
 func loadPartners() {
@@ -181,8 +220,10 @@ func loadPartners() {
 			delete(c.Seen, id)
 		}
 	}
+	// partnerNext stays zero: a process started fetches on its first ask,
+	// whatever the kept list's age. Waiting out the kept list's six hours
+	// held back a partner added minutes after it was fetched, restart or not.
 	partnerState = &c
-	partnerNext = c.At.Add(partnerEvery)
 }
 
 // refreshPartners fetches the list and keeps it; on a failure the list
@@ -352,13 +393,24 @@ func partnerIcon(ctx context.Context, p Partner) string {
 	if p.IconURL == "" {
 		return "generic"
 	}
+	// an icon kept from the same URL is used as it is, so an hourly fetch
+	// doesn't download it again; a partner's new logo goes at a new URL
+	partnerMu.Lock()
+	loadPartners()
+	s, ok := partnerState.Seen[p.ID]
+	partnerMu.Unlock()
+	kept := ok && s.IconURL == p.IconURL && s.Icon != "" && s.Icon != "generic"
+	if kept {
+		if f := IconFile(strings.TrimPrefix(s.Icon, iconPrefix)); f != "" {
+			if _, err := os.Stat(f); err == nil {
+				return s.Icon
+			}
+		}
+	}
 	if icon, err := fetchPartnerIcon(ctx, p.IconURL); err == nil {
 		return icon
 	}
-	partnerMu.Lock()
-	defer partnerMu.Unlock()
-	loadPartners()
-	if s, ok := partnerState.Seen[p.ID]; ok && s.IconURL == p.IconURL {
+	if kept {
 		return s.Icon
 	}
 	return "generic"

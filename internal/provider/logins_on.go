@@ -163,6 +163,9 @@ func (p Provider) alsoOn() []Provider {
 		}
 		if agent == "codex" {
 			a.sign = codexSign(func(ctx context.Context) (string, string, error) { return savedLoginToken(ctx, agent, user) })
+			a.renew = func(ctx context.Context, stale string) (string, string, error) {
+				return renewSavedLoginFrom(ctx, agent, user, stale)
+			}
 		}
 		q := p
 		q.Account = &a
@@ -203,6 +206,18 @@ func savedLoginToken(ctx context.Context, agent, user string) (tok, accountID st
 // refuses is kept on the account as lapsed, until one goes through or it is
 // signed in again.
 func renewSavedLogin(ctx context.Context, agent, user string, force bool) (tok, accountID string, err error) {
+	return renewSaved(ctx, agent, user, force, "")
+}
+
+// renewSavedLoginFrom refreshes the saved sign-in whose access token stale
+// the backend just called expired while it had time left (#2973), unless
+// it was renewed since: the token saved by now is returned then, its
+// refresh token being the one spent already.
+func renewSavedLoginFrom(ctx context.Context, agent, user, stale string) (tok, accountID string, err error) {
+	return renewSaved(ctx, agent, user, false, stale)
+}
+
+func renewSaved(ctx context.Context, agent, user string, force bool, stale string) (tok, accountID string, err error) {
 	ctx = ViaLogin(ctx, agent, user) // refreshed through the account's own proxy
 	savedTokenMu.Lock()
 	defer savedTokenMu.Unlock()
@@ -218,6 +233,18 @@ func renewSavedLogin(ctx context.Context, agent, user string, force bool) (tok, 
 	if l == nil {
 		return "", "", fmt.Errorf("no saved %s account %q", agent, user)
 	}
+	if agent == "codex" && heldByCodex(*l) {
+		// the account Codex is signed in to now (switched to since this
+		// was asked for, or the copy kept of it as it was): one sign-in in
+		// two places, whose refresh token a refresh here would spend under
+		// Codex. Codex's own auth.json then holds a dead one, and the app
+		// of an edu or business workspace, which reads its workspace's
+		// settings with it at start, stays paused on "无法加载组织设置"
+		// (万贤凯 on Discord). So it is renewed where Codex keeps it, as
+		// Codex's own (codexTokenRenewing), and the copy is left as it is:
+		// a switch away saves it afresh from Codex's.
+		return codexTokenRenewing(ctx, codexHome(), stale)
+	}
 	var auth []byte
 	switch agent {
 	case "codex":
@@ -230,7 +257,11 @@ func renewSavedLogin(ctx context.Context, agent, user string, force bool) (tok, 
 		if accountID == "" {
 			accountID = claimString(jwtClaims(a.Tokens.IDToken), "https://api.openai.com/auth", "chatgpt_account_id")
 		}
-		if exp, _ := jwtClaims(a.Tokens.AccessToken)["exp"].(float64); !force && (exp == 0 || time.Until(time.Unix(int64(exp), 0)) > 5*time.Minute) {
+		if stale != "" {
+			if a.Tokens.AccessToken != stale {
+				return a.Tokens.AccessToken, accountID, nil
+			}
+		} else if exp, _ := jwtClaims(a.Tokens.AccessToken)["exp"].(float64); !force && (exp == 0 || time.Until(time.Unix(int64(exp), 0)) > 5*time.Minute) {
 			return a.Tokens.AccessToken, accountID, nil
 		}
 		if tok, err = codexRefresh(ctx, raw); err != nil {
@@ -253,6 +284,23 @@ func renewSavedLogin(ctx context.Context, agent, user string, force bool) (tok, 
 		}
 	}
 	return tok, accountID, writeLogins(ls)
+}
+
+// heldByCodex says the saved ChatGPT account l is the one Codex is signed
+// in to: the same login, or the same refresh token. Asked under
+// savedTokenMu, which a switch holds too, so it can't change before the
+// refresh it decides is done.
+func heldByCodex(l savedLogin) bool {
+	live, ok := liveLogin("codex")
+	if !ok {
+		return false
+	}
+	if sameLogin(live, l) {
+		return true
+	}
+	var a, b codexAuth
+	return json.Unmarshal(live.Auth, &a) == nil && json.Unmarshal(l.Auth, &b) == nil &&
+		a.Tokens.RefreshToken != "" && a.Tokens.RefreshToken == b.Tokens.RefreshToken
 }
 
 // savedRefreshFailed words a saved account's failed refresh. One the vendor

@@ -598,7 +598,8 @@ const claudeMCPPath = "/_magpie/claude-mcp/"
 func (b *subscriptionBridge) start(ctx context.Context, req *Request, model, configDir, owner string, from *savedSession) (*subscriptionRun, <-chan Event, error) {
 	run, events, err := b.startRun(ctx, req, model, configDir, owner, from)
 	var full *claudeFull
-	if err != nil && from != nil && !errors.As(err, &full) && ctx.Err() == nil {
+	var refused *cliSchemaRefused
+	if err != nil && from != nil && !errors.As(err, &full) && !errors.As(err, &refused) && ctx.Err() == nil {
 		log.Printf("claude: Claude Code could not go on from the conversation's saved session (%v); a new one is told the whole conversation", err)
 		return b.startRun(ctx, req, model, configDir, owner, nil)
 	}
@@ -680,7 +681,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		args = append(args, "--thinking", "disabled")
 	}
 	if len(req.Format.schema()) > 0 {
-		args = append(args, "--json-schema", string(req.Format.schema()))
+		args = append(args, "--json-schema", string(cliSchema(req.Format.schema())))
 	}
 	work, err := claudeWorkDir()
 	var sessions []string
@@ -2112,13 +2113,44 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 	// unstreamedQuiet, as when Claude Code goes on to call the client's
 	// tools and waits on them
 	unstreamed, unstreamedStop, blocks := "", "", 0
+	// The reply's tool calls written as text (textCalls), held back from
+	// the client. A reply that ends with them and calls none of the
+	// client's tools goes on: once its turn's result is in, the run is
+	// told to make them (textCallsAsk), and the reply goes on in its next
+	// message, as after Claude Code's own call. Only once a reply: told
+	// again, the words go to the client as written.
+	var calls textCalls
+	retell := false    // the run is told to make its calls once this turn's result is in
+	retold := false    // this reply was told so
 	var pmu sync.Mutex // held for each line, and by quiet's settle
 	var quiet *time.Timer
+	text := func(s string) {
+		if s != "" && !r.schema {
+			shown = true
+			r.emit(Event{Kind: KText, Text: s})
+		}
+	}
+	said := func(s string) { text(calls.push(s)) }
 	// what each message's end does, once its stop is known
 	end := func(why string) {
 		if goesOn := why != "" && r.schema && !theirs || why == "tool_use" && len(own) > 0 && !theirs; goesOn {
 			inside = true // the answer is the next message's, or the result's
 		} else if why != "" {
+			held, seen := calls.end()
+			switch {
+			case seen && !theirs && why == "end_turn" && !retold && r.stdin != nil:
+				retell, retold, inside = true, true, true
+				log.Printf("claude: a reply wrote its tool calls as text (%d bytes held back); its run is told to make them", len(held))
+				return
+			case seen && theirs:
+				// it called the client's tools too: those are the reply's
+				log.Printf("claude: a reply wrote tool calls as text beside real ones; the text (%d bytes) is left out", len(held))
+			case seen:
+				log.Printf("claude: a reply wrote its tool calls as text again; the client is told the words as written")
+				text(held)
+			default:
+				text(held)
+			}
 			r.emit(Event{Kind: KStop, Stop: stopFromAnthropic(why)})
 		}
 	}
@@ -2161,12 +2193,6 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 		r.mu.Unlock()
 		return name, true
 	}
-	text := func(s string) {
-		if s != "" && !r.schema {
-			shown = true
-			r.emit(Event{Kind: KText, Text: s})
-		}
-	}
 	// begin starts a message: the reply's first, or one it goes on in,
 	// after Claude Code's own call or an attempt cut short
 	begin := func(id, model string, u cliUsage) {
@@ -2178,6 +2204,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			return
 		}
 		before, this = Usage{}, Usage{}
+		calls, retold = textCalls{}, false
 		r.mu.Lock()
 		r.asked = nil
 		r.mu.Unlock()
@@ -2308,7 +2335,22 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			}
 			return
 		}
+		if envelope.Type == "result" && retell && !envelope.IsError {
+			// the turn whose reply wrote its calls as text is over: the run
+			// is told to make them, and the reply goes on in its answer
+			retell = false
+			calls = textCalls{}
+			ask, _ := json.Marshal(map[string]any{"type": "user", "uuid": newUUID(), "message": map[string]any{"role": "user",
+				"content": []map[string]any{{"type": "text", "text": textCallsAsk}}}})
+			if err := r.tell(ask); err != nil {
+				inside = false
+				r.emit(Event{Kind: KError, Text: "Claude Code could not be told to make the tool calls its reply wrote as text: " + err.Error(), Status: http.StatusBadGateway, RequestID: reqID})
+				r.endSegment()
+			}
+			return
+		}
 		if envelope.Type == "result" {
+			retell = false
 			// a turn that failed — out of quota, rate limited — ends with
 			// this and no message_stop, the CLI waiting on its next input:
 			// the reply ends here, or it would wait with it (#177)
@@ -2388,7 +2430,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 						r.emit(Event{Kind: KSig, Text: c.Signature})
 					}
 				case "text":
-					text(c.Text)
+					said(c.Text)
 				case "tool_use":
 					name, theirs := toolStart(index, c.Name)
 					if !theirs {
@@ -2443,7 +2485,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 					r.emit(Event{Kind: KToolStart, ID: e.ContentBlock.ID, Name: name})
 				}
 			case "text":
-				text(e.ContentBlock.Text)
+				said(e.ContentBlock.Text)
 			case "thinking":
 				// a block of its own, signed with no text or not (#1445)
 				r.emit(Event{Kind: KThinkStart})
@@ -2460,7 +2502,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 		case "content_block_delta":
 			switch e.Delta.Type {
 			case "text_delta":
-				text(e.Delta.Text)
+				said(e.Delta.Text)
 			case "thinking_delta":
 				r.emit(Event{Kind: KThink, Text: e.Delta.Thinking})
 			case "signature_delta":
@@ -2678,6 +2720,9 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 			text.Reset()
 			chunk = len(blocks) - 1
 		}
+	}
+	if slices.ContainsFunc(req.Messages, callsTool) {
+		text.WriteString(pastCallsNote + "\n\n")
 	}
 	if split > 0 {
 		text.WriteString("</current_turn>")
@@ -2913,6 +2958,9 @@ func renderClaudeTurn(msgs []Message, tools []Tool) []map[string]any {
 			text.WriteString(label + ": ")
 		}
 		blocks = renderParts(blocks, &text, m.Parts, offered)
+	}
+	if slices.ContainsFunc(msgs, callsTool) {
+		text.WriteString("\n\n" + pastCallsNote)
 	}
 	return closeBlocks(blocks, &text)
 }
@@ -3504,6 +3552,11 @@ func (b *subscriptionBridge) mcpCall(w http.ResponseWriter, r *http.Request) {
 	run := b.runs[token]
 	b.mu.Unlock()
 	if run == nil {
+		// a run of the magpie this one took the gateway over from, its
+		// turn under way when the gateway changed hands (handover.go)
+		if forwardCallback(w, r) {
+			return
+		}
 		http.Error(w, "unknown or expired Claude run", http.StatusNotFound)
 		return
 	}
@@ -3682,6 +3735,9 @@ func (r *subscriptionRun) launch() error {
 		if room != nil {
 			room(left)
 		}
+		if err := r.schemaEnded(); err != nil {
+			r.emit(Event{Kind: KError, Text: err.Error(), Status: http.StatusBadRequest})
+		}
 		r.finish()
 	}()
 	return nil
@@ -3736,11 +3792,73 @@ func (r *subscriptionRun) endedBefore(what string) error {
 	} else if r.exit != nil {
 		why += " (" + r.exit.Error() + ")"
 	}
-	if said := strings.TrimSpace(r.stderr.String()); said != "" {
+	said := strings.TrimSpace(r.stderr.String())
+	if at := cliSchemaWords.FindStringIndex(said); at != nil {
+		// its words from the flag on, which a long list of Ajv's
+		// errors after them would push out of the tail
+		said = said[at[0]:]
+		if len(said) > 300 {
+			said = strings.ToValidUTF8(said[:300], "") + "…"
+		}
+		return &cliSchemaRefused{why + ": " + said}
+	}
+	if said != "" {
 		why += ": " + clipTail(said, 300)
 	}
 	return errors.New(why)
 }
+
+// schemaEnded is the error of a run whose Claude Code took its input and
+// then ended over its --json-schema, nil for any other end: it checks the
+// schema while it starts, and its input may be taken before it gets to
+// it, so the turn told it heard no answer, and was "ended without an
+// answer", a 502 asked again.
+func (r *subscriptionRun) schemaEnded() error {
+	r.mu.Lock()
+	killed, said := r.killed, r.stderr.String()
+	r.mu.Unlock()
+	if killed || !cliSchemaWords.MatchString(said) {
+		return nil
+	}
+	return r.endedBefore("answered")
+}
+
+// cliSchema is a schema as Claude Code's --json-schema takes it: without
+// its root $schema. Claude Code checks the schema with Ajv's default
+// class, which knows draft-07's meta-schema alone, and exits "no schema
+// with key or ref" over any other a schema names, as Codex's titles name
+// draft 2020-12 (zod's toJSONSchema), before it reads its input (#3036).
+// Without it the schema is read as draft-07. The rest is kept as written:
+// $id, $defs and a $schema below the root pass Ajv as they are.
+func cliSchema(raw json.RawMessage) json.RawMessage {
+	var root map[string]json.RawMessage
+	if json.Unmarshal(raw, &root) != nil {
+		return raw
+	}
+	if _, ok := root["$schema"]; !ok {
+		return raw
+	}
+	delete(root, "$schema")
+	out, err := json.Marshal(root)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// cliSchemaWords are how Claude Code exits over the --json-schema it was
+// given, before it reads its input: not JSON, not an object, or a schema
+// its Ajv won't compile ("strict mode: unknown keyword" for one only a
+// later draft has).
+var cliSchemaWords = regexp.MustCompile(`--json-schema (is not a valid JSON Schema|is not valid JSON|must be a JSON object)`)
+
+// cliSchemaRefused is a run's Claude Code ending over the request's schema:
+// it ends the same for the same schema on every account and every try,
+// so it is the request's 400, neither asked again nor of the next
+// account, and no account rests for it (#3036: asked three times).
+type cliSchemaRefused struct{ msg string }
+
+func (e *cliSchemaRefused) Error() string { return e.msg }
 
 // clipTail is s's last n bytes at most, cut at a rune, "…" before them
 // where some went.
@@ -4004,6 +4122,7 @@ func (b *subscriptionBridge) whyCallsLost(req *Request) string {
 }
 
 func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request, from provider.Protocol, p provider.Provider, model string, body []byte, usage *Usage) (int, string) {
+	defer s.bridgeTurn()()
 	owner := p.ID
 	if p.Account != nil {
 		owner += "\x00" + p.Account.User
@@ -4232,8 +4351,11 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 		// the account: a 503 passes it to the next (#2956)
 		code := 502
 		var full *claudeFull
+		var refused *cliSchemaRefused
 		if errors.As(err, &full) {
 			code = 503
+		} else if errors.As(err, &refused) {
+			code = 400
 		}
 		return writeError(w, from, code, name+": "+err.Error()), err.Error()
 	}

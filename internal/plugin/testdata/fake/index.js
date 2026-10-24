@@ -93,6 +93,16 @@ export const FakePlugin = async ({ client }) => ({
       // Cline sends glm-5.3-flash through OpenRouter, not Vercel's gateway
       cfg.provider[ID].models["glm-5.3-flash"] = { name: "GLM 5.3 Flash", limit: { context: 1000, output: 100 } }
     }
+    // $FAKE_MINIMAX: MiniMax Code's models as its plugin (minimax 0.1.4)
+    // gives them, on Anthropic's API: M3.1-Flash and its -Preview always
+    // think at an effort, M3 thinks or doesn't (plugins#316)
+    if (process.env.FAKE_MINIMAX) {
+      const efforts = Object.fromEntries(["low", "medium", "high", "xhigh", "max"].map((e) => [e, { thinking: { type: "adaptive" }, effort: e }]))
+      const mm = { provider: { npm: "@ai-sdk/anthropic" }, reasoning: true, limit: { context: 1048576, output: 524288 } }
+      cfg.provider[ID].models["MiniMax-M3.1-Flash"] = { ...mm, name: "M3.1-Flash", variants: efforts }
+      cfg.provider[ID].models["MiniMax-M3.1-Flash-Preview"] = { ...mm, name: "M3.1-Flash-Preview", variants: efforts }
+      cfg.provider[ID].models["MiniMax-M3"] = { ...mm, name: "MiniMax-M3", variants: { none: { thinking: { type: "disabled" } }, high: { thinking: { type: "adaptive" } } } }
+    }
     // $FAKE_SEARCHES: the provider's upstream searches by itself (#2027),
     // as a plugin in front of Claude's API says
     if (process.env.FAKE_SEARCHES) cfg.provider[ID].searches = true
@@ -121,8 +131,9 @@ export const FakePlugin = async ({ client }) => ({
   },
   auth: {
     provider: ID,
+    single: process.env.FAKE_KEYLESS === "1",
     methods: [
-      { type: "api", label: "API key" },
+      { type: "api", label: "API key", ...(process.env.FAKE_KEYLESS === "1" ? { keyless: true, authorize: async (inputs) => ({ type: "success", key: inputs.credential || "public-fixture" }) } : {}) },
       {
         type: "oauth",
         label: "Browser",
@@ -165,6 +176,10 @@ export const FakePlugin = async ({ client }) => ({
         h.set("authorization", "Bearer " + (a.type === "oauth" ? a.access : a.key))
         h.set("x-models", Object.keys(provider.models).sort().join(","))
         h.set("x-body-type", typeof init.body)
+        // $FAKE_RUN: the test this host runs for, so its vendor tells its
+        // own requests from a stray that reached a port the kernel handed
+        // on (testenv.FakeVendor)
+        if (process.env.FAKE_RUN) h.set("x-fake-run", process.env.FAKE_RUN)
         // where magpie said the agent works, as the plugin read it; its own
         // headers go on too, as a plugin that sends on what it got sends
         // them, for the host to take off
@@ -275,6 +290,10 @@ export const FakePlugin = async ({ client }) => ({
         p.models["mimo-v2.6-flash-free"] = { ...p.models["fake-1"], id: "mimo-v2.6-flash-free", name: "MiMo V2.6 Flash Free", api: { ...p.models["fake-1"].api, id: "mimo-v2.6-flash-free" }, free: true, variants: {},
           capabilities: {"temperature":true,"reasoning":true,"attachment":true,"toolcall":true,"input":{"text":true,"image":true,"audio":true,"video":true,"pdf":false},"output":{"text":true,"image":false,"audio":false,"video":false,"pdf":false},"interleaved":{"field":"reasoning_content"}} }
       }
+      // $FAKE_SEARCHER: one more model, that searches the web by itself
+      // when asked in plain words, marked on the list the hook gives, as
+      // Trae CN's search_agent ("Search") is listed beside its chat models
+      if (process.env.FAKE_SEARCHER) p.models["fake-search"] = { ...p.models["fake-1"], id: "fake-search", name: "Fake Search", api: { ...p.models["fake-1"].api, id: "fake-search" }, free: false, searches: true }
       // $FAKE_DECIDE: one more decision model, marked on the list the hook
       // gives, as a plugin that reads its vendor's list marks one
       if (process.env.FAKE_DECIDE) p.models["fake-judge"] = { ...p.models["fake-1"], id: "fake-judge", name: "Fake Judge", api: { ...p.models["fake-1"].api, id: "fake-judge" }, free: false, decides: true }

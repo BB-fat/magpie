@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -273,10 +275,47 @@ func codexIn(at place) *Agent {
 		cur, _ := edit.Read(catalogPath)
 		return codexcat.Keep(cur, list())
 	}
+	// listGone: magpie's list is known not to be there; one that can't be
+	// looked at is not taken for gone
+	listGone := func() bool {
+		_, err := os.Stat(catalogPath)
+		return errors.Is(err, fs.ErrNotExist)
+	}
+	// unnameGoneList takes model_catalog_json out of the config where it
+	// names magpie's list and the list is gone, so Codex can load its
+	// config again
+	unnameGoneList := func() error {
+		if !ownCatalog(get("model_catalog_json")) || !listGone() {
+			return nil
+		}
+		return edit.DelTOMLTop(path, "model_catalog_json")
+	}
+	// theirListGone: a model_catalog_json of the user's names no file, as
+	// Codex reads it (relative to its home). In a WSL distro its spelling
+	// is the distro's, which this side can't look at: not taken for gone.
+	theirListGone := func(c string) bool {
+		if at.spell != nil {
+			return false
+		}
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(dir, c)
+		}
+		_, err := os.Stat(c)
+		return errors.Is(err, fs.ErrNotExist)
+	}
 	// dropList takes the list away as magpie steps out as Codex's
 	// provider; one holding what the user added stays, which the config
 	// no longer names, for ownList to keep when magpie is back
+	//
+	// The config never names it once it is gone: Codex reads the file as
+	// it loads its config, and with it missing loads none at all ("No such
+	// file or directory (os error 2)"), the CLI and the ChatGPT app both
+	// (zwaydot on X: Codex didn't open after magpie's Disconnect). The
+	// key was taken out only while model_provider was still magpie's, and
+	// the file went whatever the provider: one moved off magpie by the app,
+	// another tool or a hand edit left the key naming a removed file.
 	dropList := func() {
+		defer unnameGoneList()
 		cur, err := edit.Read(catalogPath)
 		if err != nil {
 			return
@@ -481,6 +520,34 @@ func codexIn(at place) *Agent {
 		}
 		dropList()
 		return nil
+	}
+	// bringBack moves the threads started while magpie was Codex's
+	// provider (model_provider "magpie") onto the provider Codex is on now,
+	// once it is off magpie: Codex lists only the threads of its current
+	// provider (app-server thread/list, the TUI's resume picker), so after
+	// a Disconnect, a hand edit, or magpie stepping back beside the
+	// ChatGPT sign-in, every thread started on magpie was gone from Codex
+	// (kaizaoji on X). Only magpie's own threads move, never those of a
+	// provider of the user's (CC Switch's, #887); none while a profile
+	// still names magpie, whose threads they are; and a copy of each is
+	// kept in magpie's trash (MoveCodexProvider). A thread Codex wrote to
+	// in the last minute waits for the next Sync. This machine's Codex
+	// only: a distro's state database isn't magpie's to open.
+	bringBack := func() {
+		if at.spell != nil || namesMagpie() {
+			return
+		}
+		to := sessions.CodexProviderIn(dir)
+		if to == magpieID {
+			return
+		}
+		moved, err := sessions.MoveCodexThreads(dir, magpieID, to)
+		if len(moved) > 0 {
+			log.Printf("codex: %d thread(s) started on magpie moved to %s, where Codex lists them", len(moved), to)
+		}
+		if err != nil {
+			log.Println("codex: moving magpie's threads:", err)
+		}
 	}
 	// mirrorsTaken are the mirrors takeMirrors pointed at magpie (#1796)
 	mirrorsTaken := func() []string {
@@ -946,7 +1013,9 @@ func codexIn(at place) *Agent {
 		if p := unstash(at.key("codex.provider")); p != "" && p != magpieID {
 			back = append(back, edit.KV{Path: "model_provider", Value: p})
 		}
-		if c := unstash(at.key("codex.catalog")); c != "" && !ownCatalog(c) {
+		// the catalog of the user's own put back while its file is there:
+		// one removed since would keep Codex from loading its config
+		if c := unstash(at.key("codex.catalog")); c != "" && !ownCatalog(c) && !theirListGone(c) {
 			back = append(back, edit.KV{Path: "model_catalog_json", Value: c})
 		}
 		if e := unstash(at.key("codex.effort")); e != "" {
@@ -1122,6 +1191,8 @@ func codexIn(at place) *Agent {
 			if at.spell == nil {
 				portCodexHome(dir, codexPortUnwire)
 			}
+			// and are listed where Codex now is
+			bringBack()
 			return settle()
 		},
 		// signed in with ChatGPT, Codex reaches magpie by the base URL with
@@ -1183,6 +1254,23 @@ func codexIn(at place) *Agent {
 		},
 		OwnVia: codexOwnViaMagpie,
 		Sync: func() error {
+			// after the sync, which may have put Codex back beside its
+			// sign-in, and whatever it failed at
+			defer bringBack()
+			// model_catalog_json naming magpie's list with the list gone,
+			// as an older magpie's Disconnect could leave it (zwaydot on
+			// X): Codex loads no config at all then. Connected or not, the
+			// list is written again while magpie is the provider, else the
+			// key goes, at the next start, with no reconnect.
+			if ownCatalog(get("model_catalog_json")) && listGone() {
+				if asProvider() {
+					if err := writeOwnList(catalogPath, ownList()); err != nil {
+						return err
+					}
+				} else if err := unnameGoneList(); err != nil {
+					return err
+				}
+			}
 			if err := asyncCompaction(routed()); err != nil {
 				return err
 			}

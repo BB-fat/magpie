@@ -353,8 +353,9 @@ function gatewayModels() {
   // all say works but a request to it turns away (the same off gate the
   // backend's providerEntries and the fallback picker already honour).
   // the levels agents are offered: those kept, else all it has; one whose
-  // levels aren't known (given) offers only those it was given
-  const offered = (m) => m.kept?.length || m.given ? m.kept || [] : m.efforts || [];
+  // levels aren't known (given) offers only those it was given; one sent
+  // no reasoning field (reasonless) offers none
+  const offered = (m) => m.reasonless ? [] : m.kept?.length || m.given ? m.kept || [] : m.efforts || [];
   for (const p of providers.providers) { if (p.off) continue; for (const m of p.models) if (m.on) out.push({ id: `${p.id}/${m.id}`, name: m.name, provider: p, context: m.context, output: m.output, efforts: offered(m), images: !!m.images }); }
   return out;
 }
@@ -593,7 +594,7 @@ function renderActivity() {
     r.append(el("span", "m", c.model));
     r.append(el("span", "p", c.from === c.to ? c.from : `${c.from} → ${c.to}`));
     // what masking kept from the vendor, its record a click away
-    if (c.masked?.n) r.append(maskedBadge(c.masked));
+    if (c.masked?.n || c.masked?.warned) r.append(maskedBadge(c.masked));
     r.append(el("span", "grow"));
     r.append(el("span", "st", c.error ? `${c.status} ${c.error}` : `${c.status} · ${ledTook(c.ms)}` + (c.ttft ? " · " + t("TTFT {ms}", { ms: ledTook(c.ttft) }) : "")));
     r.title = open ? t("Hide request and response bodies") : t("Show request and response bodies");

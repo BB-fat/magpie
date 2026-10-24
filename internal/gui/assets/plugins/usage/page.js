@@ -3,6 +3,15 @@
 // first page.
 const PERIODS = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["all", "All"]];
 
+// The reader's time zone, which magpie reads the period's days, the chart's
+// hours and a picked day in: magpie web may be read from another zone than
+// the computer's, whose days put a call at 9:00 in UTC+8 under 1:00 (Outvi V
+// on Discord). None, and magpie reads its own.
+function usageZone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; }
+}
+const usageZoneQ = () => (usageZone() ? "&tz=" + encodeURIComponent(usageZone()) : "");
+
 // asked: the reader opened the page, so a Claude account's usage is read
 // at once, by running Claude Code's own /usage, rather than when its last
 // reading is due (every 5 to 15 minutes, at random, once Claude Code was used).
@@ -19,7 +28,7 @@ async function loadUsage(asked) {
   renderUsageLoading();
   if (!asked) loadQuotas();
   const p = period, read = ++usageRead;
-  const next = await api("usage?period=" + encodeURIComponent(p));
+  const next = await api("usage?period=" + encodeURIComponent(p) + usageZoneQ());
   if (read !== usageRead || view !== "usage" || usageTab !== "usage" || period !== p) return;
   usage = next;
   renderUsage();
@@ -630,6 +639,10 @@ try {
   const m = localStorage.getItem("magpie.ledMetric");
   if (["tokens", "cost", "calls", "speed"].includes(m)) ledMetric = m;
 } catch {}
+// Columns or lines (molvqingtai on Discord), kept per viewer as the metric
+// is; anything but "line", or a read that fails, is columns.
+let ledLine = false;
+try { ledLine = localStorage.getItem("magpie.ledChart") === "line"; } catch {}
 
 // The filters a click set for the reader rather than one they picked in a
 // filter's menu: someone in the chart's ranking or a day of its columns
@@ -693,6 +706,7 @@ function ledLeave() {
 
 function ledParams(extra) {
   const q = new URLSearchParams({ period });
+  if (usageZone()) q.set("tz", usageZone());
   if (ledDay) q.set("day", ledDay);
   if (ledAgent) q.set("agent", ledAgent);
   if (ledPurpose) q.set("purpose", ledPurpose);
@@ -1120,6 +1134,91 @@ function renderLedgerDash(l) {
   drawLedTrend();
 }
 
+// the chart's two looks, as a pair of icons beside the metrics: columns
+// (the default) or lines
+const LED_STYLES = [["bars", "Bar chart", "M3.5 13V8.5M8 13V3.5M12.5 13V6.5"], ["line", "Line chart", "M2.5 11.5 6 7.5l3 2.5 4.5-6"]];
+function ledStyle(host) {
+  const cur = ledLine ? "line" : "bars";
+  host.setAttribute("role", "group");
+  host.setAttribute("aria-label", t("Chart style"));
+  host.replaceChildren();
+  for (const [id, name, d] of LED_STYLES) {
+    const b = el("button", "opt" + (id === cur ? " on" : ""));
+    b.type = "button";
+    b.dataset.style = id;
+    b.title = t(name);
+    b.setAttribute("aria-label", t(name));
+    b.setAttribute("aria-pressed", id === cur ? "true" : "false");
+    b.append(svg(d, 14, 1.7));
+    b.onclick = () => {
+      if (id === cur) return;
+      ledLine = id === "line";
+      try { localStorage.setItem("magpie.ledChart", id); } catch {}
+      drawLedTrend();
+    };
+    host.append(b);
+  }
+  slide(host, "ledStyle");
+}
+
+// The chart as lines (drawLedColumns' box.drawn): the columns drawn on its
+// axis are taken away and each one told apart becomes a line through its
+// points. Tokens, cost and requests stay stacked, each line where its part
+// of the column ended, with its band softly filled under it, so the top
+// line is the total as the column's top was; speeds don't add up, so each
+// model's line is at its own speed, broken where it had none, over the
+// point's own speed dashed. The tooltip, the hover, a day's pick and the
+// ranking's emphasis are drawLedColumns' own, over the same slots.
+function ledLines(g, Y, x0, slot, segs) {
+  const l = ledger, pts = l?.series || [], metric = ledMetric, split = ledSplit;
+  for (const r of segs) r.remove();
+  segs.length = 0;
+  if (!l) return;
+  const speed = metric === "speed";
+  const { top } = ledCategories(l.chartBy ? { by: l.chartBy } : l, split, metric);
+  const X = (i) => x0 + slot * i, dot = slot >= 12 ? 4.5 : 3;
+  const xy = (i, v) => X(i).toFixed(1) + " " + Y(v).toFixed(1);
+  // stacked, each one goes under those before it, so a band never covers
+  // the line under it
+  let head = null;
+  const totals = pts.map((p) => ledValue(metric, p));
+  // one series: its line, the dots at its points and the band under it
+  const series = (key, color, vals, base, dashed) => {
+    const s = sv("g", { class: "col ln", "data-k": key, "data-day": l.day || "", "data-color": color }, { stroke: color });
+    let line = "", dots = "", up = "", down = "", run = false;
+    vals.forEach((v, i) => {
+      if (v == null) return void (run = false);
+      line += (run ? "L" : "M") + xy(i, v);
+      if (!dashed && (v > (base?.[i] || 0) || speed)) dots += "M" + xy(i, v) + "h0";
+      run = true;
+    });
+    if (!line) return;
+    if (base) {
+      vals.forEach((v, i) => { up += (i ? "L" : "M") + xy(i, v); });
+      for (let i = vals.length - 1; i >= 0; i--) down += "L" + xy(i, base[i]);
+      s.append(sv("path", { d: up + down + "Z", class: "band" }, { fill: color }));
+    }
+    s.append(sv("path", { d: line, class: "line" + (dashed ? " all" : "") }));
+    if (dots) s.append(sv("path", { d: dots, class: "dots" }, { strokeWidth: dot }));
+    head = g.insertBefore(s, speed ? null : head);
+    segs.push(s);
+  };
+  if (speed) {
+    series("\0all", "var(--muted)", totals.map((v) => (v > 0 ? v : null)), null, true);
+    for (const c of top) series(c.id, c.color, pts.map((p) => ledSpeed(p.by?.[split]?.[c.id]) || null));
+    return;
+  }
+  // from the bottom up: each one's part on what is under it, "Other" last
+  let under = pts.map(() => 0);
+  const parts = top.map((c) => [c.id, c.color, pts.map((p) => ledPart(metric, p.by?.[split]?.[c.id] || {}))]);
+  parts.push(["\0other", "var(--faint)", pts.map((p, i) => Math.max(0, totals[i] - parts.reduce((a, x) => a + x[2][i], 0)))]);
+  for (const [key, color, vs] of parts) {
+    const over = under.map((u, i) => u + vs[i]);
+    if (vs.some((v) => v > 0)) series(key, color, over, under);
+    under = over;
+  }
+}
+
 function drawLedTrend() {
   const l = ledger;
   if (!l || $("#ledDash").hidden) return;
@@ -1134,10 +1233,12 @@ function drawLedTrend() {
     slide(host, key);
   };
   pill($("#ledMetric"), "ledMetric", LED_TREND, ledMetric, (id) => { ledMetric = id; try { localStorage.setItem("magpie.ledMetric", id); } catch {} drawLedTrend(); });
+  ledStyle($("#ledStyle"));
   const keyed = (l.callerKeys || []).length > 0;
   if (ledSplit === "callerKey" && !keyed) ledSplit = "model";
   pill($("#ledSplit"), "ledSplit", LED_SPLITS.filter(([id]) => id !== "callerKey" || keyed), ledSplit, (id) => { ledSplit = id; drawLedTrend(); });
   const chart = $("#ledChart"), rank = $("#ledRank");
+  chart.drawn = ledLine ? ledLines : null;
   drawLedColumns(chart, l, ledSplit, ledMetric, false, (day) => {
     ledDay = ledDay === day ? "" : day;
     ledLent.add("day");
@@ -1343,6 +1444,12 @@ function ledHScroll() {
   if (!over) return;
   bar.firstElementChild.style.width = wrap.scrollWidth - wrap.clientWidth + bar.clientWidth + "px";
   bar.scrollLeft = wrap.scrollLeft;
+  // a sticky box keeps clear of its scroller's padding, so at bottom 0 it
+  // stood the view's bottom padding above the window's foot, the table
+  // showing through the strip under it: it goes down over that padding
+  const view = bar.closest(".view");
+  const pad = view ? parseFloat(getComputedStyle(view).paddingBottom) || 0 : 0;
+  bar.style.bottom = -pad + "px";
 }
 $("#ledWrap").addEventListener("scroll", () => { const bar = $("#ledHScroll"); if (bar.scrollLeft !== $("#ledWrap").scrollLeft) bar.scrollLeft = $("#ledWrap").scrollLeft; }, { passive: true });
 $("#ledHScroll").addEventListener("scroll", () => { const wrap = $("#ledWrap"); if (wrap.scrollLeft !== $("#ledHScroll").scrollLeft) wrap.scrollLeft = $("#ledHScroll").scrollLeft; }, { passive: true });
@@ -1426,7 +1533,8 @@ const ledRowSpeed = (r) => { const d = ledDecode(r); return d ? d.n / (d.w / 100
 // stream it read 2–5% under for a reply of 1,400 tokens or more, 11–33% for
 // a shorter one or one asked with a tool's result, so only a reply of 1,000
 // or more is told. 0 when it tells none, and a call magpie timed tells its
-// own (ledDecode). Only the row's: the period's speed counts timed calls.
+// own (ledDecode). Only the row's: the period's speed counts timed calls
+// and session files' floors (usage.Row.Floor), not a gateway row's below.
 // Claude Code's, Claude Desktop's and Codex's files only (usage.FloorAgents):
 // a call's time is from what asked for it, never from inside it. OpenCode's
 // isn't checked against real sessions, and tells none.
@@ -1437,17 +1545,46 @@ const ledRowSpeed = (r) => { const d = ledDecode(r); return d ? d.n / (d.w / 100
 // more and the answer 100 tokens or more, as a measured one is. A Codex turn
 // of one call that tells neither tells its output over the whole turn, the
 // wait in it, by the same 1,000-token rule as any whole-time floor (Fallmonkey
-// on Discord: 11 tokens in 2.75 s read ≥4 tok/s). ledFloor_ says the tokens,
-// the ms, and which it is (answer, turn).
+// on Discord: 11 tokens in 2.75 s read ≥4 tok/s).
+// A gateway call that tells no speed of its own (夜松云 on Discord: the
+// Requests tab's speed was blank for some rows) has the same two floors, as
+// its time is from when it came to its last token: one that reasoned with no
+// first text recorded (a tool call after hidden reasoning), its answer after
+// the first token, unless its content came in a burst; else one not streamed,
+// or not timed, its output over its whole time, by the 1,000-token rule.
+// ledFloor_ says the tokens, the ms, and which it is (answer, turn, gateway).
 const LED_FLOOR_AGENTS = new Set(["claude", "claude-desktop", "codex"]);
+const ledWhole_ = (r) => r.out >= 1000 && r.ms >= 1000 && r.out * 1000 <= 10000 * r.ms;
 const ledFloor_ = (r) => {
-  if (r.source !== "log" || !LED_FLOOR_AGENTS.has(r.agent) || ledFailed_(r) || ledRowSpeed(r)) return null;
+  if (ledFailed_(r) || ledRowSpeed(r)) return null;
+  if (r.source !== "log") {
+    const n = r.out - (r.reasoning || 0), w = r.ms - r.ttft_ms;
+    if (r.ttft_ms > 0 && r.reasoning > 0 && !(r.first_text_ms > 0) && n >= LED_CODEX_BODY && w >= LED_CODEX_WINDOW_MS && n * 1000 <= 10000 * w && !(r.flow_ms > 0 && r.flow_ms * 4 < w)) return { n, w, answer: true, gateway: true };
+    return ledWhole_(r) ? { n: r.out, w: r.ms, gateway: true } : null;
+  }
+  if (!LED_FLOOR_AGENTS.has(r.agent)) return null;
   if (ledCodexTurn(r)) {
     const n = r.out - (r.reasoning || 0), w = r.ms - r.ttft_ms;
     if (r.reasoning > 0 && n >= LED_CODEX_BODY && w >= LED_CODEX_WINDOW_MS && n * 1000 <= 10000 * w) return { n, w, answer: true };
-    return r.out >= 1000 && r.ms >= 1000 && r.out * 1000 <= 10000 * r.ms ? { n: r.out, w: r.ms, turn: true } : null;
+    return ledWhole_(r) ? { n: r.out, w: r.ms, turn: true } : null;
   }
-  return r.out >= 1000 && r.ms >= 1000 && r.out * 1000 <= 10000 * r.ms ? { n: r.out, w: r.ms } : null;
+  return ledWhole_(r) ? { n: r.out, w: r.ms } : null;
+};
+// why a row tells no speed of its own, in words for its tooltip, so a dash
+// is never left unexplained: ledDecode's reasons, in its order
+const ledNoSpeed_ = (r) => {
+  if (ledFailed_(r)) return t("A failed request tells no speed");
+  if (!(r.ms > 0)) return t("No duration was recorded to time a speed from");
+  if (!(r.out > 0)) return t("No output tokens to time a speed from");
+  if (!(r.ttft_ms > 0)) return r.source === "log" ? t("The session file has no first token to time a speed from") : t("Not streamed: no first token to time a speed from");
+  const think = r.reasoning > 0, visible = think && !(r.first_text_ms > 0) && r.first_reasoning_ms >= r.ttft_ms && r.flow_ms > 0 && r.reasoning <= r.out;
+  const n = think && !visible ? r.out - r.reasoning : r.out;
+  if (!(n > 0)) return t("All its output was reasoning: no answer after it to time a speed from");
+  const from = visible ? r.first_reasoning_ms : think && r.first_text_ms > 0 ? r.first_text_ms : r.ttft_ms, w = r.ms - from;
+  const little = t("Too little came after the first token to time a speed by: {n} tokens in {ms}", { n: ledNum(n), ms: ledTook(Math.max(0, w)) });
+  if (w < 100) return little;
+  if (n * 1000 > 10000 * w || r.flow_ms > 0 && r.flow_ms * 4 < w || think && r.first_text_ms > 0 && n * (r.first_text_ms - r.ttft_ms) > 20 * r.reasoning * w) return t("It came in one burst at its end, not as it was written, so how fast it was written isn't seen");
+  return little;
 };
 const ledFloorSpeed = (r) => { const f = ledFloor_(r); return f ? f.n / (f.w / 1000) : 0; };
 
@@ -1516,7 +1653,7 @@ function renderLedger() {
   sessPick($("#ledComputer"), "All computers", ledComputer, computers, "Computer", (v) => { ledComputer = v; ledOwn("computer"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   sessPick($("#ledAgent"), "All agents", ledAgent, l.agents.map((a) => ({ v: a.id, name: a.name, note: "" })), "Agent", (v) => { ledAgent = v; ledOwn("agent"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   sessPick($("#ledProvider"), "All providers", ledProvider, providers.map((p) => ({ v: p.id, name: t(p.name), note: "" })), "Provider", (v) => { ledProvider = v; ledOwn("provider"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
-  sessPick($("#ledAccount"), "All accounts", ledAccount, accounts.map((a) => ({ v: a.id, name: a.id, note: (a.providers || []).map((p) => t(p)).join(" · ") })), "Account", (v) => { ledAccount = v; ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
+  sessPick($("#ledAccount"), "All accounts", ledAccount, accounts.map((a) => ({ v: a.id, name: a.name || a.id, note: [a.name && a.id, ...(a.providers || []).map((p) => t(p))].filter(Boolean).join(" · ") })), "Account", (v) => { ledAccount = v; ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   sessPick($("#ledKey"), "All gateway keys", ledCallerKey, callers.map((k) => ({
     v: k.id, name: k.name, note: "",
   })).concat(noKey ? [{ v: "none", name: t("No gateway key"), note: "" }] : []), "Gateway keys", (v) => { ledCallerKey = v; ledOwn("callerKey"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
@@ -1741,14 +1878,17 @@ function renderLedger() {
     td(untimed ? "—" : (timed ? "≈" : "") + ledTook(r.ms), "n duration " + (untimed ? "faint" : "duration-" + durationBand),
       [!untimed ? t("{n} ms", { n: ledNum(r.ms) }) : "", !untimed ? t("Duration colors: ≤10 s green · 10–30 s amber · >30 s red") : "", timed && !untimed ? t("About: told from the session file's times, a little more or less than it took") : "", r.ttft_ms ? t("TTFT {ms}", { ms: ledTook(r.ttft_ms) }) : ""].filter(Boolean).join(" · "));
     // how fast it wrote once it began, as CC Switch's log has it (#860)
-    const v = ledRowSpeed(r), floor = ledFloorSpeed(r);
+    const v = ledRowSpeed(r), floor = ledFloorSpeed(r), f = ledFloor_(r);
+    const ttft = r.ttft_ms > 0 ? " · " + t("TTFT {ms}", { ms: ledTook(r.ttft_ms) }) : "";
     td(v ? t("{n} tok/s", { n: ledNum(Math.round(v)) }) : floor ? "≥" + t("{n} tok/s", { n: ledNum(Math.round(floor)) }) : "—", "n speed" + (v || floor ? "" : " faint"),
       v ? (r.reasoning > 0 && r.first_text_ms > 0 ? t("{n} answer tokens in {ms} after the first text, the {r} reasoning tokens before it left out", { n: ledNum(ledDecode(r).n), ms: ledTook(ledDecode(r).w), r: ledNum(r.reasoning) })
-        : t("{n} output tokens in {ms} after the first", { n: ledNum(ledDecode(r).n), ms: ledTook(ledDecode(r).w) })) + " · " + t("TTFT {ms}", { ms: ledTook(r.ttft_ms) })
-        : floor && ledFloor_(r).answer ? t("At least: {n} answer tokens in {ms} after the first token, the {r} reasoning tokens left out. The session file has no first text, so reasoning after the first token is counted too", { n: ledNum(ledFloor_(r).n), ms: ledTook(ledFloor_(r).w), r: ledNum(r.reasoning) }) + " · " + t("TTFT {ms}", { ms: ledTook(r.ttft_ms) })
-        : floor && ledFloor_(r).turn ? t("At least: {n} output tokens in {ms}, the whole turn. What came after the first token ({after}) is too little to time a speed by: under a second or under 100 tokens, so the wait for it is counted too", { n: ledNum(r.out), ms: ledTook(r.ms), after: ledTook(r.ms - r.ttft_ms) }) + " · " + t("TTFT {ms}", { ms: ledTook(r.ttft_ms) })
+        : t("{n} output tokens in {ms} after the first", { n: ledNum(ledDecode(r).n), ms: ledTook(ledDecode(r).w) })) + ttft
+        : floor && f.gateway && f.answer ? t("At least: {n} answer tokens in {ms} after the first token, the {r} reasoning tokens left out. No first text was recorded, so reasoning after the first token is counted too", { n: ledNum(f.n), ms: ledTook(f.w), r: ledNum(r.reasoning) }) + ttft
+        : floor && f.gateway ? t("At least: {n} output tokens in {ms}, from the request to its last token, the wait for the first one counted too", { n: ledNum(r.out), ms: ledTook(r.ms) }) + ". " + ledNoSpeed_(r) + ttft
+        : floor && f.answer ? t("At least: {n} answer tokens in {ms} after the first token, the {r} reasoning tokens left out. The session file has no first text, so reasoning after the first token is counted too", { n: ledNum(f.n), ms: ledTook(f.w), r: ledNum(r.reasoning) }) + ttft
+        : floor && f.turn ? t("At least: {n} output tokens in {ms}, the whole turn. What came after the first token ({after}) is too little to time a speed by: under a second or under 100 tokens, so the wait for it is counted too", { n: ledNum(r.out), ms: ledTook(r.ms), after: ledTook(r.ms - r.ttft_ms) }) + ttft
         : floor ? t("At least: {n} output tokens in {ms}, from the line that asked for it to its last. The session file has no first token, so the wait for it is counted too", { n: ledNum(r.out), ms: ledTook(r.ms) })
-        : r.ttft_ms || untimed || ledFailed_(r) ? "" : timed ? t("The session file has no first token to time a speed from") : t("Not streamed: no first token to time a speed from"));
+        : ledNoSpeed_(r));
     const st = el("span", "st");
     // a status when the gateway logged the call; a session file has none,
     // and says only whether it went well
@@ -1833,6 +1973,51 @@ function renderLedger() {
 //
 // The agents' own sessions, read from their session files: what each cost,
 // and the command that picks it up again. A segment of the Usage page.
+
+// A session's row and details, as this list and the Sessions page's
+// (plugins/sessions/client.js) both draw them.
+
+// sessModelNames lists models for a cost note, one an agent recorded no
+// name for told as such: joined bare, the note read "Not counted: , with
+// no known price" (tony, Discord)
+const sessModelNames = (models) => [...new Set(models.map((m) => m || t("a model with no name")))].join(", ");
+
+// wslBadge marks a session an agent ran in a WSL distro, read through
+// \\wsl.localhost; its resume command runs it there through wsl.exe
+function wslBadge(s) {
+  const b = el("span", "badge wsl", "WSL " + s.wsl);
+  b.title = t("In WSL {distro}: resumed there through wsl.exe", { distro: s.wsl });
+  return b;
+}
+
+// sessModelsText: a session's models, the first two and how many more, and
+// where magpie's gateway sent its calls, the most first: a routing group's
+// member and the reasoning it was asked for
+function sessModelsText(s) {
+  const via = s.via?.length ? "→ " + [s.via[0].model, s.via[0].effort].filter(Boolean).join(" · ") + (s.via.length > 1 ? " +" + (s.via.length - 1) : "") : "";
+  return sessModelNames(s.models.slice(0, 2).map((m) => m.model)) + (s.models.length > 2 ? " +" + (s.models.length - 2) : "") + (via ? " " + via : "");
+}
+
+// sessUsageDetail adds to a session's details what it spent by model, and
+// what the gateway sent its calls to, at what reasoning; line(label, value)
+// adds a line of the details
+function sessUsageDetail(d, s, line) {
+  if (s.models?.length) {
+    const m = el("div", "sess-models");
+    for (const x of s.models) {
+      m.append(el("span", "model", x.model || t("a model with no name")),
+        el("span", "n", t("{a} in · {b} out", { a: fmtN(x.input), b: fmtN(x.output) }) + (x.cache_read ? " · " + t("{n} cached", { n: fmtN(x.cache_read) }) : "") + (x.cache_write ? " · " + t("{n} written", { n: fmtN(x.cache_write) }) : "")),
+        el("span", "c" + (x.priced ? "" : " none"), x.priced ? "≈" + fmtCost({ cost: x.cost }) : "—"));
+    }
+    d.append(m);
+  }
+  (s.via || []).forEach((v, i) => line(i ? "" : t("Routed"), viaText(v) + " · " + t("{n} tokens", { n: fmtN(v.tokens) }) + (v.credited ? " · " + ledCredits(v).textContent : "")));
+}
+
+// one place a session's calls went through magpie, in words
+function viaText(v) {
+  return `${v.provider}/${v.model}` + (v.effort ? " · " + v.effort : "") + " · " + t("{n} calls", { n: v.calls });
+}
 
 const USAGE_TABS = [["usage", "Overview"], ["requests", "Requests"], ["sessions", "Sessions"], ["context", "Context"]];
 let usageTab = "usage";
@@ -3219,7 +3404,7 @@ function refreshUsage(now = false) {
         else if (usage && performance.now() - quotasAsked > 60e3) { quotasAsked = performance.now(); loadQuotas(); }
         if (usage) {
           const p = period, read = ++usageRead;
-          const u = await api("usage?period=" + encodeURIComponent(p));
+          const u = await api("usage?period=" + encodeURIComponent(p) + usageZoneQ());
           if (read === usageRead && view === "usage" && usageTab === "usage" && p === period) {
             if (JSON.stringify(u) !== JSON.stringify(usage)) { usage = u; renderUsage(); }
             // this read claimed the newest one: a pick it superseded had put the
