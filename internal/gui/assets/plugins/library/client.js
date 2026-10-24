@@ -1738,6 +1738,14 @@ magpie.plugin("library", (ctx) => {
   }
   function healthWords(h, s) {
     if (h.state === "ok") return [h.tools === 1 ? t("1 tool") : t("{n} tools", { n: h.tools }), t("It started and listed its tools")];
+    // an agent signed in to it on its own (Claude Code's /mcp, in WSL too)
+    // uses it, though magpie's check, without that sign-in, was asked for
+    // one: the row says who, not "needs sign-in" (CyberCaius on Discord)
+    if (h.state === "auth" && h.agentSignIn?.length) {
+      const names = h.agentSignIn.map(nameOf);
+      const text = t("signed in in {agent}", { agent: names[0] }) + (names.length > 1 ? " +" + (names.length - 1) : "");
+      return [text, t("{agents}: signed in to it on its own, and uses it. magpie's check doesn't have that sign-in, so it can't list the tools: open it to sign in once in magpie too", { agents: names.join(", ") })];
+    }
     if (h.state === "auth") {
       const why = h.oauth
         ? (s?.transport === "http" ? t("The server asks for a sign-in — open it to sign in once in magpie") : t("The server asks for a sign-in"))
@@ -1806,7 +1814,7 @@ magpie.plugin("library", (ctx) => {
       // agent's own launch sets says nothing of the server, so it isn't
       // painted as broken (#2308, ASD-max: Codex's host-only codex_app,
       // whose pipe Codex itself hands it)
-      b.className = "lib-health " + (e.h.state === "ok" ? "ok" : e.h.state === "auth" ? "auth" : e.h.why === "novar" || e.h.why === "wsldown" ? "unknown" : "err");
+      b.className = "lib-health " + (e.h.state === "ok" || e.h.agentSignIn?.length ? "ok" : e.h.state === "auth" ? "auth" : e.h.why === "novar" || e.h.why === "wsldown" ? "unknown" : "err");
       b.replaceChildren(el("span", "", text));
       if (toolList(b.dataset.server).length) {
         const open = toolsOpen.has(b.dataset.server);

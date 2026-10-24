@@ -205,6 +205,7 @@ func magpieModels(agent string) []catalog.Model {
 	// a model magpie describes images to takes them (provider.Described)
 	seen := provider.Described != nil && provider.Described()
 	st, find := settings.Load(), provider.GroupFinder()
+	priceOf := provider.EntryPricer(st, find)
 	members := func(id string) []provider.Member {
 		_, ms, _ := find(id)
 		return ms
@@ -217,7 +218,7 @@ func magpieModels(agent string) []catalog.Model {
 		// answers from the settings it is given
 		m.Compact = provider.CompactFor(st, e, find)
 		// what a call costs the user (Pi's cost, #781)
-		if pr, ok := provider.EntryPriceIn(st, find, e); ok {
+		if pr, ok := priceOf(e); ok {
 			m.Price = &pr
 		}
 		if seen && !e.Images {

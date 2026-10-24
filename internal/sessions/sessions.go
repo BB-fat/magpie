@@ -175,7 +175,7 @@ const All = 5000
 // state is what one file's parse has come to, enough to read on from Off.
 type state struct {
 	Codex                 *codexUsageState  `json:"-"`
-	Claude                *claudeUsageState `json:"-"`
+	Claude                *claudeUsageState `json:"claude,omitempty"`
 	DBRevision            string            `json:"db_revision,omitempty"`
 	Head                  string            `json:"head,omitempty"`
 	HeadSize              int               `json:"head_size,omitempty"`
@@ -865,7 +865,7 @@ func refresh(want, all []file) {
 	// the whole scan finishes.
 	windows := summaryRevisionWindows(todo, time.Now())
 	// the biggest first, so no long file is left to run on alone at the
-	// end; and twice the cores, as the reading waits on the disk
+	// end; with half the cores (scanReaders)
 	sort.Slice(todo, func(i, j int) bool { return todo[i].size-offOf(todo[i]) > todo[j].size-offOf(todo[j]) })
 	left := make(map[string]int64, len(todo))
 	var total int64
@@ -887,7 +887,7 @@ func refresh(want, all []file) {
 	mu.Unlock()
 	ch := make(chan int)
 	finished := make(chan int, len(jobs))
-	for i := 0; i < min(max(8, 2*runtime.NumCPU()), 32, len(todo)); i++ {
+	for i := 0; i < min(scanReaders(), len(todo)); i++ {
 		go func() {
 			for i := range ch {
 				j := &jobs[i]
@@ -1394,7 +1394,14 @@ func parseWith(f file, old *state, calls *callsRide) *state {
 	if calls != nil {
 		head, line = calls.ride(head, line)
 	}
-	off, err := scanAt(f.path, s.Off, head, line)
+	var thin func([]byte) (thinner, bool)
+	switch {
+	case parser.claude:
+		thin = thinClaude
+	case f.agent == "codex":
+		thin = thinCodex
+	}
+	off, err := scanThin(f.path, s.Off, head, thin, line)
 	if err == nil {
 		s.Off = off
 	}
@@ -1435,6 +1442,14 @@ func scanHead(path string, off int64, head func([]byte) bool, fn func([]byte)) (
 // A compressed file's places are those of its lines decompressed; it is read
 // from its start, what comes before off passed over.
 func scanAt(path string, off int64, head func([]byte) bool, fn func(b []byte, start, end int64) bool) (int64, error) {
+	return scanThin(path, off, head, nil, fn)
+}
+
+// scanThin is scanAt handing fn a long line thin says yes to, from its
+// first chunk, with its strings cut to thinKeep bytes (thinner):
+// what the line holds besides long strings is kept as it was, and the
+// line is never gathered whole. A nil thin thins nothing.
+func scanThin(path string, off int64, head func([]byte) bool, thin func([]byte) (thinner, bool), fn func(b []byte, start, end int64) bool) (int64, error) {
 	if scanHook != nil {
 		scanHook(path, off)
 	}
@@ -1468,13 +1483,27 @@ func scanAt(path string, off int64, head func([]byte) bool, fn func(b []byte, st
 	defer parts.release()
 	var n int64 // bytes of the line so far
 	skip, seen := false, false
+	var th thinner // the line's state while it is thinned
+	thinning := false
 	for {
 		chunk, err := r.ReadSlice('\n')
+		first := n == 0
 		n += int64(len(chunk))
 		if errors.Is(err, bufio.ErrBufferFull) {
 			if !seen && head != nil {
 				seen = true
 				skip = skip || !head(chunk)
+			}
+			if first && !skip && thin != nil {
+				th, thinning = thin(chunk)
+			}
+			if thinning {
+				if n > maxLine {
+					skip, thinning, long = true, false, long[:0]
+				} else if !skip {
+					long = th.add(long, chunk)
+				}
+				continue
 			}
 			if plain && !skip && len(long) == 0 {
 				// gathered in one buffer of the line's own size, not grown a
@@ -1515,7 +1544,10 @@ func scanAt(path string, off int64, head func([]byte) bool, fn func(b []byte, st
 			parts.release()
 		}
 		b := chunk
-		if len(long) > 0 {
+		if thinning {
+			long = th.add(long, chunk)
+			b = long
+		} else if len(long) > 0 {
 			long = append(long, chunk...)
 			b = long
 		}
@@ -1527,7 +1559,7 @@ func scanAt(path string, off int64, head func([]byte) bool, fn func(b []byte, st
 			}
 		}
 		off += n
-		n, skip, seen, long = 0, false, false, long[:0]
+		n, skip, seen, thinning, long = 0, false, false, false, long[:0]
 	}
 }
 

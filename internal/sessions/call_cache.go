@@ -135,7 +135,8 @@ func pruneCalls(files []file) {
 		if e.IsDir() {
 			continue
 		}
-		orphan := strings.HasSuffix(e.Name(), ".gob") && !shards[e.Name()]
+		orphan := strings.HasSuffix(e.Name(), ".gob") && !shards[e.Name()] ||
+			strings.HasSuffix(e.Name(), ".rev") && !shards[strings.TrimSuffix(e.Name(), ".rev")+".gob"]
 		if strings.HasPrefix(e.Name(), "calls-") && strings.HasSuffix(e.Name(), ".tmp") {
 			if st, err := e.Info(); err == nil && time.Since(st.ModTime()) > time.Hour {
 				orphan = true
@@ -298,22 +299,22 @@ func readCalls(f file) *callFile {
 	if r, ok := lineCallReaders[f.agent]; ok && r.kept != nil && old != nil && !r.kept(old) {
 		old = nil
 	}
-	st := prepareCalls(f, old)
+	st := prepareCalls(f, withCallRevisions(old))
 	continued := old != nil && st.Off == old.Off && st.Off > 0
 	start := 0
 	if continued {
 		start = len(old.Calls)
 	}
-	line := claudeCallLine
+	line, thin := claudeCallLine, thinClaude
 	if f.agent == "codex" {
-		line = codexCallLine
+		line, thin = codexCallLine, nil
 	} else if r, ok := lineCallReaders[f.agent]; ok {
 		if st.Off == 0 {
 			r.begin(st, f)
 		}
-		line = r.line
+		line, thin = r.line, nil
 	}
-	off, err := scanAt(f.path, st.Off, func(b []byte) bool { return callHead(st, b) }, func(b []byte, start, end int64) bool {
+	off, err := scanThin(f.path, st.Off, func(b []byte) bool { return callHead(st, b) }, thin, func(b []byte, start, end int64) bool {
 		st.At, st.End = start, end
 		line(st, b)
 		return true
@@ -330,6 +331,9 @@ func readCalls(f file) *callFile {
 	// window. Previously retained windows may survive idle time in spare slots.
 	if st.Claude != nil && (old == nil || old.Claude == nil) && !workingRevision(f.mod.UnixNano(), time.Now()) {
 		st = st.withoutRevisions()
+	}
+	if err == nil && (f.agent == "claude" || f.agent == "claude-desktop") {
+		writeCallRevisions(st)
 	}
 
 	st.dirty = nil

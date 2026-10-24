@@ -2113,7 +2113,15 @@ func EffectivePriceIn(s settings.Settings, providerID, model string) (catalog.Pr
 	// key under a display name counts only for a caller naming that name
 	// too. Nothing writes such a key — SetModelPrice re-keys the way
 	// SetModelName does — which is what keeps the two from drifting.
-	p, known := byIDOrWas(providerID)
+	return priceIn(s, All(), providerID, model)
+}
+
+// priceIn is EffectivePriceIn with the providers read already, for a
+// caller pricing many models at once: All() copies every provider each
+// time it is read, so a list read it once a model, 30 providers' copies
+// for each of hundreds of models (EntryPricer).
+func priceIn(s settings.Settings, all []Provider, providerID, model string) (catalog.Price, bool) {
+	p, known := byIDOrWasIn(all, providerID)
 	if !known {
 		p = Provider{ID: providerID}
 	}
@@ -2161,22 +2169,32 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 // when every member costs the same, none in a fast mode, since which of
 // them answers isn't known beforehand. find is GroupFinder's.
 func EntryPriceIn(st settings.Settings, find func(string) (Group, []Member, bool), e Entry) (catalog.Price, bool) {
-	if e.Group == "" {
-		return EffectivePriceIn(st, e.Provider.ID, e.Model)
-	}
-	_, ms, ok := find(e.ID)
-	if !ok || len(ms) == 0 {
-		return catalog.Price{}, false
-	}
-	var first catalog.Price
-	for i, m := range ms {
-		pr, ok := EffectivePriceIn(st, m.Provider.ID, m.Model)
-		if !ok || m.Fast || i > 0 && !pr.Same(first) {
+	return EntryPricer(st, find)(e)
+}
+
+// EntryPricer is EntryPriceIn for a whole list of entries, at the one
+// read of the providers it makes: what a /v1/models or an agent's model
+// file prices row by row.
+func EntryPricer(st settings.Settings, find func(string) (Group, []Member, bool)) func(Entry) (catalog.Price, bool) {
+	all := All()
+	return func(e Entry) (catalog.Price, bool) {
+		if e.Group == "" {
+			return priceIn(st, all, e.Provider.ID, e.Model)
+		}
+		_, ms, ok := find(e.ID)
+		if !ok || len(ms) == 0 {
 			return catalog.Price{}, false
 		}
-		first = pr
+		var first catalog.Price
+		for i, m := range ms {
+			pr, ok := priceIn(st, all, m.Provider.ID, m.Model)
+			if !ok || m.Fast || i > 0 && !pr.Same(first) {
+				return catalog.Price{}, false
+			}
+			first = pr
+		}
+		return first, true
 	}
-	return first, true
 }
 
 // PriceRateOK says what is wrong with a provider's price rate, "" when
@@ -2197,7 +2215,11 @@ func PriceRateOK(r float64) string {
 // both outlive the provider they were set for, so the spelling the user typed
 // is the one that has to be checked before a name is resolved at all.
 func byIDOrWas(id string) (Provider, bool) {
-	all := All()
+	return byIDOrWasIn(All(), id)
+}
+
+// byIDOrWasIn is byIDOrWas among the providers given.
+func byIDOrWasIn(all []Provider, id string) (Provider, bool) {
 	if p, ok := find(all, id); ok {
 		return p, true
 	}

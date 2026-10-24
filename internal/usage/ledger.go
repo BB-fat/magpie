@@ -748,6 +748,7 @@ func (t *Totals) addRow(r Row) {
 	t.CacheRead += r.CacheRead
 	t.CacheWrite += r.CacheWrite
 	t.CacheWrite1h += r.CacheWrite1h
+	t.countCache(r.Record)
 	t.Reasoning += r.Reasoning
 	switch {
 	case r.Priced:
