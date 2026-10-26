@@ -1,16 +1,93 @@
 // What magpie changed of the wrapper: hooks only in the run's own
 // settings.local.json, run by the absolute Bun; the JSON Schema bounds;
 // private, whole writes.
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, statSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildRuntimeHookCommand, installJsonSchemaStopHook, installRuntimeHooks } from "../src/hook-install.ts";
 import { JSON_LIMITS, extractAndValidateStructuredOutput, jsonShapeError, loadJsonSchemaFromText, validateJsonAgainstSchema } from "../src/json-schema.ts";
 import { writePrivateAtomic } from "../src/fs-atomic.ts";
-import { preAcceptProject } from "../src/preaccept.ts";
+import { canBypassPermissions, preAcceptProject } from "../src/preaccept.ts";
 
-const dir = () => mkdtempSync(join(tmpdir(), "magpie-wrapper-test-"));
+const testRoot = mkdtempSync(join(tmpdir(), "magpie-wrapper-test-"));
+afterAll(() => rmSync(testRoot, { recursive: true, force: true }));
+const dir = () => mkdtempSync(join(testRoot, "case-"));
+
+const permissionCases: { name: string; env: NodeJS.ProcessEnv; rootBypass: boolean }[] = [
+  { name: "unset sandbox", env: {}, rootBypass: false },
+  { name: "empty sandbox", env: { IS_SANDBOX: "" }, rootBypass: false },
+  { name: "disabled sandbox", env: { IS_SANDBOX: "0" }, rootBypass: false },
+  { name: "boolean sandbox", env: { IS_SANDBOX: "true" }, rootBypass: false },
+  { name: "explicit sandbox", env: { IS_SANDBOX: "1" }, rootBypass: true },
+  { name: "empty bubblewrap", env: { CLAUDE_CODE_BUBBLEWRAP: "" }, rootBypass: false },
+  { name: "bubblewrap", env: { CLAUDE_CODE_BUBBLEWRAP: "/sandbox/bwrap" }, rootBypass: true },
+  { name: "bubblewrap with disabled sandbox", env: { IS_SANDBOX: "0", CLAUDE_CODE_BUBBLEWRAP: "1" }, rootBypass: true },
+];
+
+describe("permission bypass", () => {
+  for (const uid of [0, 1000, undefined]) {
+    for (const c of permissionCases) {
+      test(`uid ${uid}, ${c.name}`, () => {
+        expect(canBypassPermissions(c.env, uid)).toBe(uid !== 0 || c.rootBypass);
+      });
+    }
+  }
+
+  for (const uid of [0, 1000, undefined]) {
+    for (const c of permissionCases) {
+      test(`CLI settings and launch: uid ${uid}, ${c.name}`, () => {
+        const d = dir();
+        const work = join(d, "work");
+        const profile = join(d, "profile");
+        mkdirSync(join(work, ".claude"), { recursive: true });
+        const settingsPath = join(work, ".claude", "settings.local.json");
+        writeFileSync(settingsPath, JSON.stringify({
+          defaultMode: "bypassPermissions",
+          skipDangerousModePermissionPrompt: true,
+          env: { KEEP_TEST_SETTING: "1" },
+        }));
+        const tmux = join(d, "tmux");
+        const launchPath = join(d, "launch.json");
+        writeFileSync(tmux, `#!${process.execPath}\nrequire("node:fs").writeFileSync(process.env.TEST_LAUNCH_PATH, JSON.stringify(process.argv.slice(2))); process.exit(73);\n`, { mode: 0o700 });
+        const entry = join(d, "entry.ts");
+        const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+        writeFileSync(entry, `process.getuid = ${uid === undefined ? "undefined" : `() => ${uid}`}; await import(${JSON.stringify(cli)});\n`);
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          HOME: d,
+          USERPROFILE: d,
+          XDG_CONFIG_HOME: join(d, "config"),
+          XDG_CACHE_HOME: join(d, "cache"),
+          XDG_DATA_HOME: join(d, "data"),
+          XDG_STATE_HOME: join(d, "state"),
+          APPDATA: join(d, "appdata"),
+          LOCALAPPDATA: join(d, "localappdata"),
+          CLAUDE_CONFIG_DIR: profile,
+          CLAUDE_BRIDGE_TMUX_PATH: tmux,
+          CLAUDE_BRIDGE_CLAUDE_PATH: join(d, "unused-claude"),
+          TEST_LAUNCH_PATH: launchPath,
+        };
+        for (const key of ["IS_SANDBOX", "CLAUDE_CODE_BUBBLEWRAP", "CLAUDE_BRIDGE_TMUX_SOCKET", "CLAUDE_BRIDGE_USER_CONTEXT_PATH", "MAGPIE_CLAUDE_TUI_DEBUG_API", "MAGPIE_CLAUDE_NATIVE_TMUX_GUARD_PATH"]) delete env[key];
+        Object.assign(env, c.env);
+        const result = spawnSync(process.execPath, [entry, "-p", "test prompt", "--desplega-cwd", work], { env, encoding: "utf8", timeout: 10_000 });
+        expect(result.error).toBeUndefined();
+        expect(result.stderr).toContain("tmux new-session exited 73");
+        expect(result.status).toBe(1);
+        const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+        const bypass = uid !== 0 || c.rootBypass;
+        expect(settings.defaultMode).toBe(bypass ? "bypassPermissions" : undefined);
+        expect(settings.skipDangerousModePermissionPrompt).toBe(bypass ? true : undefined);
+        expect(settings.env.KEEP_TEST_SETTING).toBe("1");
+        const launch: string[] = JSON.parse(readFileSync(launchPath, "utf8"));
+        expect(launch[0]).toBe("new-session");
+        expect(launch.at(-1)?.includes("--dangerously-skip-permissions")).toBe(bypass);
+      });
+    }
+  }
+});
 
 describe("hooks", () => {
   test("run by the absolute Bun, whatever PATH holds", () => {
@@ -77,6 +154,24 @@ describe("JSON Schema bounds", () => {
 });
 
 describe("profile writes", () => {
+  test("magpie refuses a missing account config before accepting project trust", () => {
+    const d = dir();
+    const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+    const env = {
+      ...process.env,
+      HOME: d,
+      USERPROFILE: d,
+      CLAUDE_CONFIG_DIR: "",
+      CLAUDE_BRIDGE_TMUX_SOCKET: join(d, "unused.sock"),
+      CLAUDE_BRIDGE_USER_CONTEXT_PATH: "",
+    };
+    const result = spawnSync(process.execPath, [cli, "-p", "test prompt", "--desplega-cwd", d], { env, encoding: "utf8", timeout: 10_000 });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("account's own config folder (CLAUDE_CONFIG_DIR)");
+    expect(existsSync(join(d, ".claude.json"))).toBe(false);
+  });
+
   test("whole and private", () => {
     const d = dir();
     const path = join(d, "f.json");

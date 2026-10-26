@@ -71,6 +71,11 @@ export function preAcceptProject(opts: { workdir: string; mcpServerNames: string
   writePrivateAtomic(claudeJsonPath, JSON.stringify(obj, null, 2));
 }
 
+// Claude Code permits root bypass only with an explicit sandbox capability.
+export function canBypassPermissions(env: NodeJS.ProcessEnv, uid: number | undefined): boolean {
+  return uid !== 0 || env.IS_SANDBOX === "1" || Boolean(env.CLAUDE_CODE_BUBBLEWRAP);
+}
+
 /**
  * Per-workdir settings.json with the policy bits that skip remaining prompts.
  * Claude reads .claude/settings.local.json out of the cwd at startup.

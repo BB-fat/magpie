@@ -203,7 +203,8 @@ func tuiConfig() *claudetui.Config {
 			}
 			return claudeCLI{path: "claude"}.asRoot(inClaudeDir(env, configDir)), nil
 		},
-		MaxRSS: budget,
+		MaxRSS:    budget,
+		CanSearch: canSearch,
 		SearchHandler: func(ctx context.Context, query string) (string, []claudetui.Hit, error) {
 			s := tuiServer.Load()
 			if s == nil {
@@ -243,6 +244,9 @@ func (s *Server) serveClaudeTUI(w http.ResponseWriter, r *http.Request, from pro
 	}
 	user := p.Account.User
 	ctx := p.Via(r.Context())
+	if searching(ctx) {
+		ctx = claudetui.WithSearch(ctx)
+	}
 	dir, err := tuiAccountDir(ctx, p)
 	if err != nil {
 		return fail(http.StatusBadGateway, "the account "+user+" can't run on the Claude TUI: "+err.Error()+". Sign it in through magpie (magpie accounts add claude), or set it to standard")
@@ -348,6 +352,8 @@ func tuiEvent(ev claudetui.Event) Event {
 		out.Kind = KStart
 	case claudetui.KText:
 		out.Kind = KText
+	case claudetui.KThinkStart:
+		out.Kind = KThinkStart
 	case claudetui.KThink:
 		out.Kind = KThink
 	case claudetui.KSig:

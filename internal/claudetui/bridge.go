@@ -57,6 +57,12 @@ func (b *Bridge) Serve(r *http.Request, out Responder, model, owner, outerSessio
 	return b.rt.serveLite(gatewayResponder{out}, r, model, owner, outerSession, configDir, body)
 }
 
+// WithSearch marks a request made by the gateway's searcher. It uses
+// Claude Code's native WebSearch instead of calling the gateway again.
+func WithSearch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, searchingKey{}, true)
+}
+
 // ServeMCP answers a run's MCP helper calling back with token, and says
 // whether the token was one of this bridge's runs.
 func (b *Bridge) ServeMCP(w http.ResponseWriter, r *http.Request, token string) bool {
@@ -81,6 +87,34 @@ func (b *Bridge) Busy() bool {
 	b.rt.bridge.mu.Lock()
 	defer b.rt.bridge.mu.Unlock()
 	return len(b.rt.bridge.runs) > 0
+}
+
+// Parked counts live runs waiting for client tools between HTTP replies.
+func (b *Bridge) Parked() int {
+	if b == nil {
+		return 0
+	}
+	b.rt.bridge.mu.Lock()
+	runs := make([]*subscriptionRun, 0, len(b.rt.bridge.runs))
+	for _, run := range b.rt.bridge.runs {
+		runs = append(runs, run)
+	}
+	b.rt.bridge.mu.Unlock()
+	n := 0
+	for _, run := range runs {
+		run.mu.Lock()
+		if !run.closed && !run.parkedAt.IsZero() && run.httpConsumers == 0 && run.segment == nil && !run.resuming {
+			n++
+		}
+		run.mu.Unlock()
+	}
+	return n
+}
+
+func (r *subscriptionRun) releaseHTTP() {
+	r.mu.Lock()
+	r.httpConsumers--
+	r.mu.Unlock()
 }
 
 // Shutdown ends every run, each by its wrapper's own teardown first.

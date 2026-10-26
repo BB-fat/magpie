@@ -337,10 +337,12 @@ type subscriptionRun struct {
 
 	// search answers magpie's web search tool, searchName, which the
 	// client never sees
-	search     func(ctx context.Context, query string) (string, []Hit, error)
-	searchName string
-	begin      func() Event
-	resume     func() // after a resumed turn has its segment
+	search        func(ctx context.Context, query string) (string, []Hit, error)
+	searchName    string
+	nativeSearch  bool // Claude Code answers WebSearch without a gateway callback
+	httpConsumers int  // HTTP replies still consuming this run's events
+	begin         func() Event
+	resume        func() // after a resumed turn has its segment
 
 	// patience, when set, is how long a tool call may park before the agent
 	// is told it is still running (its MCP client gives up on a call at a
@@ -1382,6 +1384,7 @@ func (r *subscriptionRun) letGoFor(segment <-chan Event) {
 		}
 		ch := r.segment
 		r.segment = nil
+		r.resuming = false
 		r.parkedAt = time.Now()
 		r.abandonedByClient = true
 		final := len(r.asked) > 0
@@ -2105,10 +2108,12 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 					Usage cliUsage `json:"usage"`
 				} `json:"message"`
 				ContentBlock struct {
-					Type string `json:"type"`
-					ID   string `json:"id"`
-					Name string `json:"name"`
-					Text string `json:"text"`
+					Type      string `json:"type"`
+					ID        string `json:"id"`
+					Name      string `json:"name"`
+					Text      string `json:"text"`
+					Thinking  string `json:"thinking"`
+					Signature string `json:"signature"`
 				} `json:"content_block"`
 				Delta struct {
 					Type             string          `json:"type"`
@@ -2232,6 +2237,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 				blocks++
 				switch c.Type {
 				case "thinking":
+					r.emit(Event{Kind: KThinkStart})
 					if c.Thinking != "" {
 						r.emit(Event{Kind: KThink, Text: c.Thinking})
 					}
@@ -2289,6 +2295,14 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			begin(e.Message.ID, e.Message.Model, e.Message.Usage)
 		case "content_block_start":
 			switch e.ContentBlock.Type {
+			case "thinking":
+				r.emit(Event{Kind: KThinkStart})
+				if e.ContentBlock.Thinking != "" {
+					r.emit(Event{Kind: KThink, Text: e.ContentBlock.Thinking})
+				}
+				if e.ContentBlock.Signature != "" {
+					r.emit(Event{Kind: KSig, Text: e.ContentBlock.Signature})
+				}
 			case "tool_use":
 				if name, theirs := toolStart(e.Index, e.ContentBlock.Name); theirs {
 					r.emit(Event{Kind: KToolStart, ID: e.ContentBlock.ID, Name: name})
@@ -3573,9 +3587,15 @@ func (rt *runtimeTUI) serveMessagesInner(out responder, r *http.Request, name, m
 			}
 		}
 	}
-	if run != nil && !run.claimResume() {
-		msg := "the agent's turn is already being resumed"
-		return out.Fail(http.StatusConflict, msg)
+	if run != nil {
+		if !run.claimResume() {
+			msg := "the agent's turn is already being resumed"
+			return out.Fail(http.StatusConflict, msg)
+		}
+		run.mu.Lock()
+		run.httpConsumers++
+		run.mu.Unlock()
+		defer run.releaseHTTP()
 	}
 	// Tool-call IDs find the process that made them, independently of the
 	// account routing selected. Continuing a different owner's process would
@@ -3777,7 +3797,9 @@ func (rt *runtimeTUI) serveMessagesInner(out responder, r *http.Request, name, m
 		}
 		run, events, err = start(r.Context(), req)
 		if err == nil {
+			defer run.releaseHTTP()
 			run.mu.Lock()
+			run.httpConsumers++
 			keepPrivateImage := run.interactive && len(run.images) > 0 && !readOnly
 			run.tools = map[string]bool{}
 			for _, t := range req.Tools {

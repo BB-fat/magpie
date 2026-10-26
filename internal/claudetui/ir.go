@@ -177,18 +177,19 @@ type nsTool struct {
 type EventKind int
 
 const (
-	KStart     EventKind = iota // MsgID, Model, Usage (input side)
-	KText                       // Text
-	KThink                      // Text (reasoning)
-	KSig                        // Text (thinking signature)
-	KToolStart                  // ID, Name
-	KToolArgs                   // Text (partial JSON of the arguments)
-	KStop                       // Stop
-	KUsage                      // Usage
-	KError                      // Text
-	KSearch                     // Text (the query), Hits: a web search run for the model
-	KImage                      // Name (media type), Text (base64): an image the model made
-	KAlive                      // internal liveness only; never user-visible
+	KStart      EventKind = iota // MsgID, Model, Usage (input side)
+	KText                        // Text
+	KThink                       // Text (reasoning)
+	KSig                         // Text (thinking signature)
+	KToolStart                   // ID, Name
+	KToolArgs                    // Text (partial JSON of the arguments)
+	KStop                        // Stop
+	KUsage                       // Usage
+	KError                       // Text
+	KSearch                      // Text (the query), Hits: a web search run for the model
+	KImage                       // Name (media type), Text (base64): an image the model made
+	KAlive                       // internal liveness only; never user-visible
+	KThinkStart                  // a separate signed thinking block
 )
 
 // Event is one thing a streaming reply said.
@@ -301,9 +302,10 @@ type Result struct {
 // collector assembles a Result from events. Encoders use the same logic to
 // know what the reply contained so far.
 type collector struct {
-	res  Result
-	args strings.Builder // arguments of the open tool call
-	err  string
+	res   Result
+	args  strings.Builder // arguments of the open tool call
+	err   string
+	fresh bool // the next thinking belongs to a new block
 	// the error's status and kind, as its event gave them
 	errStatus int
 	errCode   string
@@ -342,16 +344,22 @@ func (c *collector) add(ev Event) {
 			c.closeTool()
 			c.res.Parts = append(c.res.Parts, Part{Kind: Text, Text: ev.Text})
 		}
+	case KThinkStart:
+		c.fresh = true
+		return
 	case KThink:
-		if p := c.last(Thinking); p != nil {
+		if p := c.last(Thinking); p != nil && !c.fresh {
 			p.Text += ev.Text
 		} else {
 			c.closeTool()
 			c.res.Parts = append(c.res.Parts, Part{Kind: Thinking, Text: ev.Text})
 		}
 	case KSig:
-		if p := c.last(Thinking); p != nil {
+		if p := c.last(Thinking); p != nil && !c.fresh {
 			p.Signature += ev.Text
+		} else if c.fresh {
+			c.closeTool()
+			c.res.Parts = append(c.res.Parts, Part{Kind: Thinking, Signature: ev.Text})
 		}
 	case KToolStart:
 		c.closeTool()
@@ -372,6 +380,11 @@ func (c *collector) add(ev Event) {
 	case KImage:
 		c.closeTool()
 		c.res.Parts = append(c.res.Parts, Part{Kind: Image, MediaType: ev.Name, Data: ev.Text})
+	}
+	switch ev.Kind {
+	case KStart, KUsage, KError, KAlive:
+	default:
+		c.fresh = false
 	}
 }
 

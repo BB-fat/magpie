@@ -337,14 +337,26 @@ func TestLitePairedToolTraffic(t *testing.T) {
 		{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "a", Text: "ok"}, {Kind: ToolResult, CallID: "stray", Text: "?"}}},
 		{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "unanswered", Name: "Bash"}}},
 	}
-	got, _ := json.Marshal(pairedToolTraffic(msgs))
-	for _, gone := range []string{`"lost"`, `"stray"`, `"unanswered"`} {
+	paired := pairedToolTraffic(msgs)
+	got, _ := json.Marshal(paired)
+	for _, gone := range []string{`"lost"`, `"unanswered"`} {
 		if strings.Contains(string(got), gone) {
 			t.Fatalf("%s survived: %s", gone, got)
 		}
 	}
 	if !strings.Contains(string(got), `"a"`) {
 		t.Fatalf("the answered call was dropped: %s", got)
+	}
+	// A compacted-away call must not erase the output its client returned.
+	if !strings.Contains(string(got), `[tool result id=stray]`) || !strings.Contains(string(got), "?") {
+		t.Fatalf("the orphan output was dropped: %s", got)
+	}
+	for _, m := range paired {
+		for _, p := range m.Parts {
+			if p.Kind == ToolResult && p.CallID == "stray" {
+				t.Fatal("the orphan survived as native tool traffic")
+			}
+		}
 	}
 }
 

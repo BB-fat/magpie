@@ -71,6 +71,9 @@ type Config struct {
 	MaxRSS int64
 	RSS    func(pid int) (int64, bool)
 
+	// CanSearch says whether the gateway can answer web_search now. Unset
+	// uses SearchHandler's presence, for an embedded bridge with no picker.
+	CanSearch func() bool
 	// SearchHandler answers the run's web_search tool; nil offers none.
 	SearchHandler func(ctx context.Context, query string) (string, []Hit, error)
 
@@ -148,6 +151,9 @@ func Init(cfg *Config) {
 	}
 	if cfg.RSS != nil {
 		c.RSS = cfg.RSS
+	}
+	if cfg.CanSearch != nil {
+		c.CanSearch = cfg.CanSearch
 	}
 	if cfg.SearchHandler != nil {
 		c.SearchHandler = cfg.SearchHandler

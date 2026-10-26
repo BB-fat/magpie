@@ -109,6 +109,7 @@ export function reshapeUserEvent(row: TranscriptRow, sessionId?: string): Claude
   return {
     type: "user",
     message: row.message ?? {},
+    ...(row.toolUseResult !== undefined ? { tool_use_result: row.toolUseResult } : {}),
     parent_tool_use_id: firstString(row.toolUseID) ?? null,
     ...(session ? { session_id: session } : {}),
     ...(uuid ? { uuid } : {}),

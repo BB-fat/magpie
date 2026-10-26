@@ -579,10 +579,12 @@ func decodeAnthropic(data string, emit func(Event)) error {
 		} `json:"message"`
 		Index        int `json:"index"`
 		ContentBlock struct {
-			Type string `json:"type"`
-			ID   string `json:"id"`
-			Name string `json:"name"`
-			Text string `json:"text"`
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature"`
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			Text      string `json:"text"`
 		} `json:"content_block"`
 		Delta struct {
 			Type        string `json:"type"`
@@ -606,6 +608,14 @@ func decodeAnthropic(data string, emit func(Event)) error {
 		emit(Event{Kind: KStart, MsgID: ev.Message.ID, Model: ev.Message.Model, Usage: ev.Message.Usage.usage()})
 	case "content_block_start":
 		switch ev.ContentBlock.Type {
+		case "thinking":
+			emit(Event{Kind: KThinkStart})
+			if ev.ContentBlock.Thinking != "" {
+				emit(Event{Kind: KThink, Text: ev.ContentBlock.Thinking})
+			}
+			if ev.ContentBlock.Signature != "" {
+				emit(Event{Kind: KSig, Text: ev.ContentBlock.Signature})
+			}
 		case "tool_use":
 			emit(Event{Kind: KToolStart, ID: ev.ContentBlock.ID, Name: ev.ContentBlock.Name})
 		case "text":
@@ -710,6 +720,7 @@ type anthropicEncoder struct {
 	open    Kind // kind of the open content block, "" when none
 	args    bool // the open tool block got arguments
 	started bool
+	fresh   bool
 	col     collector
 }
 
@@ -760,10 +771,18 @@ func (e *anthropicEncoder) openBlock(k Kind, block map[string]any) {
 		return
 	}
 	e.close()
-	e.args = false
+	e.args, e.fresh = false, false
 	block["type"] = map[Kind]string{Text: "text", Thinking: "thinking", ToolCall: "tool_use"}[k]
 	e.w.event("content_block_start", map[string]any{"type": "content_block_start", "index": e.index, "content_block": block})
 	e.open = k
+}
+
+func (e *anthropicEncoder) thinking() {
+	if e.fresh {
+		e.close()
+		e.fresh = false
+	}
+	e.openBlock(Thinking, map[string]any{"thinking": ""})
 }
 
 func (e *anthropicEncoder) delta(d map[string]any) {
@@ -783,14 +802,19 @@ func (e *anthropicEncoder) event(ev Event) {
 		}
 		e.openBlock(Text, map[string]any{"text": ""})
 		e.delta(map[string]any{"type": "text_delta", "text": ev.Text})
+	case KThinkStart:
+		e.fresh = true
+		e.col.add(ev)
+		return
 	case KThink:
 		if ev.Text == "" {
 			return
 		}
-		e.openBlock(Thinking, map[string]any{"thinking": ""})
+		e.thinking()
 		e.delta(map[string]any{"type": "thinking_delta", "thinking": ev.Text})
 	case KSig:
-		if e.open == Thinking {
+		if e.open == Thinking || e.fresh {
+			e.thinking()
 			e.delta(map[string]any{"type": "signature_delta", "signature": ev.Text})
 		}
 	case KToolStart:

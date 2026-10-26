@@ -126,6 +126,10 @@ func appendClaudeTranscript(f *os.File, id, parent, work, model string, preface 
 			switch p.Kind {
 			case Text:
 				blocks = append(blocks, map[string]any{"type": "text", "text": p.Text})
+			case Thinking:
+				if m.Role == "assistant" && p.Signature != "" {
+					blocks = append(blocks, map[string]any{"type": "thinking", "thinking": p.Text, "signature": p.Signature})
+				}
 			case ToolCall:
 				blocks = append(blocks, map[string]any{"type": "tool_use", "id": p.ID, "name": toolPrefix + claudebridge.ToolName(p.Name), "input": p.Args})
 			case ToolResult:

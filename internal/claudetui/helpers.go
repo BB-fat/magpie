@@ -232,10 +232,10 @@ func searching(ctx context.Context) bool {
 	return v
 }
 
-// canSearch is whether the runtime can answer its web_search tool.
-// Production resolves this from its provider table and search APIs; the
-// plugin runtime's only source is Config.SearchHandler.
-func canSearch() bool { return config.SearchHandler != nil }
+// canSearch is whether the gateway can answer the run's web_search tool.
+func canSearch() bool {
+	return config.SearchHandler != nil && (config.CanSearch == nil || config.CanSearch())
+}
 
 // searchTool is magpie's web_search the runtime offers a model that asked
 // for web search; name is chosen not to collide with a caller's own.

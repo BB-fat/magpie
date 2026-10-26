@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +35,7 @@ func TestRealClaudeTUI(t *testing.T) {
 	}
 	t.Run("cancel", realCancel)
 	t.Run("restart", realRestart)
+	t.Run("cache prefix", realCachePrefix)
 	t.Run("gateway killed", realGatewayKilled)
 	t.Run("memory", realMemory)
 }
@@ -106,6 +109,99 @@ func realRestart(t *testing.T) {
 		t.Fatalf("the turn after a restart was asked without its history: %s", up.lastAsked())
 	}
 	waitGone(t, b, profile)
+}
+
+// The real CLI must preserve the tools and prior message prefix across a
+// checkpoint resume; changing them would prevent upstream cache reuse.
+func realCachePrefix(t *testing.T) {
+	up, profile, bridge := realSetup(t, "magpie")
+	b := bridge()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	first := `{"model":"` + realModel + `","tools":` + realTools + `,"max_tokens":64,"stream":true,"messages":[{"role":"user","content":"say hello"}]}`
+	if out, code, msg := realServe(t, b, ctx, profile, "cache-prefix", first); code != 200 || out.text() != "PONG" {
+		t.Fatalf("first: %d %s %q", code, msg, out.text())
+	}
+	waitGone(t, b, profile)
+	up.mu.Lock()
+	before := append([]json.RawMessage(nil), up.requests...)
+	up.mu.Unlock()
+	b = bridge()
+	next := `{"model":"` + realModel + `","tools":` + realTools + `,"max_tokens":64,"stream":true,"messages":[{"role":"user","content":"say hello"},{"role":"assistant","content":"PONG"},{"role":"user","content":"and again"}]}`
+	if out, code, msg := realServe(t, b, ctx, profile, "cache-prefix", next); code != 200 || out.text() != "PONG" {
+		t.Fatalf("resumed: %d %s %q", code, msg, out.text())
+	}
+	waitGone(t, b, profile)
+	up.mu.Lock()
+	after := append([]json.RawMessage(nil), up.requests[len(before):]...)
+	up.mu.Unlock()
+	main := func(rows []json.RawMessage) map[string]any {
+		t.Helper()
+		for _, raw := range rows {
+			var value map[string]any
+			if json.Unmarshal(raw, &value) == nil && strings.Contains(string(raw), "say hello") {
+				return value
+			}
+		}
+		t.Fatalf("no main request in %d upstream requests", len(rows))
+		return nil
+	}
+	old, resumed := main(before), main(after)
+	if !reflect.DeepEqual(old["tools"], resumed["tools"]) {
+		t.Fatal("tool definitions changed on a checkpoint resume")
+	}
+	clean := func(value any) any {
+		raw, _ := json.Marshal(value)
+		var result any
+		_ = json.Unmarshal(raw, &result)
+		var visit func(any)
+		visit = func(v any) {
+			switch x := v.(type) {
+			case map[string]any:
+				delete(x, "cache_control")
+				for _, item := range x {
+					visit(item)
+				}
+				if blocks, ok := x["content"].([]any); ok && len(blocks) == 1 {
+					if block, ok := blocks[0].(map[string]any); ok && len(block) == 2 && block["type"] == "text" {
+						x["content"] = block["text"]
+					}
+				}
+			case []any:
+				for _, item := range x {
+					visit(item)
+				}
+			}
+		}
+		visit(result)
+		return result
+	}
+	if tools, ok := old["tools"].([]any); !ok || len(tools) == 0 {
+		t.Fatal("the prefix test offered no MCP tools")
+	}
+	instructions := func(value any) any {
+		value = clean(value)
+		if blocks, ok := value.([]any); ok {
+			for _, item := range blocks {
+				if block, ok := item.(map[string]any); ok {
+					if text, ok := block["text"].(string); ok {
+						block["text"] = withoutBillingHeader(text)
+					}
+				}
+			}
+		}
+		return value
+	}
+	if !reflect.DeepEqual(instructions(old["system"]), instructions(resumed["system"])) {
+		t.Fatal("the resumed request changed its system prefix beyond billing metadata")
+	}
+	prior := old["messages"].([]any)
+	current := resumed["messages"].([]any)
+	if len(current) <= len(prior) || !reflect.DeepEqual(clean(prior), clean(current[:len(prior)])) {
+		a, _ := json.Marshal(clean(prior))
+		z, _ := json.Marshal(clean(current))
+		t.Fatalf("the resumed upstream request changed its prior message prefix:\nbefore=%s\nafter=%s", a, z)
+	}
 }
 
 // The gateway killed outright: its wrapper is told to end (its parent's
@@ -340,10 +436,11 @@ func realRun(t *testing.T, server string) {
 
 type standIn struct {
 	*httptest.Server
-	mu    sync.Mutex
-	tools []string
-	n     int
-	last  string
+	mu       sync.Mutex
+	tools    []string
+	n        int
+	last     string
+	requests []json.RawMessage
 	// slow is told once a turn asked to take its time has come
 	slow     chan struct{}
 	slowOnce sync.Once
@@ -384,7 +481,14 @@ func newAnthropicStandIn(t *testing.T) *standIn {
 				Content json.RawMessage `json:"content"`
 			} `json:"messages"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		raw, err := io.ReadAll(r.Body)
+		if err != nil || json.Unmarshal(raw, &req) != nil {
+			http.Error(w, "invalid stand-in request", 400)
+			return
+		}
+		s.mu.Lock()
+		s.requests = append(s.requests, json.RawMessage(raw))
+		s.mu.Unlock()
 		echo := ""
 		for _, tl := range req.Tools {
 			s.mu.Lock()

@@ -91,7 +91,7 @@ account is never answered by `claude -p`.
 | `Room`, `Leave` | `claudeRoom.take`, `claudeRoom.leave` |
 | `Env` | the account's proxy (`netproxy.EnvForBunWith`), `CLAUDE_CONFIG_DIR`, `IS_SANDBOX` as root |
 | `MaxRSS` | `claudeTuiMaxRSSMiB`, else `claudeRunBudget` |
-| `SearchHandler`, `NoteLimits`, `MovedOff` | the gateway's web search, `provider.NoteClaudeLimits`, `provider.ClaudeCodeMovedOff` |
+| `CanSearch`, `SearchHandler`, `NoteLimits`, `MovedOff` | the gateway's search availability and web search, `provider.NoteClaudeLimits`, `provider.ClaudeCodeMovedOff` |
 
 ## The MCP server name and tool names
 
@@ -106,6 +106,20 @@ the standard bridge's, `claudebridge.ToolName`, and come back as declared
 (`subscriptionRun.declaredLocked`). The name is part of the owner, so a
 conversation's checkpoint is not taken up under another name: its next
 turn is rebuilt from the request.
+
+The gateway passes its search-in-progress state through `claudetui.WithSearch`.
+A TUI run used as the search provider enables native `WebSearch`; an ordinary
+run uses the gateway's private MCP search when `CanSearch` says one is
+available, and native search otherwise. Native search calls stay inside Claude
+Code; the wrapper preserves their `tool_use_result` query and hits for the
+client's search events. This keeps a search-provider request from delegating
+back to the gateway recursively.
+
+Thinking blocks retain their signatures and boundaries (`KThinkStart`,
+`KThink`, `KSig`) through transcript decoding and `tuiEvent`, including signed
+blocks with empty text. Rebuilt native transcripts preserve signed assistant
+thinking too (`appendClaudeTranscript`). Messages clients can return those
+blocks unchanged to an Anthropic provider.
 
 ## The wrapper
 
@@ -135,7 +149,10 @@ uninstall flags are left out). The trust record goes to the account's
 start without one. A JSON Schema is passed in a file (one argument holds
 128 KiB on Linux) and checked within bounds: schema 256 KiB, reply 4 MiB,
 depth 64, 10,000 items in one list or object, 100,000 values, 8 issues
-said (`JSON_LIMITS`).
+said (`JSON_LIMITS`). A root run uses permission bypass only when its
+own environment supplies `IS_SANDBOX=1` or `CLAUDE_CODE_BUBBLEWRAP`; the
+gateway supplies the former for root, as on the standard bridge. The same
+choice controls both the launch flag and work-directory settings.
 
 ## Processes, room and memory
 
@@ -167,6 +184,15 @@ said (`JSON_LIMITS`).
 - `MAGPIE_CLAUDE_IDLE_MAX` and `MAGPIE_CLAUDE_IDLE_TTL` are the standard
   bridge's idle pool alone: a TUI run ends with its reply, and its
   conversation's next turn resumes the checkpointed session.
+- Between a tool-use reply and its results, `Bridge.Parked` contributes to
+  `Server.Busy().Tools`. An attached HTTP response stays in request/bridge
+  accounting instead; keep-awake and idle restart consumers see the waiting
+  tool chain without counting it twice.
+- Stateless cwd slots are `<tmp>/magpie-claude-stateless-<uid>-<slot>`.
+  `ownedWorkDir` rejects symlinks, directories owned by another user, and
+  directories writable by others before its write probe. The same check
+  protects conversation and tmux directories. Older stateless paths are left
+  in place and are no longer selected.
 
 ## Turns, recovery and its limits
 
@@ -183,6 +209,38 @@ minutes (`interactiveParkLongest`), a run ends after 12 hours
 (`interactiveActiveLongest`). Checkpoints live in
 `<config>/claude-tui/claude-interactive-sessions.json`; one that doesn't
 read is refused, never taken for none, and those not used for 30 days go.
+The safeguards beta is resolved before matching a live run, so unchanged
+safeguards continue the same tool call.
+
+A completed reply is reused only for the same request semantics: canonical
+tool arguments, result error flags, media contents, safeguards and generation
+settings participate in its replay key. This strict replay identity is separate
+from checkpoint matching, whose existing reply anchor permits a client to
+rewrite or compact an earlier prefix.
+
+Rebuilding pairs tool traffic across consecutive assistant and user messages,
+so split parallel calls keep all their matched results. A result whose call was
+removed by compaction is preserved as labelled historical output with its
+error status and images, rather than emitted as an invalid orphan tool result.
+Visible mismatched tool handoffs still fail with 409.
+
+## Prompt-cache continuity
+
+A stable supported session header lets a completed conversation resume its
+native session and send only the new suffix. Without such a header, later
+text turns run stateless and rebuild the supplied history; live tool results
+can still find their run by call ID. Clients that need checkpoint continuity
+should send `X-Magpie-Session` or an agent session header recognized by
+`sessionOf`. Body metadata and `prompt_cache_key` are not checkpoint IDs.
+
+The cwd remains stable across resumes and stateless slot reuse, auto memory
+is disabled, and the bridge keeps Claude Code's 1-hour cache setting. A model,
+tool definition, system-context or conversation change can still alter the
+upstream cache prefix. Rebuilding preserves history for correctness and can
+require a fresh cache write; changing between standard and TUI also rebuilds.
+The gateway preserves reported cache reads, writes and 1-hour writes, and
+counts repeated transcript rows of one upstream message once. These counters
+and stable-prefix tests do not establish Anthropic's live cache hit rate.
 
 A rebuilt session can ask for a tool call again: a write or a command may
 be proposed a second time. Nothing here makes a side effect happen exactly
@@ -200,6 +258,9 @@ conversation.
 
 ## Verification
 
+The review-fix checks and remaining full-suite failures are recorded in
+[Claude TUI review verification](../claude-tui-review-verification.md).
+
 ```sh
 go test -tags nogui ./internal/claudetui/ -count=1
 go test -race -tags nogui ./internal/claudetui/ -count=1
@@ -215,5 +276,16 @@ MAGPIE_CLAUDE_TUI_REAL=1 MAGPIE_TUI_BUN=<bun> MAGPIE_TUI_CLAUDE=<claude> \
   MAGPIE_TUI_MAGPIE=<a built magpie> go test -run 'TestRealClaudeTUI$' ./internal/claudetui/
 ```
 
+`TestRealClaudeTUI/cache_prefix` compares the real CLI's outgoing tools,
+system instructions (apart from its billing metadata), and previous message
+content before and after a checkpoint resume. Cache marks can move to a later
+boundary; equivalent plain-text string and block-array forms are normalized.
+The stand-in supplies no evidence of Anthropic's server-side cache hits.
+
+`claude-mode.test.cjs` exercises the Providers editor's mode selection,
+persistence across reload, failed saves and restoration to standard in
+Chromium and WebKit, all five languages, at 1100 and 420 pixels. The neighboring
+account-cap and Claude auth-status flows share its verification run.
+
 Not verified: a real Claude subscription (the real test answers from a
-local stand-in), and the window's mode pill in a browser.
+local stand-in), live-vendor cache hit rates, or the desktop's native webview.

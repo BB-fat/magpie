@@ -17,6 +17,58 @@ import (
 // The process tree and tmux sweep read /proc: Linux, where the Claude TUI
 // runs.
 
+func TestTUIFixedWorkDirsRefuseOtherOwners(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create a writable cwd owned by another uid")
+	}
+	for _, work := range fixedTUIWorkDirs() {
+		t.Run(work.name, func(t *testing.T) {
+			withConfig(t, &Config{TempRoot: t.TempDir()})
+			dir, err := work.make()
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(dir, "CLAUDE.md")
+			if err := os.WriteFile(marker, []byte("another user's instructions"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chown(dir, os.Getuid()+1, -1); err != nil {
+				t.Fatal(err)
+			}
+			probe, err := os.CreateTemp(dir, ".writable-by-root-*")
+			if err != nil {
+				t.Fatalf("fixture must be writable by root: %v", err)
+			}
+			probe.Close()
+			os.Remove(probe.Name())
+			if got, err := work.make(); err == nil || got != "" || !strings.Contains(err.Error(), "belongs to another user") {
+				t.Fatalf("another user's writable cwd accepted: %q, %v", got, err)
+			}
+			if data, err := os.ReadFile(marker); err != nil || string(data) != "another user's instructions" {
+				t.Fatalf("another user's file changed: %q, %v", data, err)
+			}
+		})
+	}
+}
+
+func TestTUIFixedWorkDirsRefuseOtherWriters(t *testing.T) {
+	for _, work := range fixedTUIWorkDirs() {
+		t.Run(work.name, func(t *testing.T) {
+			withConfig(t, &Config{TempRoot: t.TempDir()})
+			dir, err := work.make()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, 0o770); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := work.make(); err == nil || got != "" || !strings.Contains(err.Error(), "can be written by others") {
+				t.Fatalf("shared writable cwd accepted: %q, %v", got, err)
+			}
+		})
+	}
+}
+
 // A run's tree is ended whole: its wrapper's group, and what was seen
 // under it in a session of its own, as tmux starts a pane.
 func TestProcTreeEndsWhatRanUnderIt(t *testing.T) {

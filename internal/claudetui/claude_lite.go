@@ -21,9 +21,9 @@ import (
 )
 
 // A client of the Messages API sends its whole conversation with every
-// request and runs every tool itself: the native Claude here has no tools of
-// its own (--tools ""), only the client's, through MCP. So the request is
-// the truth. It continues the live or checkpointed native session where it
+// request and runs every client tool itself. Native Claude gets those
+// tools through MCP, plus WebSearch when the gateway is not searching for
+// it. So the request is the truth. It continues the live or checkpointed native session where it
 // exactly can; otherwise the native session is rebuilt from the request's
 // own structured history — tool calls and their results included, so the
 // model sees what already ran — instead of being refused or answered by a
@@ -62,6 +62,15 @@ func (rt *runtimeTUI) serveLite(out responder, r *http.Request, model, owner, ou
 		return out.Fail(http.StatusBadRequest, err.Error())
 	}
 	req.Model = model
+	if len(req.Safeguards) > 0 {
+		req.SafeguardBeta = "dangerous-tool-use-2026-09-03"
+		for _, beta := range strings.Split(r.Header.Get("anthropic-beta"), ",") {
+			if beta = strings.TrimSpace(beta); strings.HasPrefix(beta, "dangerous-tool-use-") {
+				req.SafeguardBeta = beta
+				break
+			}
+		}
+	}
 	// Rebuilding is not permission to erase a mismatched tool result. When
 	// the caller's visible final assistant turn contains tool_use, every
 	// returned ID must match that turn, even if the old native run is gone.
@@ -122,15 +131,6 @@ func (rt *runtimeTUI) serveLite(out responder, r *http.Request, model, owner, ou
 		}
 		defer rt.bridge.releaseInteractiveOuterTurn(owner, outerSession)
 	}
-	if len(req.Safeguards) > 0 {
-		req.SafeguardBeta = "dangerous-tool-use-2026-09-03"
-		for _, beta := range strings.Split(r.Header.Get("anthropic-beta"), ",") {
-			if beta = strings.TrimSpace(beta); strings.HasPrefix(beta, "dangerous-tool-use-") {
-				req.SafeguardBeta = beta
-				break
-			}
-		}
-	}
 	var search Tool
 	if req.WebSearch && !searching(r.Context()) && canSearch() {
 		search = searchTool(req.Tools)
@@ -141,7 +141,9 @@ func (rt *runtimeTUI) serveLite(out responder, r *http.Request, model, owner, ou
 	if err != nil {
 		return out.Fail(startStatus(err), "Claude Code: "+err.Error())
 	}
+	defer run.releaseHTTP()
 	run.mu.Lock()
+	run.httpConsumers++
 	keepImage := len(run.images) > 0
 	run.tools = map[string]bool{}
 	for _, t := range req.Tools {
@@ -187,17 +189,51 @@ type liteCompletedTurn struct {
 	reply string
 }
 
-// liteReplayKey is the whole request a completed reply answered: turnKey's
-// account, model, system prompt, tools and messages, with the generation
-// settings turnKey leaves out. The client's metadata is not in it.
+// liteReplayKey requires the complete semantic request, independently of
+// the loose history matcher. Client metadata and response streaming are ignored.
 func liteReplayKey(owner string, req *Request) string {
 	if req.replayKey != "" {
 		return req.replayKey
 	}
+	copied := *req
+	copied.Metadata, copied.ClientMetadata, copied.Stream = nil, nil, false
+	var normalize func([]Part) []Part
+	normalize = func(parts []Part) []Part {
+		parts = slices.Clone(parts)
+		for i := range parts {
+			if parts[i].Kind == ToolCall {
+				parts[i].Args = argsOf(parts[i])
+				if bytes.Equal(bytes.TrimSpace(parts[i].Args), []byte("null")) {
+					parts[i].Args = json.RawMessage("{}")
+				}
+			}
+			parts[i].Images = normalize(parts[i].Images)
+		}
+		return parts
+	}
+	copied.Messages = slices.Clone(req.Messages)
+	for i := range copied.Messages {
+		copied.Messages[i].Parts = normalize(copied.Messages[i].Parts)
+	}
+	raw, err := json.Marshal(copied)
+	if err != nil {
+		return ""
+	}
+	// UseNumber preserves integers beyond float64 precision while sorting
+	// JSON object keys, including nested argument and schema objects.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var value any
+	if err := dec.Decode(&value); err != nil {
+		return ""
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
 	h := sha256.New()
-	stop, _ := json.Marshal(req.Stop)
-	settings, _ := json.Marshal([]any{req.MaxTokens, req.Temp, req.TopP, req.Effort, req.Thinking, req.Parallel, req.Fast})
-	fmt.Fprintf(h, "%s\x00%s\x00%s", turnKey(owner, req, req.Messages), stop, settings)
+	fmt.Fprintf(h, "%s\x00", owner)
+	h.Write(canonical)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -413,8 +449,8 @@ func (b *subscriptionBridge) anchorOuterThread(owner, outerSession string, req *
 // liteSeed splits req into the history a rebuilt native session resumes from
 // and the turn it is given: the user's messages after the last assistant
 // reply. Tool results there stay in the history, where the native session
-// sees them answer its calls; tool calls nothing answers (and answers to no
-// call) are dropped, as the Messages API refuses them.
+// sees them answer its calls. Unanswered calls are dropped; orphaned
+// results retain their content as labelled historical output.
 func liteSeed(req *Request) (*Request, string, map[string]Part, error) {
 	k, results, turn := liteTail(req.Messages)
 	history := pairedToolTraffic(append(slices.Clone(req.Messages[:k]), results...))
@@ -644,7 +680,7 @@ func liteStatelessWorkDir() (string, func(), error) {
 			liteStateless.Unlock()
 		})
 	}
-	dir, err := ownedWorkDir(filepath.Join(tempRoot(), fmt.Sprintf("magpie-claude-stateless-%d", i)))
+	dir, err := ownedWorkDir(filepath.Join(tempRoot(), fmt.Sprintf("magpie-claude-stateless-%d-%d", os.Getuid(), i)))
 	if err != nil {
 		release()
 		return "", func() {}, err
@@ -666,21 +702,41 @@ func hasUserText(msgs []Message) bool {
 	return false
 }
 
-// pairedToolTraffic keeps only tool calls answered in the next user message
-// and tool results answering a call of the assistant message before them.
+// pairedToolTraffic pairs adjacent assistant/user role runs. Orphan output
+// stays historical text and media, never a native tool_result without a call.
 func pairedToolTraffic(msgs []Message) []Message {
-	out := make([]Message, 0, len(msgs))
-	for i, m := range msgs {
+	runs := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		if n := len(runs); n > 0 && runs[n-1].Role == m.Role {
+			runs[n-1].Parts = append(runs[n-1].Parts, m.Parts...)
+		} else {
+			runs = append(runs, Message{Role: m.Role, Parts: slices.Clone(m.Parts)})
+		}
+	}
+	out := make([]Message, 0, len(runs))
+	for i, m := range runs {
 		var keep []Part
 		for _, p := range m.Parts {
 			switch {
 			case p.Kind == ToolCall && m.Role == "assistant":
-				if i+1 < len(msgs) && answers(msgs[i+1], p.ID) {
+				if i+1 < len(runs) && answers(runs[i+1], p.ID) {
+					p.Args = argsOf(p)
+					if bytes.Equal(bytes.TrimSpace(p.Args), []byte("null")) {
+						p.Args = json.RawMessage("{}")
+					}
 					keep = append(keep, p)
 				}
 			case p.Kind == ToolResult:
-				if i > 0 && calls(msgs[i-1], p.CallID) {
+				if i > 0 && calls(runs[i-1], p.CallID) {
 					keep = append(keep, p)
+				} else {
+					var text strings.Builder
+					result := p
+					result.Images = nil
+					renderParts(nil, &text, []Part{result})
+					keep = append(keep, Part{Kind: Text, Text: text.String()})
+					keep = append(keep, p.Images...)
+					keep = append(keep, Part{Kind: Text, Text: fmt.Sprintf("\n[end of tool result id=%s]\n", p.CallID)})
 				}
 			default:
 				keep = append(keep, p)

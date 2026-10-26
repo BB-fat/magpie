@@ -18,7 +18,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { preAcceptProject, writeWorkdirSettings, trustPromptKeys, claudePaneReady } from "./preaccept.ts";
+import { preAcceptProject, writeWorkdirSettings, trustPromptKeys, claudePaneReady, canBypassPermissions } from "./preaccept.ts";
 import { claudeAuthEnvArgs, claudeUnsetEnvArgs } from "./auth-env.ts";
 import {
   findTranscriptBySessionId,
@@ -197,12 +197,11 @@ if (userContextPath) {
 
 // Under magpie a run is always on an account's own config folder: its
 // trust record goes there, never in the user's ~/.claude.json.
-if (tmuxSocket && !process.env.CLAUDE_CONFIG_DIR) {
+if (process.env.CLAUDE_BRIDGE_TMUX_SOCKET && !process.env.CLAUDE_CONFIG_DIR) {
   failBeforeRun("magpie runs the Claude TUI only on an account's own config folder (CLAUDE_CONFIG_DIR)");
 }
 preAcceptProject({ workdir: targetCwd, mcpServerNames: [] });
-const runningAsRoot = typeof process.getuid === "function" && process.getuid() === 0;
-const bypassPermissions = !runningAsRoot;
+const bypassPermissions = canBypassPermissions(process.env, process.getuid?.());
 writeWorkdirSettings(targetCwd, { bypassPermissions });
 
 // magpie names the tmux and the Claude Code to run; standalone, they are

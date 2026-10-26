@@ -966,11 +966,15 @@ func renderInteractiveContextRefresh(req *Request) string {
 	return text.String()
 }
 
-func interactiveWrapperArgs(model, mcpConfig, effort, resumeID string) []string {
+func interactiveWrapperArgs(model, mcpConfig, effort, resumeID string, nativeSearch bool) []string {
 	// -p is a *wrapper* output-mode option; a genuine Claude TUI launched by
 	// the wrapper must never receive this flag.
+	tools := ""
+	if nativeSearch {
+		tools = "WebSearch"
+	}
 	args := []string{"-p", "--output-format", "stream-json", "--model", model,
-		"--tools", "", "--strict-mcp-config", "--mcp-config", mcpConfig}
+		"--tools", tools, "--strict-mcp-config", "--mcp-config", mcpConfig}
 	if effort != "" {
 		args = append(args, "--effort", effort)
 	}
@@ -1366,7 +1370,8 @@ func (b *subscriptionBridge) startInteractiveWithPromptImages(ctx context.Contex
 		return nil, nil, err
 	}
 	mcpConfig := interactiveMCPConfig(helperExe, helperArgv, callbackPath, toolsPath)
-	args := interactiveWrapperArgs(model, mcpConfig, req.Effort, resumeID)
+	nativeSearch := req.WebSearch && req.SearchTool == "" && !readOnly
+	args := interactiveWrapperArgs(model, mcpConfig, req.Effort, resumeID, nativeSearch)
 	if req.ThinkOff {
 		// Use one argv so older bridge parsers that do not know --thinking's
 		// arity cannot mistake "disabled" for the user's prompt.
@@ -1519,7 +1524,7 @@ func (b *subscriptionBridge) startInteractiveWithPromptImages(ctx context.Contex
 			return &s
 		}(),
 		outerSession: outerSession, threadKey: firstWords(req), sessionID: resumeID, images: images,
-		searchName: req.SearchTool, schema: len(req.Schema) > 0, readOnlyRecovery: readOnly, tmuxSocket: sock,
+		searchName: req.SearchTool, nativeSearch: nativeSearch, schema: len(req.Schema) > 0, readOnlyRecovery: readOnly, tmuxSocket: sock,
 		safeguards: bytes.Clone(req.Safeguards), safeguardBeta: req.SafeguardBeta}
 	if b.toolJournal != nil && os.Getenv("MAGPIE_CLAUDE_FIRST_TURN_ANCHOR") == "1" &&
 		outerSession != "" && resumeID == "" && !readOnly && len(req.Messages) == 1 && req.Messages[0].Role == "user" {
@@ -1742,17 +1747,19 @@ func (r *subscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 			Errors            []string        `json:"errors"`
 			StructuredOutput  json.RawMessage `json:"structured_output"`
 			StopReason        string          `json:"stop_reason"`
+			ToolUseResult     json.RawMessage `json:"tool_use_result"`
 			Message           struct {
 				ID      string   `json:"id"`
 				Model   string   `json:"model"`
 				Usage   cliUsage `json:"usage"`
 				Content []struct {
-					Type     string          `json:"type"`
-					ID       string          `json:"id"`
-					Text     string          `json:"text"`
-					Thinking string          `json:"thinking"`
-					Name     string          `json:"name"`
-					Input    json.RawMessage `json:"input"`
+					Type      string          `json:"type"`
+					ID        string          `json:"id"`
+					Text      string          `json:"text"`
+					Thinking  string          `json:"thinking"`
+					Signature string          `json:"signature"`
+					Name      string          `json:"name"`
+					Input     json.RawMessage `json:"input"`
 				} `json:"content"`
 			} `json:"message"`
 		}
@@ -1909,8 +1916,12 @@ func (r *subscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 						r.emit(Event{Kind: KText, Text: block.Text})
 					}
 				case "thinking":
+					r.emit(Event{Kind: KThinkStart})
 					if block.Thinking != "" {
 						r.emit(Event{Kind: KThink, Text: block.Thinking})
+					}
+					if block.Signature != "" {
+						r.emit(Event{Kind: KSig, Text: block.Signature})
 					}
 				case "tool_use":
 					// A native MCP callback may already have shown exactly
@@ -1930,6 +1941,9 @@ func (r *subscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 						continue
 					}
 					if r.schema && block.Name == "StructuredOutput" {
+						continue
+					}
+					if r.nativeSearch && block.Name == "WebSearch" {
 						continue
 					}
 					name, ok := strings.CutPrefix(block.Name, mcpToolPrefix())
@@ -1973,6 +1987,22 @@ func (r *subscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 					defer pmu.Unlock()
 					settleToolTurn()
 				})
+			}
+		case "user":
+			if r.nativeSearch {
+				var searched struct {
+					Query   string `json:"query"`
+					Results []struct {
+						Content []Hit `json:"content"`
+					} `json:"results"`
+				}
+				if json.Unmarshal(msg.ToolUseResult, &searched) == nil && searched.Query != "" && searched.Results != nil {
+					var hits []Hit
+					for _, result := range searched.Results {
+						hits = append(hits, result.Content...)
+					}
+					r.emit(Event{Kind: KSearch, Text: searched.Query, Hits: hits})
+				}
 			}
 		case "result":
 			finished = true

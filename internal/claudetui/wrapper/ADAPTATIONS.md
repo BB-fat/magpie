@@ -101,6 +101,10 @@ magpie embeds this wrapper in its Claude TUI bridge
   (`process.execPath`), never through `#!/usr/bin/env bun`.
 - `user-context.ts` takes the MCP server's name from
   `CLAUDE_BRIDGE_MCP_SERVER`.
+- Permission bypass follows Claude Code's root guard: root can bypass only
+  with `IS_SANDBOX=1` or nonempty `CLAUDE_CODE_BUBBLEWRAP`; other users
+  retain bypass. The same decision sets the workdir's permission mode and
+  the native Claude launch flag (`canBypassPermissions` in `preaccept.ts`).
 - `.claude.json` and settings are written whole, 0600 (`fs-atomic.ts`);
   under magpie the wrapper refuses to run without `CLAUDE_CONFIG_DIR`.
 - `json-schema.ts` checks a schema and a reply within bounds before zod

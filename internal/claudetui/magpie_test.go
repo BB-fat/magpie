@@ -3,8 +3,10 @@ package claudetui
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,106 @@ func withConfig(t *testing.T, c *Config) {
 	old := config
 	Init(c)
 	t.Cleanup(func() { config = old })
+}
+
+func fixedTUIWorkDirs() []struct {
+	name string
+	make func() (string, error)
+} {
+	return []struct {
+		name string
+		make func() (string, error)
+	}{
+		{"stateless", func() (string, error) {
+			dir, release, err := liteStatelessWorkDir()
+			defer release()
+			return dir, err
+		}},
+		{"conversation", func() (string, error) { return interactiveSessionWorkDir("account", "session") }},
+		{"tmux", tmuxDir},
+		{"work", claudeWorkDir},
+	}
+}
+
+func TestTUIFixedWorkDirsArePrivate(t *testing.T) {
+	for _, work := range fixedTUIWorkDirs() {
+		t.Run(work.name, func(t *testing.T) {
+			withConfig(t, &Config{TempRoot: t.TempDir()})
+			dir, err := work.make()
+			if err != nil {
+				t.Fatal(err)
+			}
+			again, err := work.make()
+			if err != nil || again != dir {
+				t.Fatalf("fixed cwd changed from %q to %q: %v", dir, again, err)
+			}
+			info, err := os.Lstat(dir)
+			if err != nil || !info.IsDir() || !ownedByMe(info) || othersCanWrite(info) {
+				t.Fatalf("unsafe cwd %s: %v, %v", dir, info, err)
+			}
+			if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
+				t.Fatalf("cwd permissions %v, want 0700", info.Mode().Perm())
+			}
+		})
+	}
+}
+
+func TestTUIFixedWorkDirsRefuseSymlinks(t *testing.T) {
+	for _, work := range fixedTUIWorkDirs() {
+		t.Run(work.name, func(t *testing.T) {
+			withConfig(t, &Config{TempRoot: t.TempDir()})
+			dir, err := work.make()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(dir); err != nil {
+				t.Fatal(err)
+			}
+			target := t.TempDir()
+			if err := os.Symlink(target, dir); err != nil {
+				if runtime.GOOS == "windows" {
+					t.Skipf("symlink creation unavailable: %v", err)
+				}
+				t.Fatal(err)
+			}
+			if got, err := work.make(); err == nil || got != "" || !strings.Contains(err.Error(), "not a folder") {
+				t.Fatalf("symlink cwd accepted: %q, %v", got, err)
+			}
+			if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
+				t.Fatalf("symlink target changed: %v, %v", entries, err)
+			}
+		})
+	}
+}
+
+func TestLiteStatelessWorkDirUsesUIDAndReleasesSlots(t *testing.T) {
+	withConfig(t, &Config{TempRoot: t.TempDir()})
+	first, release, err := liteStatelessWorkDir()
+	defer release()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := fmt.Sprintf("magpie-claude-stateless-%d-", os.Getuid())
+	if !strings.HasPrefix(filepath.Base(first), prefix) {
+		t.Fatalf("stateless cwd %s lacks user namespace %s", first, prefix)
+	}
+	second, releaseSecond, err := liteStatelessWorkDir()
+	defer releaseSecond()
+	if err != nil || second == first {
+		t.Fatalf("concurrent stateless runs shared cwd %q: %v", second, err)
+	}
+	release()
+	again, releaseAgain, err := liteStatelessWorkDir()
+	defer releaseAgain()
+	if err != nil || again != first {
+		t.Fatalf("released slot changed from %q to %q: %v", first, again, err)
+	}
+	release() // A second release must leave the new borrower holding its slot.
+	third, releaseThird, err := liteStatelessWorkDir()
+	defer releaseThird()
+	if err != nil || third == first || third == second {
+		t.Fatalf("busy slot reused: %q, %v", third, err)
+	}
 }
 
 // The MCP server's name is the configured one wherever the run names it:

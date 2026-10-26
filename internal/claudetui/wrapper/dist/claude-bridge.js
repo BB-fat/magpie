@@ -408,6 +408,9 @@ function preAcceptProject(opts) {
   entry.approvedMcprcServers = [...approved];
   writePrivateAtomic(claudeJsonPath, JSON.stringify(obj, null, 2));
 }
+function canBypassPermissions(env, uid) {
+  return uid !== 0 || env.IS_SANDBOX === "1" || Boolean(env.CLAUDE_CODE_BUBBLEWRAP);
+}
 function writeWorkdirSettings(workdir, opts = { bypassPermissions: true }) {
   const dir = join2(workdir, ".claude");
   mkdirSync(dir, { recursive: true });
@@ -10853,6 +10856,7 @@ function reshapeUserEvent(row, sessionId) {
   return {
     type: "user",
     message: row.message ?? {},
+    ...row.toolUseResult !== undefined ? { tool_use_result: row.toolUseResult } : {},
     parent_tool_use_id: firstString(row.toolUseID) ?? null,
     ...session ? { session_id: session } : {},
     ...uuid ? { uuid } : {}
@@ -11056,12 +11060,11 @@ if (userContextPath) {
   writeFileSync3(userContextPath + ".ready", `1
 `, { mode: 384 });
 }
-if (tmuxSocket && !process.env.CLAUDE_CONFIG_DIR) {
+if (process.env.CLAUDE_BRIDGE_TMUX_SOCKET && !process.env.CLAUDE_CONFIG_DIR) {
   failBeforeRun("magpie runs the Claude TUI only on an account's own config folder (CLAUDE_CONFIG_DIR)");
 }
 preAcceptProject({ workdir: targetCwd, mcpServerNames: [] });
-var runningAsRoot = typeof process.getuid === "function" && process.getuid() === 0;
-var bypassPermissions = !runningAsRoot;
+var bypassPermissions = canBypassPermissions(process.env, process.getuid?.());
 writeWorkdirSettings(targetCwd, { bypassPermissions });
 var tmuxPath = process.env.CLAUDE_BRIDGE_TMUX_PATH || resolveRequiredCommand("tmux", "Required command `tmux` was not found on PATH. Install tmux on this host before running claude-bridge.");
 var claudePath = process.env.CLAUDE_BRIDGE_CLAUDE_PATH || resolveRequiredCommand("claude", "Required command `claude` was not found on PATH. Install Claude Code on this host, or make sure PATH includes it before running claude-bridge.");

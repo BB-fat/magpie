@@ -88,12 +88,13 @@ func ownedWorkDir(dir string) (string, error) {
 	if !fi.IsDir() {
 		return "", fmt.Errorf("%s is not a folder", dir)
 	}
-	if fi.Mode().Perm()&0o022 != 0 {
+	if othersCanWrite(fi) {
 		return "", fmt.Errorf("%s can be written by others (%v)", dir, fi.Mode().Perm())
 	}
-	// On a shared /tmp, a different user may have pre-created a 0700 path.
-	// Creating a file inside proves this process can actually own/use the cwd
-	// without platform-specific uid code; remove the probe immediately.
+	if !ownedByMe(fi) {
+		return "", fmt.Errorf("%s belongs to another user", dir)
+	}
+	// An owned folder may still be read-only or inaccessible.
 	probe, err := os.CreateTemp(dir, ".magpie-owner-check-*")
 	if err != nil {
 		return "", fmt.Errorf("%s is not writable by this user: %w", dir, err)
