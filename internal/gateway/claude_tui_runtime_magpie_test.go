@@ -282,6 +282,9 @@ func TestClaudeTUIRuntimeInstallWrapper(t *testing.T) {
 	if !strings.Contains(string(tuiRuntimeWrapperBundle), "CLAUDE_CODE_EXTRA_BODY_FILE") {
 		t.Fatal("embedded wrapper missing large EXTRA_BODY file transport")
 	}
+	if !strings.Contains(string(tuiRuntimeWrapperBundle), "extra-body-preload") {
+		t.Fatal("embedded wrapper missing node preload for large EXTRA_BODY")
+	}
 }
 
 // Versions are told apart as dotted numbers.

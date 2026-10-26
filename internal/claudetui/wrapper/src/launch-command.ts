@@ -5,6 +5,9 @@ export type ClaudeLaunchCommandOptions = {
   envArgs: string[];
   exitStatusPath: string;
   holdMs: number;
+  /** When set, launch Claude Code via node -r preload (avoids MAX_ARG_STRLEN on exec). */
+  extraBodyPreloadPath?: string;
+  claudeNodeLaunch?: { interpreter: string; entryScript: string };
 };
 
 export function interactiveMcpBackgroundEnvArgs(): string[] {
@@ -40,28 +43,20 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Load large safeguard EXTRA_BODY from a run file instead of argv/env at Go exec time. */
-export function extraBodyFromFileShellPrefix(): string {
-  return [
-    'if [ -n "$CLAUDE_CODE_EXTRA_BODY_FILE" ] && [ -r "$CLAUDE_CODE_EXTRA_BODY_FILE" ]; then',
-    '  export CLAUDE_CODE_EXTRA_BODY="$(cat "$CLAUDE_CODE_EXTRA_BODY_FILE")"',
-    "fi",
-  ].join("\n");
+function claudeLaunchArgv(opts: ClaudeLaunchCommandOptions): string[] {
+  if (opts.extraBodyPreloadPath && opts.claudeNodeLaunch) {
+    const { interpreter, entryScript } = opts.claudeNodeLaunch;
+    return [interpreter, "-r", opts.extraBodyPreloadPath, entryScript, ...opts.claudeArgs];
+  }
+  return [opts.claudePath, ...opts.claudeArgs];
 }
 
 export function buildClaudeLaunchCommand(opts: ClaudeLaunchCommandOptions): string {
-  const envCommand = [
-    "env",
-    ...opts.unsetEnvArgs,
-    ...opts.envArgs,
-    opts.claudePath,
-    ...opts.claudeArgs,
-  ]
+  const envCommand = ["env", ...opts.unsetEnvArgs, ...opts.envArgs, ...claudeLaunchArgv(opts)]
     .map(shellQuote)
     .join(" ");
   const holdSeconds = Math.max(1, Math.ceil(opts.holdMs / 1000));
   const script = [
-    ...(process.env.CLAUDE_CODE_EXTRA_BODY_FILE ? [extraBodyFromFileShellPrefix()] : []),
     envCommand,
     "status=$?",
     `printf '%s\\n' "$status" > ${shellQuote(opts.exitStatusPath)}`,
