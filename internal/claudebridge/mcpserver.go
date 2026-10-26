@@ -1,6 +1,8 @@
 package claudebridge
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"regexp"
@@ -108,3 +110,38 @@ func MaxHashedToolStemLen() int {
 	ensureMCP()
 	return mcpShortMax
 }
+
+// ToolName is the name the MCP helper offers a tool of the caller's under.
+// Claude Code takes an MCP tool's name as [A-Za-z0-9_-] only, with the MCP
+// server prefix before it in at most 64: it made "spawn.agent" its
+// spawn_agent, which the client never offered (#2649). A name it would
+// change, or one ending as a changed name ends, is told apart by a hash of
+// it, the same in every run, so a resumed session and a conversation's
+// history name the tool as before; the bridges map it back.
+func ToolName(name string) string {
+	if ToolNameOK(name) && !toolNameHashed.MatchString(name) {
+		return name
+	}
+	sum := sha256.Sum256([]byte(name))
+	short := toolNameBad.ReplaceAllString(name, "_")
+	if max := MaxHashedToolStemLen(); len(short) > max {
+		short = short[:max]
+	}
+	return short + "_" + hex.EncodeToString(sum[:6])
+}
+
+// ToolNameOK says Claude Code keeps name as it is, under the server's
+// prefix.
+func ToolNameOK(name string) bool {
+	max := MaxOfferedToolNameLen()
+	if len(name) < 1 || len(name) > max {
+		return false
+	}
+	return toolNameChars.MatchString(name)
+}
+
+var (
+	toolNameChars  = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	toolNameBad    = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+	toolNameHashed = regexp.MustCompile(`_[0-9a-f]{12}$`)
+)

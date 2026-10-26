@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/claudecode"
 	"github.com/yetone/magpie/internal/libc"
+	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -144,5 +146,45 @@ func TestClaudeCodeRunsSetsTheUsersOwn(t *testing.T) {
 	out, err = claudeCodeOut(t, "runs")
 	if err != nil || strings.Contains(out, "your setting") {
 		t.Fatalf("runs after auto said (%v):\n%s", err, out)
+	}
+}
+
+// `magpie claude-code mode <account> tui` sets a saved Claude account to
+// the Claude TUI, says it takes effect at the gateway's next start, and
+// refuses a mode or account there is none of.
+func TestClaudeCodeModeSetsTheAccount(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	old := provider.ClaudeTUIGOOS
+	provider.ClaudeTUIGOOS = "linux"
+	t.Cleanup(func() { provider.ClaudeTUIGOOS = old })
+	logins := `[{"agent":"claude","user":"side@example.com","on":true,"plan":"max","seen":"2026-01-01T00:00:00Z",` +
+		`"auth":{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":4102444800000,"subscriptionType":"max"}}}]`
+	if err := os.MkdirAll(filepath.Dir(provider.Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(provider.Path()), "logins.json"), []byte(logins), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := claudeCodeOut(t, "mode", "side@example.com", "tui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "side@example.com") || !strings.Contains(out, "tui") || !strings.Contains(out, "no gateway is serving") {
+		t.Fatalf("mode tui said:\n%s", out)
+	}
+	p, err := claudeSubscription()
+	if err != nil || p.ClaudeModeOf("side@example.com") != provider.ClaudeTUI {
+		t.Fatalf("not set: %v", err)
+	}
+	for _, args := range [][]string{{"mode", "side@example.com", "fast"}, {"mode", "nobody@example.com", "tui"}} {
+		if _, err := claudeCodeOut(t, args...); err == nil {
+			t.Errorf("%v was taken", args)
+		}
+	}
+	if p, _ := claudeSubscription(); p.ClaudeModeOf("side@example.com") != provider.ClaudeTUI {
+		t.Fatal("a refused mode changed the account's")
 	}
 }

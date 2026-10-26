@@ -91,5 +91,16 @@ func TestNewToolsListedBeforeTheAnswer(t *testing.T) {
 	if m := next(); m["id"] != float64(2) || m["result"] == nil {
 		t.Fatalf("call answer = %v", m)
 	}
+	// and the Claude TUI's wrapper, which sends its first prompt only once
+	// the tools are listed, is told they were
+	for i := 0; ; i++ {
+		if b, err := os.ReadFile(toolsPath + ".listed"); err == nil && string(b) == "1\n" {
+			break
+		}
+		if i == 200 {
+			t.Fatal("no tools.json.listed after tools/list")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	inW.Close()
 }

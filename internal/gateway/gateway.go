@@ -417,6 +417,8 @@ type Server struct {
 	// from, so every later turn goes straight to one that takes them.
 	unfit        map[string]bool
 	subscription *subscriptionBridge
+	// the Claude TUI bridge, for accounts set to it (claude_tui.go)
+	tui *tuiRuntimeBridge
 	// imageStore is the image MCP server's jobs and images (image_mcp.go)
 	imageStore   imageMCPStore
 	debug        bool
@@ -470,6 +472,7 @@ func New() *Server {
 		client:       &http.Client{Transport: rpmTransport{upstreamTransport()}},
 		unfit:        make(map[string]bool),
 		subscription: newSubscriptionBridge(),
+		tui:          newTUIBridge(),
 		debug:        os.Getenv("MAGPIE_DEBUG") != "",
 	}
 }
@@ -572,6 +575,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	s.lnMu.Lock()
 	s.ln = ln
 	s.lnMu.Unlock()
+	// the Claude TUI's web search is this gateway's, and what its accounts
+	// need is checked as it starts (claude_tui.go)
+	tuiServer.Store(s)
+	go s.startClaudeTUI(ctx)
 	// a socket handed over (handover.go): the magpie that had it stops
 	// accepting once told this one serves on it
 	if ack := takeAck(); ack != nil {
@@ -677,6 +684,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		defer cancel()
 		srv.Shutdown(c)
 		s.subscription.abortAll()
+		s.tui.Shutdown()
 		provider.FlushServed() // what answered last, kept for the next start and the CLI
 		flushSticks()          // who answered which conversation, for the next start or the magpie handed over to
 	}()
@@ -776,7 +784,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /videos/{id}", s.videosGet)
 	mux.HandleFunc("GET /v1/videos/{id}/content", s.videosContent)
 	mux.HandleFunc("GET /videos/{id}/content", s.videosContent)
-	mux.HandleFunc("POST "+claudeMCPPath+"{token}", s.subscription.mcpCall)
+	mux.HandleFunc("POST "+claudeMCPPath+"{token}", s.claudeMCP)
 	mux.HandleFunc("/mcp/{name}", s.mcpProxy)
 	mux.HandleFunc(SearchMCPPath, s.searchMCP)
 	mux.HandleFunc(VisionMCPPath, s.visionMCP)

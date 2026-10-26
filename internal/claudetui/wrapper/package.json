@@ -1,0 +1,15 @@
+{
+  "name": "magpie-claude-tui-wrapper",
+  "version": "0.2.16-magpie",
+  "private": true,
+  "description": "The Claude TUI bridge's PTY wrapper: claude-bridge (desplega.sh, MIT) as adapted by claude-tui-boost v0.2.16 (MIT), then for magpie.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "bun build ./src/cli.ts --target=bun --outfile=dist/claude-bridge.js",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "zod": "4.6.6"
+  }
+}

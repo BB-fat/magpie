@@ -35,10 +35,19 @@ var notAnAgent = map[string]string{
 	"MAGPIE_EFFORT_UPDATES": "magpie's own switch for effort updates (#617)",
 	"MAGPIE_SITE_ORIGIN":    "a site origin magpie's Omarchy theme answers, to try the site locally",
 	"MAGPIE_PARTNERS":       "where magpie's own partner list is read from (a URL, or off), not a folder",
-	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "Claude Code's behaviour flag, not an agent's folder",
-	"GIT_SSH":         "the user's own SSH program for git, which a skill fetched with their git keeps",
-	"GIT_SSH_COMMAND": "the same, as a command",
-	"TZ":              "the machine's time zone, which a routing rule's hours fall back to (c888ef272), not a folder",
+	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":  "Claude Code's behaviour flag, not an agent's folder",
+	"MAGPIE_CLAUDE_AUTO_READONLY_HISTORY_DRIFT": "magpie's TUI recovery switch, not an agent's folder",
+	"MAGPIE_CLAUDE_AUTO_RECOVER_ORPHANS":        "the same",
+	"MAGPIE_CLAUDE_AUTO_RECOVER_RETRY":          "the same",
+	"MAGPIE_CLAUDE_DURABLE_TOOL_JOURNAL":        "magpie's TUI journal switch, not an agent's folder",
+	"MAGPIE_CLAUDE_FIRST_TURN_ANCHOR":           "magpie's TUI checkpoint switch, not an agent's folder",
+	"MAGPIE_CLAUDE_NATIVE_TMUX_GUARD":           "magpie's TUI ownership switch, not an agent's folder",
+	"MAGPIE_CLAUDE_TUI_DEBUG_API":               "magpie's TUI debug switch, not an agent's folder",
+	"TMUX":                                      "the caller's tmux identity, hashed only to detect a changed native ownership environment",
+	"TMUX_TMPDIR":                               "the same",
+	"GIT_SSH":                                   "the user's own SSH program for git, which a skill fetched with their git keeps",
+	"GIT_SSH_COMMAND":                           "the same, as a command",
+	"TZ":                                        "the machine's time zone, which a routing rule's hours fall back to (c888ef272), not a folder",
 }
 
 // TestFolderVarsAreListed says every variable the packages that find an

@@ -57,7 +57,7 @@ The helper offers each of the client's tools under `bridgeToolName`
 (`bridgeTools`), which Claude Code calls `mcp__<server>__<name>`. With no
 `MAGPIE_CLAUDE_MCP_NAME`, `<server>` is `magpie` (`internal/claudebridge`,
 `MCPServerName`). The env var names that server for the Claude subscription
-bridge only (v1): the `mcpServers` key passed to Claude Code, the MCP
+bridge and the [Claude TUI bridge](claude-tui-bridge.md) alike: the `mcpServers` key passed to Claude Code, the MCP
 `initialize` `serverInfo.name`, the tool prefix, and return detection /
 history replay (`claudebridge.MCPToolPrefix`, `bridgeName`, `toolStart`).
 It is read once when the gateway first makes the subscription bridge or the
@@ -73,7 +73,8 @@ ending as a changed name ends (`_` and 12 hex digits) is cut, made of those
 characters and given a hash of the whole name: unique (`a.b` and `a_b`
 stay apart), the same in every run, so a resumed session, the history
 (`renderParts`) and the tool-choice line (`toolChoiceAsk`) name it as the
-run was offered it. `subscriptionRun.names` (`bridgeNames`) maps it back
+run was offered it; the encoding is `claudebridge.ToolName`, which the
+Claude TUI bridge uses too. `subscriptionRun.names` (`bridgeNames`) maps it back
 to the declared name in `toolStart`, for streamed and whole messages, and
 in `mcpCall` (#2649).
 
@@ -94,6 +95,10 @@ Every other request, and this path with a wrong, spent or encoded token,
 is judged as any other. Without it the call was refused 401, never
 reached the run, and every turn with tool results found no run waiting and
 started a new Claude Code told the whole conversation (#1546).
+
+An account set to `tui` (`accountClaudeModes`) is not answered here: its
+requests go to the [Claude TUI bridge](claude-tui-bridge.md) from
+`serveClaudeSubscription`.
 
 ## Why turns go on in one run
 

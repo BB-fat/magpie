@@ -284,6 +284,12 @@ type Settings struct {
 	// 100 MiB of its own, and a 512 MiB service was OOM-killed (#2956).
 	// It is this machine's, not taken from another's settings.
 	ClaudeRunsMost int `json:"claudeRunsMost,omitempty"`
+	// ClaudeTuiMaxRSSMiB is the most, in MiB, a Claude TUI run's processes
+	// (its wrapper, tmux, Claude Code and MCP helper) may hold resident
+	// together before the run is ended with an error. 0, as by default,
+	// takes the budget of a Claude Code run (claudeRunBudget). It is this
+	// machine's, not taken from another's settings.
+	ClaudeTuiMaxRSSMiB int `json:"claudeTuiMaxRSSMiB,omitempty"`
 	// RefusalRetries is how many more times a request the vendor's safety
 	// filter refused, with nothing said, is asked of another account or
 	// routing group member (#248), unset for every one left. 0 hands the
@@ -1095,6 +1101,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.SessionTerminal = cur.SessionTerminal
 	s.RedactModel = cur.RedactModel
 	s.ClaudeRunsMost = cur.ClaudeRunsMost
+	s.ClaudeTuiMaxRSSMiB = cur.ClaudeTuiMaxRSSMiB
 	s.RequestArchiveLocal, s.RequestArchiveLocalMB = cur.RequestArchiveLocal, cur.RequestArchiveLocalMB
 }
 

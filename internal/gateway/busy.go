@@ -36,7 +36,7 @@ func (b Busy) Any() bool { return b.Requests > 0 || b.Tools > 0 }
 
 // Busy says what is in flight at the gateway now.
 func (s *Server) Busy() Busy {
-	b := Busy{Requests: int(s.inFlight.Load()), Tools: s.subscription.parked(), Bridge: int(s.bridgeInFlight.Load())}
+	b := Busy{Requests: int(s.inFlight.Load()), Tools: s.subscription.parked() + s.tui.Parked(), Bridge: int(s.bridgeInFlight.Load())}
 	if n := s.lastDone.Load(); n != 0 {
 		b.Last = time.Unix(0, n)
 	}

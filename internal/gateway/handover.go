@@ -172,7 +172,7 @@ func (s *Server) drainFor() time.Duration {
 // It returns once ln is closed.
 func (s *Server) ServeCallbacks(ln net.Listener) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST "+claudeMCPPath+"{token}", s.subscription.mcpCall)
+	mux.HandleFunc("POST "+claudeMCPPath+"{token}", s.claudeMCP)
 	err := (&http.Server{Handler: mux, ReadHeaderTimeout: 30 * time.Second}).Serve(ln)
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, http.ErrServerClosed) {
 		return nil

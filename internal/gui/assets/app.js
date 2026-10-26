@@ -13091,6 +13091,8 @@ function renderAccounts(a, p) {
     const capFor = (w) => windowCapOf(p, l.user, w);
     // how many requests it has out at once, and waiting (#892)
     if (p) row.append(laneLimitPill(p, l.user, p.id + "@" + String(l.user).toLowerCase(), l.user));
+    // how the gateway runs it: standard, or the Claude TUI (Linux)
+    if (p && a.agent === "claude" && (p.claudeTuiHere || claudeModeOf(p, l.user) === "tui")) row.append(claudeModePill(p, l.user));
     const held = capHeldOf(quota?.[l.user], capFor);
     if (held) row.append(capHeldNote(held, held.cap, several, direct));
     row.append(el("span", "grow"));
@@ -14020,6 +14022,38 @@ function laneLimitPill(p, ref, who, name) {
   };
   return pill;
 }
+// A Claude account runs on the standard bridge or the Claude TUI (the
+// interactive Claude Code in a private tmux). The gateway reads which when
+// it starts: the pill says the mode set and, while the gateway serving
+// runs another, that the change waits for a restart.
+function claudeModeOf(p, user) {
+  return p?.accountClaudeModes?.[String(user).toLowerCase()] === "tui" ? "tui" : "standard";
+}
+function claudeModePill(p, user) {
+  const set = claudeModeOf(p, user);
+  const now = p.claudeTuiNow?.[String(user).toLowerCase()] ? "tui" : "standard";
+  const pending = p.claudeTuiLive && now !== set;
+  const name = set === "tui" ? t("Claude TUI") : t("Standard");
+  const pill = el("button", "amode" + (set === "tui" ? " set" : "") + (pending ? " pending" : ""), pending ? t("{mode} after restart", { mode: name }) : name);
+  pill.type = "button";
+  pill.title = (set === "tui" ? t("Answered by the interactive Claude Code in a private tmux on this machine (Linux), its tools the client's") : t("Answered by Claude Code's stream-json bridge, as every Claude account is by default"))
+    + (pending ? "\n" + t("The gateway runs it as {mode} until it is restarted. Restart it once no tool call is under way: a conversation doesn't go on across the two modes", { mode: now === "tui" ? t("Claude TUI") : t("Standard") }) : "")
+    + "\n" + t("Click to change");
+  pill.setAttribute("aria-haspopup", "menu");
+  pill.setAttribute("aria-expanded", "false");
+  pill.onclick = (e) => {
+    e.stopPropagation();
+    if (pill.classList.contains("open")) return closeProtoMenu();
+    const opts = [{ v: "standard", name: "Standard", note: "Claude Code's stream-json bridge" }, { v: "tui", name: "Claude TUI", note: "The interactive Claude Code, on Linux; takes effect when the gateway restarts" }];
+    openProtoMenu(pill, opts, set, (v) => {
+      if (v === set) return;
+      accountAction("providers/claude-mode", { id: p.id, account: user, mode: v },
+        v === "tui" ? t("{who} runs on the Claude TUI once the gateway restarts", { who: user }) : t("{who} runs on the standard bridge once the gateway restarts", { who: user }));
+    }, "How the gateway runs it", "sess-menu");
+  };
+  return pill;
+}
+
 // refreshLanes rewrites the pills in place, so nothing moves; with none
 // in sight its tick stops (#3185) until one is drawn
 async function refreshLanes() {

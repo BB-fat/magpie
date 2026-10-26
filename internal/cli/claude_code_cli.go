@@ -11,13 +11,15 @@ import (
 	"github.com/yetone/magpie/internal/claudecode"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/proc"
+	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
 
 const claudeCodeUsage = "usage: magpie claude-code                  which Claude Code the Claude subscription runs\n" +
 	"       magpie claude-code install [--yes]  download Anthropic's own build of Claude Code for magpie (a server or container without one)\n" +
 	"       magpie claude-code remove           delete the Claude Code magpie downloaded\n" +
-	"       magpie claude-code runs [N|auto]    how many Claude Code processes may run at once (auto: what this machine's memory holds)"
+	"       magpie claude-code runs [N|auto]    how many Claude Code processes may run at once (auto: what this machine's memory holds)\n" +
+	"       magpie claude-code mode [account] [standard|tui]  how the gateway runs a Claude account: standard, or the interactive Claude TUI (Linux; from the gateway's next start)"
 
 // claudeCodeCmd: magpie claude-code [install [--yes]|remove]. A Claude
 // subscription is answered by Claude Code, and signed in to through it; a
@@ -52,6 +54,8 @@ func claudeCodeCmd(args []string) error {
 		return nil
 	case "runs":
 		return claudeCodeRuns(args[1:])
+	case "mode":
+		return claudeCodeMode(args[1:])
 	case "-h", "--help", "help":
 		fmt.Println(claudeCodeUsage)
 		return nil
@@ -193,4 +197,73 @@ func mb(n int64) string { return fmt.Sprintf("%.0f MB", float64(n)/(1<<20)) }
 func isTerminal(f *os.File) bool {
 	st, err := f.Stat()
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
+}
+
+// claudeCodeMode: magpie claude-code mode [account] [standard|tui]. Each
+// Claude account runs on the standard bridge or the Claude TUI; the
+// gateway reads which when it starts, so a change is said as pending
+// until it is restarted.
+func claudeCodeMode(args []string) error {
+	if len(args) > 2 || len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		fmt.Println(claudeCodeUsage)
+		return nil
+	}
+	p, err := claudeSubscription()
+	if err != nil {
+		return err
+	}
+	if len(args) == 2 {
+		if err := provider.SetAccountClaudeMode(p.ID, args[0], args[1]); err != nil {
+			return err
+		}
+		if p, err = claudeSubscription(); err != nil {
+			return err
+		}
+	}
+	users := p.AccountRefs()
+	if len(args) > 0 {
+		ref, ok := p.AccountRefOf(args[0])
+		if !ok {
+			return fmt.Errorf("%s has no account %q", p.Name, args[0])
+		}
+		users = []string{ref}
+	}
+	if len(users) == 0 {
+		fmt.Println(muted.Render("no Claude account is signed in · magpie accounts add claude"))
+		return nil
+	}
+	live, serving := gateway.ReadTUILive()
+	pending := false
+	for _, u := range users {
+		set := p.ClaudeModeOf(u)
+		line := set
+		if serving {
+			now := provider.ClaudeStandard
+			if live.Runs(p.ID, u) {
+				now = provider.ClaudeTUI
+			}
+			if now != set {
+				line = now + " now · " + set + " once the gateway restarts"
+				pending = true
+			}
+		}
+		fmt.Println(green.Render("●"), u, muted.Render("· "+line))
+	}
+	if !serving {
+		fmt.Println(muted.Render("  no gateway is serving: the next one to start runs each as set"))
+	}
+	if pending {
+		fmt.Println(muted.Render("  restart the gateway for a change to take effect, once no tool call is under way: a TUI run and a standard one don't take up each other's conversations"))
+	}
+	return nil
+}
+
+// claudeSubscription is the provider of the Claude accounts.
+func claudeSubscription() (*provider.Provider, error) {
+	for _, p := range provider.All() {
+		if p.Account != nil && p.Account.Agent == "claude" {
+			return provider.Find(p.ID)
+		}
+	}
+	return nil, fmt.Errorf("no Claude subscription is set up · magpie accounts add claude")
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/yetone/magpie/internal/libc"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/source"
+	"github.com/yetone/magpie/internal/update"
 )
 
 // BunVersion is the Bun magpie downloads to run plugins with the first
@@ -257,6 +258,36 @@ func Bun(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("downloading Bun %s to run plugins: %w", v, err)
 	}
 	return exe, nil
+}
+
+// BunPath is the Bun plugins run on, as Bun gives it, but never downloads
+// one or renames one: $MAGPIE_BUN when set, else the one magpie keeps,
+// under its magpie-bun name or the name it was downloaded under before
+// (left as it is). It fails, saying how to get one, when there is none or
+// $MAGPIE_BUN is older than min.
+func BunPath(min string) (string, error) {
+	if b := os.Getenv("MAGPIE_BUN"); b != "" {
+		if info, err := os.Stat(b); err != nil || info.IsDir() {
+			return "", fmt.Errorf("$MAGPIE_BUN (%s) is not a program", b)
+		}
+		v := BunInUse()
+		if v == "" {
+			return "", fmt.Errorf("$MAGPIE_BUN (%s) doesn't say its version: it may not run on this system", b)
+		}
+		if update.Newer(min, v) {
+			return "", fmt.Errorf("$MAGPIE_BUN (%s) is Bun %s; %s or newer is needed", b, v, min)
+		}
+		return b, nil
+	}
+	bunMu.Lock()
+	defer bunMu.Unlock()
+	v := inUseLocked()
+	for _, exe := range []string{bunExeOf(v), filepath.Join(bunDirOf(v), bunExe())} {
+		if info, err := os.Stat(exe); err == nil && !info.IsDir() {
+			return exe, nil
+		}
+	}
+	return "", fmt.Errorf("magpie has no Bun %s yet: set MAGPIE_BUN to a Bun %s or newer, or install a plugin once, which downloads magpie's own", v, min)
 }
 
 // HasBun is whether a Bun is at hand without a download.
