@@ -51,7 +51,7 @@ account is never answered by `claude -p`.
    serving when an account is set to `tui`): `claudetui.Supported`
    (Linux), `claudebridge.LoadMCPConfig`, `claudetui.Init` with the
    gateway's own (below), `claudetui.Check` for tmux ≥ 3.2, Claude Code ≥
-   2.1.268 and Bun, `claudetui.InstallWrapper`, `claudetui.SweepTmux`. What
+   2.1.268 and Bun, `claudetui.InstallWrapper`, `claudetui.Sweep`. What
    is missing is logged, and every TUI request answers 502 with it. Nothing
    is installed, downloaded or run with sudo.
 2. A client cache-mark opt-in (`X-Magpie-Cache-Marks: client`) is refused
@@ -161,7 +161,9 @@ said (`JSON_LIMITS`).
   noted under it are killed, by pid and start time, never by name. The
   wrapper gets SIGTERM if the gateway dies (`Pdeathsig`). A gateway coming
   up ends the tmux servers of gateways no longer running, by their
-  sockets (`SweepTmux`).
+  sockets, and removes those runs' temp folders
+  (`magpie-claude-pty-<gateway pid>-*`, their callback and tools files)
+  (`Sweep`).
 - `MAGPIE_CLAUDE_IDLE_MAX` and `MAGPIE_CLAUDE_IDLE_TTL` are the standard
   bridge's idle pool alone: a TUI run ends with its reply, and its
   conversation's next turn resumes the checkpointed session.

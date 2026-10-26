@@ -1321,7 +1321,8 @@ func (b *subscriptionBridge) startInteractiveWithPromptImages(ctx context.Contex
 	if err != nil {
 		return nil, nil, err
 	}
-	tmp, err := os.MkdirTemp("", "magpie-claude-pty-")
+	// named for this gateway, so one coming up after it died removes it
+	tmp, err := os.MkdirTemp(tempRoot(), fmt.Sprintf("%s%d-", runDirPrefix, os.Getpid()))
 	if err != nil {
 		return nil, nil, err
 	}

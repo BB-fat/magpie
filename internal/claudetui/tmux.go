@@ -16,14 +16,14 @@ import (
 // (tmux -D) on a socket in tmuxDir, with no config (-f /dev/null): never
 // the user's tmux, and one magpie can end by its socket alone. A socket is
 // named for the gateway that made it, so a gateway coming up ends what one
-// that died left (SweepTmux), and leaves a live one's (a restart to update
+// that died left (Sweep), and leaves a live one's (a restart to update
 // hands the gateway over while the old one's runs finish).
 
 // tmuxDir is where runs' tmux sockets are, this user's alone. A socket's
 // path must fit a sun_path (108 bytes), so it is short and under the temp
 // folder.
 func tmuxDir() (string, error) {
-	d := filepath.Join(os.TempDir(), "magpie-claude-tui-"+strconv.Itoa(os.Getuid()))
+	d := filepath.Join(tempRoot(), "magpie-claude-tui-"+strconv.Itoa(os.Getuid()))
 	return ownedWorkDir(d)
 }
 
@@ -56,9 +56,29 @@ func killTmux(sock string) {
 	_ = os.Remove(sock)
 }
 
-// SweepTmux ends the tmux servers runs of a gateway no longer running
-// left: each is found by its socket in tmuxDir, never by a process's name.
-func SweepTmux() {
+// runDirPrefix starts the name of a run's own temp folder (its callback
+// and tools files), then the gateway's pid.
+const runDirPrefix = "magpie-claude-pty-"
+
+// Sweep removes what runs of a gateway no longer running left: their tmux
+// servers, ended by their sockets in tmuxDir, and their temp folders.
+// Nothing is found by a process's name.
+func Sweep() {
+	dirs, _ := filepath.Glob(filepath.Join(tempRoot(), runDirPrefix+"*-*"))
+	for _, d := range dirs {
+		pid, err := strconv.Atoi(strings.SplitN(strings.TrimPrefix(filepath.Base(d), runDirPrefix), "-", 2)[0])
+		if err != nil || pid == os.Getpid() || gatewayAlive(pid) {
+			continue
+		}
+		if info, err := os.Lstat(d); err == nil && info.IsDir() {
+			_ = os.RemoveAll(d)
+		}
+	}
+	sweepTmux()
+}
+
+// sweepTmux ends the tmux servers runs of a gateway no longer running left.
+func sweepTmux() {
 	d, err := tmuxDir()
 	if err != nil {
 		return

@@ -159,7 +159,7 @@ func setUpClaudeTUI(ctx context.Context) error {
 				Wrapper:    []string{deps.Bun, bundle},
 				HelperArgv: []string{exe, "claude-mcp-helper"},
 			})
-			claudetui.SweepTmux()
+			claudetui.Sweep()
 			log.Printf("claude-tui: ready: tmux %s, Claude Code %s, Bun %s, MCP server %q", deps.TmuxVersion, deps.ClaudeVersion, deps.Bun, claudebridge.MCPServerName())
 			return nil
 		}()

@@ -467,7 +467,7 @@ func sweepBridgeTemps(tempDir string) {
 // is a folder they own that no one else can write to: one someone else
 // made, or could put a CLAUDE.md in, would be read by every run.
 func claudeWorkDir() (string, error) {
-	dir := filepath.Join(os.TempDir(), claudeWorkName())
+	dir := filepath.Join(tempRoot(), claudeWorkName())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}

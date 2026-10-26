@@ -136,9 +136,12 @@ func realGatewayKilled(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	SweepTmux()
-	if left, _ := filepath.Glob(filepath.Join(os.TempDir(), fmt.Sprintf("magpie-claude-tui-%d", os.Getuid()), fmt.Sprintf("%d-*.sock", cmd.Process.Pid))); len(left) != 0 {
+	Sweep()
+	if left, _ := filepath.Glob(filepath.Join(tempRoot(), fmt.Sprintf("magpie-claude-tui-%d", os.Getuid()), fmt.Sprintf("%d-*.sock", cmd.Process.Pid))); len(left) != 0 {
 		t.Fatalf("the killed gateway's tmux sockets are left: %v", left)
+	}
+	if left, _ := filepath.Glob(filepath.Join(tempRoot(), fmt.Sprintf("magpie-claude-pty-%d-*", cmd.Process.Pid))); len(left) != 0 {
+		t.Fatalf("the killed gateway's run folders are left: %v", left)
 	}
 }
 
@@ -197,7 +200,7 @@ func waitGone(t *testing.T, b *Bridge, profile string) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if left, _ := filepath.Glob(filepath.Join(os.TempDir(), fmt.Sprintf("magpie-claude-tui-%d", os.Getuid()), fmt.Sprintf("%d-*.sock", os.Getpid()))); len(left) != 0 {
+	if left, _ := filepath.Glob(filepath.Join(tempRoot(), fmt.Sprintf("magpie-claude-tui-%d", os.Getuid()), fmt.Sprintf("%d-*.sock", os.Getpid()))); len(left) != 0 {
 		t.Fatalf("tmux sockets left: %v", left)
 	}
 }

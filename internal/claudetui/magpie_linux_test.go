@@ -89,15 +89,14 @@ func zombie(pid int) bool {
 
 // A gateway coming up ends the tmux servers one that died left, by their
 // sockets, and leaves a live gateway's and its own.
-func TestSweepTmuxEndsWhatADeadGatewayLeft(t *testing.T) {
+func TestSweepEndsWhatADeadGatewayLeft(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("TMPDIR", dir)
 	log := filepath.Join(dir, "tmux.log")
 	tmux := filepath.Join(dir, "tmux")
 	if err := os.WriteFile(tmux, []byte("#!/bin/sh\necho \"$@\" >> "+log+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	withConfig(t, &Config{Tmux: tmux})
+	withConfig(t, &Config{Tmux: tmux, TempRoot: dir})
 	d, err := tmuxDir()
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +107,27 @@ func TestSweepTmuxEndsWhatADeadGatewayLeft(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	SweepTmux()
+	// and the runs' temp folders, named for their gateway
+	runDirs := map[string]bool{
+		fmt.Sprintf("magpie-claude-pty-%d-111", dead):        false,
+		fmt.Sprintf("magpie-claude-pty-%d-222", os.Getpid()): true,
+		"magpie-claude-pty-1-333":                            true,
+		"magpie-claude-pty-444":                              true, // no gateway named: left alone
+	}
+	for name := range runDirs {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name, "callback"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	Sweep()
+	for name, kept := range runDirs {
+		if _, err := os.Stat(filepath.Join(dir, name)); (err == nil) != kept {
+			t.Errorf("run folder %s kept %v, want %v", name, err == nil, kept)
+		}
+	}
 	b, _ := os.ReadFile(log)
 	if got := strings.TrimSpace(string(b)); got != "-S "+filepath.Join(d, fmt.Sprintf("%d-aaaaaaaaaaaa.sock", dead))+" kill-server" {
 		t.Fatalf("tmux was asked %q", got)

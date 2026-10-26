@@ -190,3 +190,18 @@ func TestOlder(t *testing.T) {
 		}
 	}
 }
+
+// A conversation's checkpoint and folder are its account's under one MCP
+// server name: after a rename, or on another account, its next turn is
+// rebuilt from the request, never resumed from the other's session.
+func TestOwnerKeepsNamesAndAccountsApart(t *testing.T) {
+	a := Owner("claude", "me@example.com", "magpie")
+	for _, other := range []string{Owner("claude", "me@example.com", "corp-tools"), Owner("claude", "you@example.com", "magpie")} {
+		if interactiveSessionStateKey(a, "conv") == interactiveSessionStateKey(other, "conv") {
+			t.Fatalf("%q and %q share a checkpoint", a, other)
+		}
+	}
+	if user, own := ownerAccount(a); user != "me@example.com" || own {
+		t.Fatalf("the owner names %q (own %v), not its account", user, own)
+	}
+}

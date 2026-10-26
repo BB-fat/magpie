@@ -36,6 +36,10 @@ type Config struct {
 	// Tmux is the tmux the wrapper runs its private server with.
 	Tmux string
 
+	// TempRoot holds runs' folders and tmux sockets: the system's temp
+	// folder when unset (tests keep theirs in their own home).
+	TempRoot string
+
 	// HelperArgv runs magpie's MCP helper (magpie claude-mcp-helper); the
 	// callback file and tools file are appended.
 	HelperArgv []string
@@ -112,6 +116,9 @@ func Init(cfg *Config) {
 	if cfg.Tmux != "" {
 		c.Tmux = cfg.Tmux
 	}
+	if cfg.TempRoot != "" {
+		c.TempRoot = cfg.TempRoot
+	}
 	if len(cfg.HelperArgv) > 0 {
 		c.HelperArgv = slices.Clone(cfg.HelperArgv)
 	}
@@ -163,6 +170,14 @@ func Init(cfg *Config) {
 	config = &c
 }
 
+// tempRoot is where runs' folders and tmux sockets are made.
+func tempRoot() string {
+	if config.TempRoot != "" {
+		return config.TempRoot
+	}
+	return os.TempDir()
+}
+
 // mcpToolPrefix is mcp__<server>__, how Claude Code names the helper's
 // tools.
 func mcpToolPrefix() string { return "mcp__" + config.MCPServer + "__" }
@@ -186,7 +201,7 @@ func mustStateDir() string {
 	if d, err := stateDir(); err == nil {
 		return d
 	}
-	d := filepath.Join(os.TempDir(), "magpie-claude-tui-"+strconv.Itoa(os.Getuid()))
+	d := filepath.Join(tempRoot(), "magpie-claude-tui-"+strconv.Itoa(os.Getuid()))
 	_ = os.MkdirAll(d, 0o700)
 	return d
 }

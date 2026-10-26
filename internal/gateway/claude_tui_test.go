@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -40,6 +41,7 @@ func tuiAccount(t *testing.T, wrapper string) provider.Provider {
 		Wrapper:    []string{wrapper},
 		HelperArgv: []string{"/bin/false"},
 		MCPServer:  claudebridge.MCPServerName(),
+		TempRoot:   t.TempDir(),
 		Room: func(ctx context.Context, what string) (func(bool), error) {
 			return claudeRoom.take(ctx, what)
 		},
@@ -306,5 +308,76 @@ func TestClaudeTUIMessagesDeclareNoStandInTools(t *testing.T) {
 	}
 	if !strings.Contains(string(m["messages"]), `"tool_use"`) {
 		t.Fatalf("the history's calls are gone: %s", m["messages"])
+	}
+}
+
+// A TUI run's callback token is let in without a gateway key while the run
+// lives, and not after; a token no run has is 404.
+func TestClaudeTUICallbackTokenLivesWithTheRun(t *testing.T) {
+	gate := filepath.Join(t.TempDir(), "go")
+	wrapper := tuiWrapper(t, strings.Split(tuiTextRows, "\n")...)
+	b, _ := os.ReadFile(wrapper)
+	script := strings.Replace(string(b), "cat >/dev/null\n", "cat >/dev/null\nwhile [ ! -f "+gate+" ]; do sleep 0.02; done\n", 1)
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := tuiAccount(t, wrapper)
+	claudetui.Init(&claudetui.Config{AddCallback: addCallback, DropCallback: dropCallback})
+	s := tuiTestServer(t)
+	body := `{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.serveClaudeSubscription(httptest.NewRecorder(), httptest.NewRequest("POST", "/", strings.NewReader(body)), provider.Anthropic, p, "claude-sonnet-5", []byte(body), &Usage{})
+	}()
+	// the run's callback file, as its wrapper was given it
+	var token string
+	argsFile := filepath.Join(filepath.Dir(wrapper), "args")
+	waitFor(t, "the run's callback file", func() bool {
+		args, err := os.ReadFile(argsFile)
+		if err != nil {
+			return false
+		}
+		for _, a := range strings.Split(string(args), "\n") {
+			var cfg struct {
+				MCPServers map[string]struct{ Args []string } `json:"mcpServers"`
+			}
+			if json.Unmarshal([]byte(a), &cfg) != nil {
+				continue
+			}
+			for _, srv := range cfg.MCPServers {
+				if n := len(srv.Args); n >= 2 {
+					if b, err := os.ReadFile(srv.Args[n-2]); err == nil {
+						token = strings.TrimPrefix(string(b)[strings.Index(string(b), claudeMCPPath):], claudeMCPPath)
+						return true
+					}
+				}
+			}
+		}
+		return false
+	})
+	call := func(tok string) *http.Request {
+		return httptest.NewRequest("POST", claudeMCPPath+tok, strings.NewReader(`{}`))
+	}
+	if !ownCallback(call(token)) {
+		t.Fatal("a live TUI run's token isn't let in")
+	}
+	if ownCallback(call(randomToken())) {
+		t.Fatal("a token no run has is let in")
+	}
+	rec := httptest.NewRecorder()
+	r := call(randomToken())
+	r.SetPathValue("token", strings.TrimPrefix(r.URL.Path, claudeMCPPath))
+	s.claudeMCP(rec, r)
+	if rec.Code != 404 {
+		t.Fatalf("an unknown token answered %d", rec.Code)
+	}
+	if err := os.WriteFile(gate, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	waitFor(t, "the run ends", func() bool { return !s.tui.Busy() })
+	if ownCallback(call(token)) {
+		t.Fatal("an ended TUI run's token is still let in")
 	}
 }

@@ -644,7 +644,7 @@ func liteStatelessWorkDir() (string, func(), error) {
 			liteStateless.Unlock()
 		})
 	}
-	dir, err := ownedWorkDir(filepath.Join(os.TempDir(), fmt.Sprintf("magpie-claude-stateless-%d", i)))
+	dir, err := ownedWorkDir(filepath.Join(tempRoot(), fmt.Sprintf("magpie-claude-stateless-%d", i)))
 	if err != nil {
 		release()
 		return "", func() {}, err
