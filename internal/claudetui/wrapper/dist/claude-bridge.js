@@ -15,319 +15,11 @@ var __export = (target, all) => {
     });
 };
 
-// node_modules/zod/v4/core/regexes.js
-var exports_regexes = {};
-__export(exports_regexes, {
-  anyString: () => anyString,
-  base64: () => base64,
-  base64url: () => base64url,
-  bigint: () => bigint,
-  boolean: () => boolean,
-  browserEmail: () => browserEmail,
-  cidrv4: () => cidrv4,
-  cidrv6: () => cidrv6,
-  creditCard: () => creditCard,
-  cuid: () => cuid,
-  cuid2: () => cuid2,
-  currencyCode: () => currencyCode,
-  date: () => date,
-  datetime: () => datetime,
-  domain: () => domain,
-  duration: () => duration,
-  e164: () => e164,
-  email: () => email,
-  emoji: () => emoji,
-  extendedDuration: () => extendedDuration,
-  guid: () => guid,
-  hex: () => hex,
-  hostname: () => hostname,
-  html5Email: () => html5Email,
-  httpProtocol: () => httpProtocol,
-  iban: () => iban,
-  idnEmail: () => idnEmail,
-  integer: () => integer,
-  ipv4: () => ipv4,
-  ipv6: () => ipv6,
-  ksuid: () => ksuid,
-  lowercase: () => lowercase,
-  mac: () => mac,
-  md5_base64: () => md5_base64,
-  md5_base64url: () => md5_base64url,
-  md5_hex: () => md5_hex,
-  nanoid: () => nanoid,
-  nanoidOfLength: () => nanoidOfLength,
-  null: () => _null,
-  number: () => number,
-  rfc5322Email: () => rfc5322Email,
-  sha1_base64: () => sha1_base64,
-  sha1_base64url: () => sha1_base64url,
-  sha1_hex: () => sha1_hex,
-  sha256_base64: () => sha256_base64,
-  sha256_base64url: () => sha256_base64url,
-  sha256_hex: () => sha256_hex,
-  sha384_base64: () => sha384_base64,
-  sha384_base64url: () => sha384_base64url,
-  sha384_hex: () => sha384_hex,
-  sha512_base64: () => sha512_base64,
-  sha512_base64url: () => sha512_base64url,
-  sha512_hex: () => sha512_hex,
-  string: () => string,
-  time: () => time2,
-  ulid: () => ulid,
-  undefined: () => _undefined,
-  unicodeEmail: () => unicodeEmail,
-  uppercase: () => uppercase,
-  uuid: () => uuid,
-  uuid4: () => uuid4,
-  uuid6: () => uuid6,
-  uuid7: () => uuid7,
-  xid: () => xid
-});
-
-// node_modules/zod/v4/classic/schemas.js
-var exports_schemas2 = {};
-__export(exports_schemas2, {
-  ZodAny: () => ZodAny,
-  ZodArray: () => ZodArray,
-  ZodBase64: () => ZodBase64,
-  ZodBase64URL: () => ZodBase64URL,
-  ZodBigInt: () => ZodBigInt,
-  ZodBigIntFormat: () => ZodBigIntFormat,
-  ZodBoolean: () => ZodBoolean,
-  ZodCIDRv4: () => ZodCIDRv4,
-  ZodCIDRv6: () => ZodCIDRv6,
-  ZodCUID: () => ZodCUID,
-  ZodCUID2: () => ZodCUID2,
-  ZodCatch: () => ZodCatch,
-  ZodCodec: () => ZodCodec,
-  ZodCreditCard: () => ZodCreditCard,
-  ZodCustom: () => ZodCustom,
-  ZodCustomStringFormat: () => ZodCustomStringFormat,
-  ZodDate: () => ZodDate,
-  ZodDefault: () => ZodDefault,
-  ZodDiscriminatedUnion: () => ZodDiscriminatedUnion,
-  ZodE164: () => ZodE164,
-  ZodEmail: () => ZodEmail,
-  ZodEmoji: () => ZodEmoji,
-  ZodEnum: () => ZodEnum,
-  ZodExactOptional: () => ZodExactOptional,
-  ZodFile: () => ZodFile,
-  ZodFunction: () => ZodFunction,
-  ZodGUID: () => ZodGUID,
-  ZodIBAN: () => ZodIBAN,
-  ZodIPv4: () => ZodIPv4,
-  ZodIPv6: () => ZodIPv6,
-  ZodISODate: () => ZodISODate,
-  ZodISODateTime: () => ZodISODateTime,
-  ZodISODuration: () => ZodISODuration,
-  ZodISOTime: () => ZodISOTime,
-  ZodInstanceOf: () => ZodInstanceOf,
-  ZodIntersection: () => ZodIntersection,
-  ZodJWT: () => ZodJWT,
-  ZodKSUID: () => ZodKSUID,
-  ZodLazy: () => ZodLazy,
-  ZodLiteral: () => ZodLiteral,
-  ZodMAC: () => ZodMAC,
-  ZodMap: () => ZodMap,
-  ZodNaN: () => ZodNaN,
-  ZodNanoID: () => ZodNanoID,
-  ZodNever: () => ZodNever,
-  ZodNonOptional: () => ZodNonOptional,
-  ZodNull: () => ZodNull,
-  ZodNullable: () => ZodNullable,
-  ZodNumber: () => ZodNumber,
-  ZodNumberFormat: () => ZodNumberFormat,
-  ZodObject: () => ZodObject,
-  ZodOptional: () => ZodOptional,
-  ZodPipe: () => ZodPipe,
-  ZodPrefault: () => ZodPrefault,
-  ZodPreprocess: () => ZodPreprocess,
-  ZodPromise: () => ZodPromise,
-  ZodReadonly: () => ZodReadonly,
-  ZodRecord: () => ZodRecord,
-  ZodSet: () => ZodSet,
-  ZodString: () => ZodString,
-  ZodStringFormat: () => ZodStringFormat,
-  ZodSuccess: () => ZodSuccess,
-  ZodSymbol: () => ZodSymbol,
-  ZodTemplateLiteral: () => ZodTemplateLiteral,
-  ZodTransform: () => ZodTransform,
-  ZodTuple: () => ZodTuple,
-  ZodType: () => ZodType,
-  ZodULID: () => ZodULID,
-  ZodURL: () => ZodURL,
-  ZodUUID: () => ZodUUID,
-  ZodUndefined: () => ZodUndefined,
-  ZodUnion: () => ZodUnion,
-  ZodUnknown: () => ZodUnknown,
-  ZodVoid: () => ZodVoid,
-  ZodXID: () => ZodXID,
-  ZodXor: () => ZodXor,
-  _ZodString: () => _ZodString,
-  _default: () => _default,
-  _function: () => _function,
-  any: () => any,
-  array: () => array,
-  base64: () => base642,
-  base64url: () => base64url2,
-  bigint: () => bigint2,
-  boolean: () => boolean2,
-  catch: () => _catch,
-  check: () => check,
-  cidrv4: () => cidrv42,
-  cidrv6: () => cidrv62,
-  codec: () => codec,
-  creditCard: () => creditCard2,
-  cuid: () => cuid3,
-  cuid2: () => cuid22,
-  currencyCode: () => currencyCode2,
-  custom: () => custom,
-  date: () => date2,
-  describe: () => describe2,
-  discriminatedUnion: () => discriminatedUnion,
-  e164: () => e1642,
-  email: () => email2,
-  emoji: () => emoji2,
-  enum: () => _enum,
-  exactOptional: () => exactOptional,
-  file: () => file,
-  float32: () => float32,
-  float64: () => float64,
-  function: () => _function,
-  guid: () => guid2,
-  hash: () => hash,
-  hex: () => hex2,
-  hostname: () => hostname2,
-  httpUrl: () => httpUrl,
-  iban: () => iban2,
-  instanceof: () => _instanceof,
-  int: () => int,
-  int32: () => int32,
-  int64: () => int64,
-  intersection: () => intersection,
-  invertCodec: () => invertCodec,
-  ipv4: () => ipv42,
-  ipv6: () => ipv62,
-  json: () => json,
-  jwt: () => jwt,
-  keyof: () => keyof,
-  ksuid: () => ksuid2,
-  lazy: () => lazy,
-  literal: () => literal,
-  looseObject: () => looseObject,
-  looseRecord: () => looseRecord,
-  mac: () => mac2,
-  map: () => map,
-  meta: () => meta2,
-  nan: () => nan,
-  nanoid: () => nanoid2,
-  nativeEnum: () => nativeEnum,
-  never: () => never,
-  nonoptional: () => nonoptional,
-  null: () => _null3,
-  nullable: () => nullable,
-  nullish: () => nullish2,
-  number: () => number2,
-  object: () => object,
-  optional: () => optional,
-  partialRecord: () => partialRecord,
-  pipe: () => pipe,
-  prefault: () => prefault,
-  preprocess: () => preprocess,
-  promise: () => promise,
-  readonly: () => readonly,
-  record: () => record,
-  refine: () => refine,
-  set: () => set,
-  strictObject: () => strictObject,
-  string: () => string2,
-  stringFormat: () => stringFormat,
-  stringbool: () => stringbool,
-  success: () => success,
-  superRefine: () => superRefine,
-  symbol: () => symbol,
-  templateLiteral: () => templateLiteral,
-  transform: () => transform,
-  tuple: () => tuple,
-  uint32: () => uint32,
-  uint64: () => uint64,
-  ulid: () => ulid2,
-  undefined: () => _undefined3,
-  union: () => union,
-  unknown: () => unknown,
-  url: () => url,
-  uuid: () => uuid2,
-  uuidv4: () => uuidv4,
-  uuidv6: () => uuidv6,
-  uuidv7: () => uuidv7,
-  void: () => _void2,
-  xid: () => xid2,
-  xor: () => xor
-});
-
-// node_modules/zod/v4/classic/checks.js
-var exports_checks2 = {};
-__export(exports_checks2, {
-  endsWith: () => _endsWith,
-  gt: () => _gt,
-  gte: () => _gte,
-  includes: () => _includes,
-  length: () => _length,
-  lowercase: () => _lowercase,
-  lt: () => _lt,
-  lte: () => _lte,
-  maxLength: () => _maxLength,
-  maxSize: () => _maxSize,
-  mime: () => _mime,
-  minLength: () => _minLength,
-  minSize: () => _minSize,
-  multipleOf: () => _multipleOf,
-  negative: () => _negative,
-  nonnegative: () => _nonnegative,
-  nonpositive: () => _nonpositive,
-  normalize: () => _normalize,
-  overwrite: () => _overwrite,
-  positive: () => _positive,
-  properties: () => _properties,
-  property: () => _property,
-  regex: () => _regex,
-  size: () => _size,
-  slugify: () => _slugify,
-  startsWith: () => _startsWith,
-  toLowerCase: () => _toLowerCase,
-  toUpperCase: () => _toUpperCase,
-  trim: () => _trim,
-  uppercase: () => _uppercase
-});
-
-// node_modules/zod/v4/classic/iso.js
-var exports_iso = {};
-__export(exports_iso, {
-  ZodISODate: () => ZodISODate,
-  ZodISODateTime: () => ZodISODateTime,
-  ZodISODuration: () => ZodISODuration,
-  ZodISOTime: () => ZodISOTime,
-  date: () => date3,
-  datetime: () => datetime2,
-  duration: () => duration2,
-  time: () => time3
-});
-
-// node_modules/zod/v4/classic/coerce.js
-var exports_coerce = {};
-__export(exports_coerce, {
-  bigint: () => bigint3,
-  boolean: () => boolean3,
-  date: () => date4,
-  number: () => number3,
-  string: () => string3
-});
-
 // src/cli.ts
 import { spawn, spawnSync } from "child_process";
 import { createInterface } from "readline";
-import { chmodSync, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync7, statSync as statSync2, writeFileSync as writeFileSync3 } from "fs";
-import { join as join6, resolve as resolve5, dirname as dirname6 } from "path";
+import { chmodSync, existsSync as existsSync6, mkdirSync as mkdirSync4, readFileSync as readFileSync8, statSync as statSync2, writeFileSync as writeFileSync3 } from "fs";
+import { join as join7, resolve as resolve6, dirname as dirname7 } from "path";
 import { fileURLToPath } from "url";
 import { randomUUID as randomUUID3 } from "crypto";
 
@@ -2279,6 +1971,73 @@ var _safeDecodeAsync = (_Err) => async (schema, value, _ctx) => {
   return _safeParseAsync(_Err)(schema, value, _ctx);
 };
 // node_modules/zod/v4/core/regexes.js
+var exports_regexes = {};
+__export(exports_regexes, {
+  anyString: () => anyString,
+  base64: () => base64,
+  base64url: () => base64url,
+  bigint: () => bigint,
+  boolean: () => boolean,
+  browserEmail: () => browserEmail,
+  cidrv4: () => cidrv4,
+  cidrv6: () => cidrv6,
+  creditCard: () => creditCard,
+  cuid: () => cuid,
+  cuid2: () => cuid2,
+  currencyCode: () => currencyCode,
+  date: () => date,
+  datetime: () => datetime,
+  domain: () => domain,
+  duration: () => duration,
+  e164: () => e164,
+  email: () => email,
+  emoji: () => emoji,
+  extendedDuration: () => extendedDuration,
+  guid: () => guid,
+  hex: () => hex,
+  hostname: () => hostname,
+  html5Email: () => html5Email,
+  httpProtocol: () => httpProtocol,
+  iban: () => iban,
+  idnEmail: () => idnEmail,
+  integer: () => integer,
+  ipv4: () => ipv4,
+  ipv6: () => ipv6,
+  ksuid: () => ksuid,
+  lowercase: () => lowercase,
+  mac: () => mac,
+  md5_base64: () => md5_base64,
+  md5_base64url: () => md5_base64url,
+  md5_hex: () => md5_hex,
+  nanoid: () => nanoid,
+  nanoidOfLength: () => nanoidOfLength,
+  null: () => _null,
+  number: () => number,
+  rfc5322Email: () => rfc5322Email,
+  sha1_base64: () => sha1_base64,
+  sha1_base64url: () => sha1_base64url,
+  sha1_hex: () => sha1_hex,
+  sha256_base64: () => sha256_base64,
+  sha256_base64url: () => sha256_base64url,
+  sha256_hex: () => sha256_hex,
+  sha384_base64: () => sha384_base64,
+  sha384_base64url: () => sha384_base64url,
+  sha384_hex: () => sha384_hex,
+  sha512_base64: () => sha512_base64,
+  sha512_base64url: () => sha512_base64url,
+  sha512_hex: () => sha512_hex,
+  string: () => string,
+  time: () => time2,
+  ulid: () => ulid,
+  undefined: () => _undefined,
+  unicodeEmail: () => unicodeEmail,
+  uppercase: () => uppercase,
+  uuid: () => uuid,
+  uuid4: () => uuid4,
+  uuid6: () => uuid6,
+  uuid7: () => uuid7,
+  xid: () => xid
+});
 var cuid = /^[cC][0-9a-z]{6,}$/;
 var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-7][0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{25}$/;
@@ -7717,6 +7476,222 @@ var lazyProcessor = (schema, ctx, _json, params) => {
   const seen = ctx.seen.get(schema);
   seen.ref = innerType;
 };
+// node_modules/zod/v4/classic/schemas.js
+var exports_schemas2 = {};
+__export(exports_schemas2, {
+  ZodAny: () => ZodAny,
+  ZodArray: () => ZodArray,
+  ZodBase64: () => ZodBase64,
+  ZodBase64URL: () => ZodBase64URL,
+  ZodBigInt: () => ZodBigInt,
+  ZodBigIntFormat: () => ZodBigIntFormat,
+  ZodBoolean: () => ZodBoolean,
+  ZodCIDRv4: () => ZodCIDRv4,
+  ZodCIDRv6: () => ZodCIDRv6,
+  ZodCUID: () => ZodCUID,
+  ZodCUID2: () => ZodCUID2,
+  ZodCatch: () => ZodCatch,
+  ZodCodec: () => ZodCodec,
+  ZodCreditCard: () => ZodCreditCard,
+  ZodCustom: () => ZodCustom,
+  ZodCustomStringFormat: () => ZodCustomStringFormat,
+  ZodDate: () => ZodDate,
+  ZodDefault: () => ZodDefault,
+  ZodDiscriminatedUnion: () => ZodDiscriminatedUnion,
+  ZodE164: () => ZodE164,
+  ZodEmail: () => ZodEmail,
+  ZodEmoji: () => ZodEmoji,
+  ZodEnum: () => ZodEnum,
+  ZodExactOptional: () => ZodExactOptional,
+  ZodFile: () => ZodFile,
+  ZodFunction: () => ZodFunction,
+  ZodGUID: () => ZodGUID,
+  ZodIBAN: () => ZodIBAN,
+  ZodIPv4: () => ZodIPv4,
+  ZodIPv6: () => ZodIPv6,
+  ZodISODate: () => ZodISODate,
+  ZodISODateTime: () => ZodISODateTime,
+  ZodISODuration: () => ZodISODuration,
+  ZodISOTime: () => ZodISOTime,
+  ZodInstanceOf: () => ZodInstanceOf,
+  ZodIntersection: () => ZodIntersection,
+  ZodJWT: () => ZodJWT,
+  ZodKSUID: () => ZodKSUID,
+  ZodLazy: () => ZodLazy,
+  ZodLiteral: () => ZodLiteral,
+  ZodMAC: () => ZodMAC,
+  ZodMap: () => ZodMap,
+  ZodNaN: () => ZodNaN,
+  ZodNanoID: () => ZodNanoID,
+  ZodNever: () => ZodNever,
+  ZodNonOptional: () => ZodNonOptional,
+  ZodNull: () => ZodNull,
+  ZodNullable: () => ZodNullable,
+  ZodNumber: () => ZodNumber,
+  ZodNumberFormat: () => ZodNumberFormat,
+  ZodObject: () => ZodObject,
+  ZodOptional: () => ZodOptional,
+  ZodPipe: () => ZodPipe,
+  ZodPrefault: () => ZodPrefault,
+  ZodPreprocess: () => ZodPreprocess,
+  ZodPromise: () => ZodPromise,
+  ZodReadonly: () => ZodReadonly,
+  ZodRecord: () => ZodRecord,
+  ZodSet: () => ZodSet,
+  ZodString: () => ZodString,
+  ZodStringFormat: () => ZodStringFormat,
+  ZodSuccess: () => ZodSuccess,
+  ZodSymbol: () => ZodSymbol,
+  ZodTemplateLiteral: () => ZodTemplateLiteral,
+  ZodTransform: () => ZodTransform,
+  ZodTuple: () => ZodTuple,
+  ZodType: () => ZodType,
+  ZodULID: () => ZodULID,
+  ZodURL: () => ZodURL,
+  ZodUUID: () => ZodUUID,
+  ZodUndefined: () => ZodUndefined,
+  ZodUnion: () => ZodUnion,
+  ZodUnknown: () => ZodUnknown,
+  ZodVoid: () => ZodVoid,
+  ZodXID: () => ZodXID,
+  ZodXor: () => ZodXor,
+  _ZodString: () => _ZodString,
+  _default: () => _default,
+  _function: () => _function,
+  any: () => any,
+  array: () => array,
+  base64: () => base642,
+  base64url: () => base64url2,
+  bigint: () => bigint2,
+  boolean: () => boolean2,
+  catch: () => _catch,
+  check: () => check,
+  cidrv4: () => cidrv42,
+  cidrv6: () => cidrv62,
+  codec: () => codec,
+  creditCard: () => creditCard2,
+  cuid: () => cuid3,
+  cuid2: () => cuid22,
+  currencyCode: () => currencyCode2,
+  custom: () => custom,
+  date: () => date2,
+  describe: () => describe2,
+  discriminatedUnion: () => discriminatedUnion,
+  e164: () => e1642,
+  email: () => email2,
+  emoji: () => emoji2,
+  enum: () => _enum,
+  exactOptional: () => exactOptional,
+  file: () => file,
+  float32: () => float32,
+  float64: () => float64,
+  function: () => _function,
+  guid: () => guid2,
+  hash: () => hash,
+  hex: () => hex2,
+  hostname: () => hostname2,
+  httpUrl: () => httpUrl,
+  iban: () => iban2,
+  instanceof: () => _instanceof,
+  int: () => int,
+  int32: () => int32,
+  int64: () => int64,
+  intersection: () => intersection,
+  invertCodec: () => invertCodec,
+  ipv4: () => ipv42,
+  ipv6: () => ipv62,
+  json: () => json,
+  jwt: () => jwt,
+  keyof: () => keyof,
+  ksuid: () => ksuid2,
+  lazy: () => lazy,
+  literal: () => literal,
+  looseObject: () => looseObject,
+  looseRecord: () => looseRecord,
+  mac: () => mac2,
+  map: () => map,
+  meta: () => meta2,
+  nan: () => nan,
+  nanoid: () => nanoid2,
+  nativeEnum: () => nativeEnum,
+  never: () => never,
+  nonoptional: () => nonoptional,
+  null: () => _null3,
+  nullable: () => nullable,
+  nullish: () => nullish2,
+  number: () => number2,
+  object: () => object,
+  optional: () => optional,
+  partialRecord: () => partialRecord,
+  pipe: () => pipe,
+  prefault: () => prefault,
+  preprocess: () => preprocess,
+  promise: () => promise,
+  readonly: () => readonly,
+  record: () => record,
+  refine: () => refine,
+  set: () => set,
+  strictObject: () => strictObject,
+  string: () => string2,
+  stringFormat: () => stringFormat,
+  stringbool: () => stringbool,
+  success: () => success,
+  superRefine: () => superRefine,
+  symbol: () => symbol,
+  templateLiteral: () => templateLiteral,
+  transform: () => transform,
+  tuple: () => tuple,
+  uint32: () => uint32,
+  uint64: () => uint64,
+  ulid: () => ulid2,
+  undefined: () => _undefined3,
+  union: () => union,
+  unknown: () => unknown,
+  url: () => url,
+  uuid: () => uuid2,
+  uuidv4: () => uuidv4,
+  uuidv6: () => uuidv6,
+  uuidv7: () => uuidv7,
+  void: () => _void2,
+  xid: () => xid2,
+  xor: () => xor
+});
+
+// node_modules/zod/v4/classic/checks.js
+var exports_checks2 = {};
+__export(exports_checks2, {
+  endsWith: () => _endsWith,
+  gt: () => _gt,
+  gte: () => _gte,
+  includes: () => _includes,
+  length: () => _length,
+  lowercase: () => _lowercase,
+  lt: () => _lt,
+  lte: () => _lte,
+  maxLength: () => _maxLength,
+  maxSize: () => _maxSize,
+  mime: () => _mime,
+  minLength: () => _minLength,
+  minSize: () => _minSize,
+  multipleOf: () => _multipleOf,
+  negative: () => _negative,
+  nonnegative: () => _nonnegative,
+  nonpositive: () => _nonpositive,
+  normalize: () => _normalize,
+  overwrite: () => _overwrite,
+  positive: () => _positive,
+  properties: () => _properties,
+  property: () => _property,
+  regex: () => _regex,
+  size: () => _size,
+  slugify: () => _slugify,
+  startsWith: () => _startsWith,
+  toLowerCase: () => _toLowerCase,
+  toUpperCase: () => _toUpperCase,
+  trim: () => _trim,
+  uppercase: () => _uppercase
+});
+
 // node_modules/zod/v4/classic/errors.js
 var _installedErrorProtos = /* @__PURE__ */ new WeakSet([Object.prototype, Error.prototype]);
 function _lazyMethod(proto, key, make) {
@@ -9219,6 +9194,17 @@ function preprocess(fn, schema) {
   });
 }
 // node_modules/zod/v4/classic/iso.js
+var exports_iso = {};
+__export(exports_iso, {
+  ZodISODate: () => ZodISODate,
+  ZodISODateTime: () => ZodISODateTime,
+  ZodISODuration: () => ZodISODuration,
+  ZodISOTime: () => ZodISOTime,
+  date: () => date3,
+  datetime: () => datetime2,
+  duration: () => duration2,
+  time: () => time3
+});
 function datetime2(params) {
   return _isoDateTime(ZodISODateTime, params);
 }
@@ -9953,6 +9939,14 @@ function fromJSONSchema(schema, params) {
   return convertSchema(normalized, ctx);
 }
 // node_modules/zod/v4/classic/coerce.js
+var exports_coerce = {};
+__export(exports_coerce, {
+  bigint: () => bigint3,
+  boolean: () => boolean3,
+  date: () => date4,
+  number: () => number3,
+  string: () => string3
+});
 function string3(params) {
   return _coercedString(ZodString, params);
 }
@@ -10567,6 +10561,54 @@ class NativeApiErrorTurn {
   }
 }
 
+// src/claude-node-entry.ts
+import { existsSync as existsSync5, readFileSync as readFileSync7 } from "fs";
+import { dirname as dirname5, resolve as resolve5 } from "path";
+function resolveClaudeNodeLaunch(claudePath) {
+  const abs = resolve5(claudePath);
+  if (!existsSync5(abs))
+    return null;
+  let text;
+  try {
+    text = readFileSync7(abs, "utf8").slice(0, 16384);
+  } catch {
+    return null;
+  }
+  if (!text.startsWith("#!"))
+    return null;
+  const interpreter = shebangInterpreter(text);
+  if (!interpreter.includes("node"))
+    return null;
+  const entry = findClaudeEntryScript(text, dirname5(abs));
+  if (!entry)
+    return null;
+  return { interpreter, entryScript: entry };
+}
+function shebangInterpreter(firstLines) {
+  const line = firstLines.split(`
+`, 1)[0] ?? "";
+  const match = line.match(/^#!\s*(?:\/usr\/bin\/env\s+(\S+)|(\S+))/);
+  if (!match)
+    return "node";
+  return match[1] ?? match[2] ?? "node";
+}
+function findClaudeEntryScript(text, binDir) {
+  const patterns = [
+    /require\s*\(\s*['"]([^'"]+\.(?:cjs|js|mjs))['"]\s*\)/,
+    /import\s+['"]([^'"]+\.(?:cjs|js|mjs))['"]/,
+    /import\s*\(\s*['"]([^'"]+\.(?:cjs|js|mjs))['"]\s*\)/
+  ];
+  for (const re of patterns) {
+    const hit = text.match(re);
+    if (!hit?.[1])
+      continue;
+    const candidate = resolve5(binDir, hit[1]);
+    if (existsSync5(candidate))
+      return candidate;
+  }
+  return null;
+}
+
 // src/launch-command.ts
 function interactiveMcpBackgroundEnvArgs() {
   return [
@@ -10586,14 +10628,15 @@ function shellQuote2(value) {
     return "''";
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
+function claudeLaunchArgv(opts) {
+  if (opts.extraBodyPreloadPath && opts.claudeNodeLaunch) {
+    const { interpreter, entryScript } = opts.claudeNodeLaunch;
+    return [interpreter, "-r", opts.extraBodyPreloadPath, entryScript, ...opts.claudeArgs];
+  }
+  return [opts.claudePath, ...opts.claudeArgs];
+}
 function buildClaudeLaunchCommand(opts) {
-  const envCommand = [
-    "env",
-    ...opts.unsetEnvArgs,
-    ...opts.envArgs,
-    opts.claudePath,
-    ...opts.claudeArgs
-  ].map(shellQuote2).join(" ");
+  const envCommand = ["env", ...opts.unsetEnvArgs, ...opts.envArgs, ...claudeLaunchArgv(opts)].map(shellQuote2).join(" ");
   const holdSeconds = Math.max(1, Math.ceil(opts.holdMs / 1000));
   const script = [
     envCommand,
@@ -10609,7 +10652,7 @@ function buildClaudeLaunchCommand(opts) {
 
 // src/native-tmux-guard.ts
 import { closeSync as closeSync2, fsyncSync as fsyncSync2, openSync as openSync2, renameSync as renameSync3, unlinkSync as unlinkSync2, writeSync as writeSync2 } from "fs";
-import { dirname as dirname5, isAbsolute, join as join5 } from "path";
+import { dirname as dirname6, isAbsolute, join as join6 } from "path";
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 function socketEnvironmentDigest() {
   return createHash("sha256").update(`${process.env.TMUX_TMPDIR ?? ""}\x00${process.env.TMUX ?? ""}`).digest("hex");
@@ -10618,8 +10661,8 @@ function writeNativeTmuxGuard(path, session, socket = "") {
   if (!isAbsolute(path) || !/^claude-bridge-[a-fA-F0-9]{8}$/.test(session)) {
     throw new Error("invalid native tmux ownership marker path/session");
   }
-  const folder = dirname5(path);
-  const tmp = join5(folder, `.native-tmux-${randomUUID2()}.tmp`);
+  const folder = dirname6(path);
+  const tmp = join6(folder, `.native-tmux-${randomUUID2()}.tmp`);
   let fd;
   try {
     fd = openSync2(tmp, "wx", 384);
@@ -10965,8 +11008,8 @@ function makeClaudeErrorResultEvent(opts) {
 }
 
 // src/cli.ts
-var HERE = dirname6(fileURLToPath(import.meta.url));
-var REPO = resolve5(HERE, "..");
+var HERE = dirname7(fileURLToPath(import.meta.url));
+var REPO = resolve6(HERE, "..");
 var parsedArgs = parseCliArgs(process.argv.slice(2));
 if (!parsedArgs.ok) {
   process.stderr.write(`claude-bridge: ${parsedArgs.error.message}
@@ -11031,23 +11074,23 @@ if (resumedSessionId && !forkedSession) {
   } catch {}
 }
 var runId = new Date().toISOString().replace(/[:.]/g, "-") + "-" + randomUUID3().slice(0, 8);
-var runDir = join6(resolveRunRoot(targetCwd), runId);
+var runDir = join7(resolveRunRoot(targetCwd), runId);
 mkdirSync4(runDir, { recursive: true });
 var traceAPI = process.env.MAGPIE_CLAUDE_TUI_DEBUG_API === "1";
 if (traceAPI)
   chmodSync(runDir, 448);
-var jsonSchemaPath = jsonSchema ? join6(runDir, "json-schema.json") : undefined;
-var claudeExitStatusPath = join6(runDir, "claude-exit-status");
+var jsonSchemaPath = jsonSchema ? join7(runDir, "json-schema.json") : undefined;
+var claudeExitStatusPath = join7(runDir, "claude-exit-status");
 var sessionName = `claude-bridge-${runId.slice(-8)}`;
 var CLAUDE_READY_TIMEOUT_MS = envDurationMs("CLAUDE_BRIDGE_CLAUDE_READY_TIMEOUT_MS", 180000);
 var TMUX_SUBMIT_DELAY_MS = envDurationMs("CLAUDE_BRIDGE_TMUX_SUBMIT_DELAY_MS", 1000);
 var TMUX_EXIT_HOLD_MS = envDurationMs("CLAUDE_BRIDGE_TMUX_EXIT_HOLD_MS", 30000);
 var MAX_SESSION_MS = envDurationMs("CLAUDE_BRIDGE_MAX_SESSION_MS", 12 * 60 * 60000);
 var TURN_END_FLUSH_TIMEOUT_MS = envDurationMs("CLAUDE_BRIDGE_TURN_END_FLUSH_TIMEOUT_MS", 5000);
-var stopEventPath = join6(runDir, "stop-event.json");
-var messageDisplayPath = join6(runDir, "message-display.jsonl");
-var transcriptEventPath = join6(runDir, "transcript-event.json");
-var localSettings = join6(targetCwd, ".claude", "settings.local.json");
+var stopEventPath = join7(runDir, "stop-event.json");
+var messageDisplayPath = join7(runDir, "message-display.jsonl");
+var transcriptEventPath = join7(runDir, "transcript-event.json");
+var localSettings = join7(targetCwd, ".claude", "settings.local.json");
 if (jsonSchemaPath && jsonSchema) {
   writeFileSync3(jsonSchemaPath, jsonSchema.compact + `
 `);
@@ -11150,7 +11193,7 @@ desplegaDebug("parsed arguments", {
   jsonSchema: jsonSchema ? { estimatedTokens: jsonSchema.estimatedTokens, maxTokens: jsonSchema.maxTokens } : undefined
 });
 function formatVersionInfo() {
-  const pkg = JSON.parse(readFileSync7(join6(REPO, "package.json"), "utf8"));
+  const pkg = JSON.parse(readFileSync8(join7(REPO, "package.json"), "utf8"));
   const whichClaude = spawnSync("which", ["claude"], { encoding: "utf8" });
   const claudePath = whichClaude.status === 0 ? whichClaude.stdout.trim() : whichClaude.stderr.trim() || "not found";
   const claudeVersion = whichClaude.status === 0 ? commandOutput("claude", ["-v"]) || "unknown" : "unavailable";
@@ -11188,8 +11231,8 @@ function loadPrintJsonSchema() {
 function resolveTargetCwd() {
   const value = desplegaValue("cwd");
   const cwd = value === undefined || value === true ? process.cwd() : String(value);
-  const resolved = resolve5(process.cwd(), cwd);
-  if (!existsSync5(resolved) || !statSync2(resolved).isDirectory()) {
+  const resolved = resolve6(process.cwd(), cwd);
+  if (!existsSync6(resolved) || !statSync2(resolved).isDirectory()) {
     process.stderr.write(`claude-bridge: --desplega-cwd must point to an existing directory: ${resolved}
 `);
     process.exit(2);
@@ -11199,8 +11242,8 @@ function resolveTargetCwd() {
 function resolveRunRoot(cwd) {
   const value = desplegaValue("run-dir") ?? desplegaValue("state-dir");
   if (value !== undefined && value !== true)
-    return resolve5(process.cwd(), String(value));
-  return join6(cwd, ".claude-bridge", "runs");
+    return resolve6(process.cwd(), String(value));
+  return join7(cwd, ".claude-bridge", "runs");
 }
 function hasDesplegaFlag(name) {
   const arg = desplegaArgs.find((arg) => arg.name === name);
@@ -11421,7 +11464,7 @@ ${details.rawResponse}
     let stderrLog;
     if (printMode) {
       try {
-        stderrLog = readFileSync7(join6(runDir, "stdout.stderr.log"), "utf8").trim() || undefined;
+        stderrLog = readFileSync8(join7(runDir, "stdout.stderr.log"), "utf8").trim() || undefined;
       } catch {}
     }
     const result = makePrintErrorResult(messageWithPaneTail, {
@@ -11458,9 +11501,22 @@ ${details.rawResponse}
 function startTmux() {
   const claudeArgs = [
     ...bypassPermissions ? ["--dangerously-skip-permissions"] : [],
-    ...traceAPI ? ["--debug", "api", "--debug-file", join6(runDir, "claude-api.log")] : [],
+    ...traceAPI ? ["--debug", "api", "--debug-file", join7(runDir, "claude-api.log")] : [],
     ...forwardedClaudeArgs
   ];
+  let extraBodyPreloadPath;
+  let claudeNodeLaunch;
+  if (process.env.CLAUDE_CODE_EXTRA_BODY_FILE) {
+    claudeNodeLaunch = resolveClaudeNodeLaunch(claudePath) ?? undefined;
+    if (!claudeNodeLaunch) {
+      process.stderr.write(`[claude-bridge] CLAUDE_CODE_EXTRA_BODY_FILE is set but Claude Code is not a Node launcher script; cannot avoid MAX_ARG_STRLEN
+`);
+      process.exit(1);
+    }
+    extraBodyPreloadPath = join7(runDir, "extra-body-preload.cjs");
+    writeFileSync3(extraBodyPreloadPath, readFileSync8(join7(HERE, "extra-body-preload.cjs")));
+    chmodSync(extraBodyPreloadPath, 384);
+  }
   const envArgs = [
     ...interactiveMcpBackgroundEnvArgs(),
     ...nativeAutoCompactionLaunchEnv(process.env).envArgs,
@@ -11475,13 +11531,19 @@ function startTmux() {
       `CLAUDE_BRIDGE_RUN_ID=${runId}`
     ] : []
   ];
+  const unsetEnvArgs = [...claudeUnsetEnvArgs(), ...nativeAutoCompactionLaunchEnv(process.env).unsetEnvArgs];
+  if (extraBodyPreloadPath) {
+    unsetEnvArgs.push("-u", "CLAUDE_CODE_EXTRA_BODY");
+  }
   const launchCommand = buildClaudeLaunchCommand({
     claudePath,
     claudeArgs,
-    unsetEnvArgs: [...claudeUnsetEnvArgs(), ...nativeAutoCompactionLaunchEnv(process.env).unsetEnvArgs],
+    unsetEnvArgs,
     envArgs,
     exitStatusPath: claudeExitStatusPath,
-    holdMs: TMUX_EXIT_HOLD_MS
+    holdMs: TMUX_EXIT_HOLD_MS,
+    extraBodyPreloadPath,
+    claudeNodeLaunch
   });
   const nativeGuardPath = process.env.MAGPIE_CLAUDE_NATIVE_TMUX_GUARD_PATH;
   if (nativeGuardPath) {
@@ -11610,10 +11672,10 @@ function failCompletedNativeApiTurn() {
   return true;
 }
 function readRuntimeStopEvent() {
-  if (!existsSync5(stopEventPath))
+  if (!existsSync6(stopEventPath))
     return null;
   try {
-    const event = JSON.parse(readFileSync7(stopEventPath, "utf8"));
+    const event = JSON.parse(readFileSync8(stopEventPath, "utf8"));
     return event.hook_event_name === "Stop" || event.hook_event_name === "StopFailure" ? event : null;
   } catch {
     return null;
@@ -11681,7 +11743,7 @@ function ensureClaudeInit(model) {
     uuid: randomUUID3(),
     permissionMode: bypassPermissions ? "bypassPermissions" : "default",
     apiKeySource: hasDesplegaFlag("local-auth") ? "ANTHROPIC_API_KEY" : "none",
-    memoryPaths: transcriptProjectFolder ? { auto: join6(transcriptProjectFolder, "memory") + "/" } : {}
+    memoryPaths: transcriptProjectFolder ? { auto: join7(transcriptProjectFolder, "memory") + "/" } : {}
   })) + `
 `);
 }
@@ -11743,11 +11805,11 @@ async function emitClaudeStreamResult(stopEvent, resultText) {
   return true;
 }
 function emitMessageDisplayEvents() {
-  if (!existsSync5(messageDisplayPath))
+  if (!existsSync6(messageDisplayPath))
     return;
   let text = "";
   try {
-    text = readFileSync7(messageDisplayPath, "utf8");
+    text = readFileSync8(messageDisplayPath, "utf8");
   } catch {
     return;
   }
@@ -11782,7 +11844,7 @@ function capturePane() {
 }
 function captureFailurePane() {
   paneCaptured = true;
-  const path = join6(runDir, "tmux-pane-final.txt");
+  const path = join7(runDir, "tmux-pane-final.txt");
   const r = spawnSync(tmuxPath, [...tmuxBase, "capture-pane", "-pt", sessionName, "-S", "-"], {
     encoding: "utf8"
   });
@@ -11798,9 +11860,9 @@ function captureFailurePane() {
   }
   let paneTail = tailLines(pane, 40);
   if (printMode && !paneTail) {
-    const stderrFile = join6(runDir, "stdout.stderr.log");
+    const stderrFile = join7(runDir, "stdout.stderr.log");
     try {
-      const stderr = readFileSync7(stderrFile, "utf8").trim();
+      const stderr = readFileSync8(stderrFile, "utf8").trim();
       if (stderr)
         paneTail = `[stderr.log] ${tailLines(stderr, 40)}`;
     } catch {}
@@ -11891,7 +11953,7 @@ async function waitForMcpListed() {
   if (!listedPath)
     return;
   const startedAt = Date.now();
-  while (!existsSync5(listedPath)) {
+  while (!existsSync6(listedPath)) {
     if (ctrl.signal.aborted)
       return;
     if (Date.now() - startedAt >= MCP_LISTED_TIMEOUT_MS) {
@@ -11938,9 +12000,9 @@ async function waitForClaudeReady() {
   }
 }
 function readClaudeExitStatus() {
-  if (!existsSync5(claudeExitStatusPath))
+  if (!existsSync6(claudeExitStatusPath))
     return null;
-  return readFileSync7(claudeExitStatusPath, "utf8").trim() || "unknown";
+  return readFileSync8(claudeExitStatusPath, "utf8").trim() || "unknown";
 }
 function tmuxSessionExists() {
   const res = spawnSync(tmuxPath, [...tmuxBase, "has-session", "-t", sessionName], {
@@ -12020,10 +12082,10 @@ async function waitForRuntimeTranscriptPath(timeoutMs) {
   return null;
 }
 function readRuntimeTranscriptPath() {
-  if (!existsSync5(transcriptEventPath))
+  if (!existsSync6(transcriptEventPath))
     return null;
   try {
-    const event = JSON.parse(readFileSync7(transcriptEventPath, "utf8"));
+    const event = JSON.parse(readFileSync8(transcriptEventPath, "utf8"));
     return typeof event.transcript_path === "string" && event.transcript_path ? event.transcript_path : null;
   } catch {
     return null;
