@@ -40,6 +40,15 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/** Load large safeguard EXTRA_BODY from a run file instead of argv/env at Go exec time. */
+export function extraBodyFromFileShellPrefix(): string {
+  return [
+    'if [ -n "$CLAUDE_CODE_EXTRA_BODY_FILE" ] && [ -r "$CLAUDE_CODE_EXTRA_BODY_FILE" ]; then',
+    '  export CLAUDE_CODE_EXTRA_BODY="$(cat "$CLAUDE_CODE_EXTRA_BODY_FILE")"',
+    "fi",
+  ].join("\n");
+}
+
 export function buildClaudeLaunchCommand(opts: ClaudeLaunchCommandOptions): string {
   const envCommand = [
     "env",
@@ -52,6 +61,7 @@ export function buildClaudeLaunchCommand(opts: ClaudeLaunchCommandOptions): stri
     .join(" ");
   const holdSeconds = Math.max(1, Math.ceil(opts.holdMs / 1000));
   const script = [
+    ...(process.env.CLAUDE_CODE_EXTRA_BODY_FILE ? [extraBodyFromFileShellPrefix()] : []),
     envCommand,
     "status=$?",
     `printf '%s\\n' "$status" > ${shellQuote(opts.exitStatusPath)}`,

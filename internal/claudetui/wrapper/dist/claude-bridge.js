@@ -10586,6 +10586,13 @@ function shellQuote2(value) {
     return "''";
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
+function extraBodyFromFileShellPrefix() {
+  return [
+    'if [ -n "$CLAUDE_CODE_EXTRA_BODY_FILE" ] && [ -r "$CLAUDE_CODE_EXTRA_BODY_FILE" ]; then',
+    '  export CLAUDE_CODE_EXTRA_BODY="$(cat "$CLAUDE_CODE_EXTRA_BODY_FILE")"',
+    "fi"
+  ].join("\n");
+}
 function buildClaudeLaunchCommand(opts) {
   const envCommand = [
     "env",
@@ -10596,6 +10603,7 @@ function buildClaudeLaunchCommand(opts) {
   ].map(shellQuote2).join(" ");
   const holdSeconds = Math.max(1, Math.ceil(opts.holdMs / 1000));
   const script = [
+    ...process.env.CLAUDE_CODE_EXTRA_BODY_FILE ? [extraBodyFromFileShellPrefix()] : [],
     envCommand,
     "status=$?",
     `printf '%s\\n' "$status" > ${shellQuote2(opts.exitStatusPath)}`,

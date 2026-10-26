@@ -279,6 +279,9 @@ func TestClaudeTUIRuntimeInstallWrapper(t *testing.T) {
 	if !strings.Contains(string(tuiRuntimeWrapperBundle), "CLAUDE_BRIDGE_TMUX_SOCKET") {
 		t.Fatal("the embedded wrapper is not the one magpie builds from wrapper/src: build it again (see wrapperBundle)")
 	}
+	if !strings.Contains(string(tuiRuntimeWrapperBundle), "CLAUDE_CODE_EXTRA_BODY_FILE") {
+		t.Fatal("embedded wrapper missing large EXTRA_BODY file transport")
+	}
 }
 
 // Versions are told apart as dotted numbers.

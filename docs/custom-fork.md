@@ -44,6 +44,13 @@ stop magpie with an error):
 Example for a 1GB box: `MAGPIE_CLAUDE_IDLE_MAX=1` and/or
 `MAGPIE_CLAUDE_IDLE_TTL=10m`.
 
+## Claude TUI safeguards (large `EXTRA_BODY`)
+
+TUI runs pass auto-mode `safeguards` via `CLAUDE_CODE_EXTRA_BODY_FILE` and
+`<run-tmp>/extra-body.json`, not inline `CLAUDE_CODE_EXTRA_BODY` on process
+exec, so payloads above Linux's per-string env limit (~128 KiB) still reach
+Claude Code. See [Claude TUI bridge](subsystems/claude-tui-bridge.md).
+
 ## Claude TUI accounts (Linux)
 
 A Claude subscription account can be answered by the interactive Claude
