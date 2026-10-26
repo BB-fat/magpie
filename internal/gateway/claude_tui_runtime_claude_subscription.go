@@ -1829,7 +1829,7 @@ func tuiRuntimeCleanClaudeEnv(env []string) []string {
 		"ANTHROPIC_BASE_URL": true, "ANTHROPIC_API_KEY": true, "ANTHROPIC_AUTH_TOKEN": true,
 		"CLAUDECODE": true, "CLAUDE_CODE_ENTRYPOINT": true, "CLAUDE_CODE_SSE_PORT": true,
 		"CLAUDE_CODE_OAUTH_TOKEN": true, "CLAUDE_CODE_PROMPT_CACHE_TTL": true,
-		"CLAUDE_CODE_EXTRA_BODY": true, "ANTHROPIC_BETAS": true,
+		"CLAUDE_CODE_EXTRA_BODY": true, "CLAUDE_CODE_EXTRA_BODY_FILE": true, "ANTHROPIC_BETAS": true,
 	}
 	out := make([]string, 0, len(env)+3)
 	for _, e := range env {

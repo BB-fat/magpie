@@ -61,10 +61,8 @@ func TestClaudeTUIRuntimeInteractiveTransportRejectsUnsupportedRequests(t *testi
 	if err := tuiRuntimeValidateInteractiveFirstTurn(&withSafeguards); err != nil {
 		t.Fatalf("normal safeguards were rejected before PTY start: %v", err)
 	}
-	tooLarge := withSafeguards
-	tooLarge.Safeguards = json.RawMessage(`["` + strings.Repeat("x", tuiRuntimeInteractiveSafeguardBodyMax) + `"]`)
-	if err := tuiRuntimeValidateInteractiveFirstTurn(&tooLarge); err == nil {
-		t.Fatal("oversized safeguards were accepted into PTY process environment")
+	if tuiRuntimeInteractiveSafeguardBodyMax <= 128<<10 {
+		t.Fatal("sanity max should stay far above Linux MAX_ARG_STRLEN")
 	}
 }
 
@@ -430,6 +428,69 @@ printf '%s\n' '{"type":"result","session_id":"inner-think","stop_reason":"end_tu
 	}
 }
 
+func TestClaudeTUIRuntimeInteractiveTransportLargeSafeguardsUseFileNotEnv(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
+	bodyPath := filepath.Join(dir, "extra-body.txt")
+	betaPath := filepath.Join(dir, "betas.txt")
+	wrapper := filepath.Join(dir, "safeguard-bridge")
+	script := `#!/bin/sh
+if [ -n "$CLAUDE_CODE_EXTRA_BODY_FILE" ]; then
+  cat "$CLAUDE_CODE_EXTRA_BODY_FILE" > "$INTERACTIVE_SAFEGUARD_BODY"
+else
+  printf '%s' "$CLAUDE_CODE_EXTRA_BODY" > "$INTERACTIVE_SAFEGUARD_BODY"
+fi
+printf '%s' "$ANTHROPIC_BETAS" > "$INTERACTIVE_SAFEGUARD_BETA"
+cat >/dev/null
+printf '%s\n' '{"type":"assistant","uuid":"sg-large","session_id":"inner-sg-large","message":{"id":"m-sg-large","model":"claude-haiku-4-5","content":[{"type":"text","text":"SAFEGUARD_LARGE_OK"}]}}'
+printf '%s\n' '{"type":"result","session_id":"inner-sg-large","stop_reason":"end_turn"}'
+`
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tuiRuntimeSetWrapper(t, wrapper)
+	t.Setenv("INTERACTIVE_SAFEGUARD_BODY", bodyPath)
+	t.Setenv("INTERACTIVE_SAFEGUARD_BETA", betaPath)
+	largeContext := strings.Repeat("c", 200<<10)
+	sg := json.RawMessage(`[{"type":"dangerous_tool_use","classifier_context":` + jsonString(largeContext) + `}]`)
+	beta := "dangerous-tool-use-2026-09-03"
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-haiku-4-5", Safeguards: sg, SafeguardBeta: beta, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
+	b := tuiRuntimeNewSubscriptionBridge()
+	defer tuiRuntimeBridges.Delete(b)
+	run, events, err := b.startInteractiveOneTurn(context.Background(), req, req.Model, "", "owner-large-sg", "outer-sg-large")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.abort()
+	var text string
+	for ev := range events {
+		if ev.Kind == KText {
+			text += ev.Text
+		}
+		if ev.Kind == KError {
+			t.Fatalf("large safeguard PTY failed: %s", ev.Text)
+		}
+	}
+	if text != "SAFEGUARD_LARGE_OK" {
+		t.Fatalf("large safeguard reply = %q", text)
+	}
+	body, err := os.ReadFile(bodyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != tuiRuntimeSafeguardBody(sg) {
+		t.Fatalf("extra body bytes = %d, want %d", len(body), len(tuiRuntimeSafeguardBody(sg)))
+	}
+	if len(body) <= 128<<10 {
+		t.Fatalf("expected safeguards well above MAX_ARG_STRLEN, got %d bytes", len(body))
+	}
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
 func TestClaudeTUIRuntimeInteractiveTransportSafeguardsReachPTYEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
@@ -437,7 +498,11 @@ func TestClaudeTUIRuntimeInteractiveTransportSafeguardsReachPTYEnvironment(t *te
 	betaPath := filepath.Join(dir, "betas.txt")
 	wrapper := filepath.Join(dir, "safeguard-bridge")
 	script := `#!/bin/sh
-printf '%s' "$CLAUDE_CODE_EXTRA_BODY" > "$INTERACTIVE_SAFEGUARD_BODY"
+if [ -n "$CLAUDE_CODE_EXTRA_BODY_FILE" ]; then
+  cat "$CLAUDE_CODE_EXTRA_BODY_FILE" > "$INTERACTIVE_SAFEGUARD_BODY"
+else
+  printf '%s' "$CLAUDE_CODE_EXTRA_BODY" > "$INTERACTIVE_SAFEGUARD_BODY"
+fi
 printf '%s' "$ANTHROPIC_BETAS" > "$INTERACTIVE_SAFEGUARD_BETA"
 cat >/dev/null
 printf '%s\n' '{"type":"assistant","uuid":"sg-row","session_id":"inner-sg","message":{"id":"m-sg","model":"claude-haiku-4-5","content":[{"type":"text","text":"SAFEGUARD_OK"}]}}'

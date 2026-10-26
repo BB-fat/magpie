@@ -58,7 +58,8 @@ func tuiRuntimeInteractiveMCPConfig(helperExe string, helperArgv []string, callb
 // Chinese and other multibyte histories.
 const tuiRuntimeInteractiveHistoricalBootstrapMaxBytes = 512 << 10
 const tuiRuntimeInteractiveImageTool = "magpie_view_attached_image"
-const tuiRuntimeInteractiveSafeguardBodyMax = 64 << 10
+// Linux MAX_ARG_STRLEN is 128 KiB per env/argv string; safeguards ride a file.
+const tuiRuntimeInteractiveSafeguardBodyMax = 16 << 20
 
 // wrapperOverride, set by tests, is a wrapper to run in Config.Wrapper's
 // place.
@@ -94,7 +95,7 @@ func tuiRuntimeValidateInteractiveFirstTurn(req *tuiRuntimeRequest) error {
 		return errors.New("Claude interactive migration: resume, history replay and tool continuation are not yet enabled")
 	}
 	if len(req.Safeguards) > 0 && len(tuiRuntimeSafeguardBody(req.Safeguards)) > tuiRuntimeInteractiveSafeguardBodyMax {
-		return errors.New("Claude interactive safeguards are too large for a PTY process environment")
+		return errors.New("Claude interactive safeguards are too large")
 	}
 	if req.ToolChoice != "" && req.ToolChoice != "auto" && req.ToolChoice != "none" &&
 		req.ToolChoice != "required" && !strings.HasPrefix(req.ToolChoice, "name:") {
@@ -1492,9 +1493,14 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		env = append(env, "MAGPIE_CLAUDE_NATIVE_TMUX_GUARD_PATH="+tuiRuntimeInteractiveTmuxGuardPath(owner, outerSession))
 	}
 	if len(req.Safeguards) > 0 {
+		extraBodyPath := filepath.Join(tmp, "extra-body.json")
+		if err := os.WriteFile(extraBodyPath, []byte(tuiRuntimeSafeguardBody(req.Safeguards)), 0o600); err != nil {
+			clean()
+			return nil, nil, err
+		}
 		env = append(env,
 			"ANTHROPIC_BETAS="+req.SafeguardBeta,
-			"CLAUDE_CODE_EXTRA_BODY="+tuiRuntimeSafeguardBody(req.Safeguards),
+			"CLAUDE_CODE_EXTRA_BODY_FILE="+extraBodyPath,
 		)
 	}
 	if cmd.Env, err = tuiRuntimeSettings.Env(ctx, env, configDir); err != nil {

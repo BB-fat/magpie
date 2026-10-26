@@ -55,6 +55,7 @@ import {
 import { makePrintErrorResult } from "./print-result.ts";
 import { runJsonSchemaStopHook, runRuntimeHook } from "./stop-hook.ts";
 import { NativeApiErrorTurn, type NativeApiFailure } from "./native-api-error.ts";
+import { resolveClaudeNodeLaunch } from "./claude-node-entry.ts";
 import { buildClaudeLaunchCommand, interactiveMcpBackgroundEnvArgs, nativeAutoCompactionLaunchEnv } from "./launch-command.ts";
 import { writeNativeTmuxGuard } from "./native-tmux-guard.ts";
 import {
@@ -657,6 +658,21 @@ function startTmux(): void {
     ...(traceAPI ? ["--debug", "api", "--debug-file", join(runDir, "claude-api.log")] : []),
     ...forwardedClaudeArgs,
   ];
+  let extraBodyPreloadPath: string | undefined;
+  let claudeNodeLaunch: ReturnType<typeof resolveClaudeNodeLaunch> | undefined;
+  if (process.env.CLAUDE_CODE_EXTRA_BODY_FILE) {
+    claudeNodeLaunch = resolveClaudeNodeLaunch(claudePath) ?? undefined;
+    if (!claudeNodeLaunch) {
+      process.stderr.write(
+        "[claude-bridge] CLAUDE_CODE_EXTRA_BODY_FILE is set but Claude Code is not a Node launcher script; cannot avoid MAX_ARG_STRLEN\n"
+      );
+      process.exit(1);
+    }
+    extraBodyPreloadPath = join(runDir, "extra-body-preload.cjs");
+    writeFileSync(extraBodyPreloadPath, readFileSync(join(HERE, "extra-body-preload.cjs")));
+    chmodSync(extraBodyPreloadPath, 0o600);
+  }
+
   const envArgs = [
     // Keep MCP calls in the foreground until the client handoff completes.
     ...interactiveMcpBackgroundEnvArgs(),
@@ -675,13 +691,20 @@ function startTmux(): void {
       : []),
   ];
 
+  const unsetEnvArgs = [...claudeUnsetEnvArgs(), ...nativeAutoCompactionLaunchEnv(process.env).unsetEnvArgs];
+  if (extraBodyPreloadPath) {
+    // Preload reads the file in-process; never pass a huge inline body through execve.
+    unsetEnvArgs.push("-u", "CLAUDE_CODE_EXTRA_BODY");
+  }
   const launchCommand = buildClaudeLaunchCommand({
     claudePath,
     claudeArgs,
-    unsetEnvArgs: [...claudeUnsetEnvArgs(), ...nativeAutoCompactionLaunchEnv(process.env).unsetEnvArgs],
+    unsetEnvArgs,
     envArgs,
     exitStatusPath: claudeExitStatusPath,
     holdMs: TMUX_EXIT_HOLD_MS,
+    extraBodyPreloadPath,
+    claudeNodeLaunch,
   });
   const nativeGuardPath = process.env.MAGPIE_CLAUDE_NATIVE_TMUX_GUARD_PATH;
   if (nativeGuardPath) {
