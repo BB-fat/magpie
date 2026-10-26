@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/claudebridge"
-	"github.com/yetone/magpie/internal/claudetui"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -36,7 +35,8 @@ func tuiAccount(t *testing.T, wrapper string) provider.Provider {
 	tuiReady.once.Do(func() {})
 	oldReady := tuiReady.err
 	tuiReady.err = nil
-	claudetui.Init(&claudetui.Config{
+	oldConfig := tuiRuntimeSettings
+	initTUIRuntime(&tuiRuntimeConfig{
 		ClaudePath: func() (string, error) { return "/bin/true", nil },
 		Wrapper:    []string{wrapper},
 		HelperArgv: []string{"/bin/false"},
@@ -51,7 +51,7 @@ func tuiAccount(t *testing.T, wrapper string) provider.Provider {
 		tuiAccountDir = oldDir
 		tuiModes.m = oldModes
 		tuiReady.err = oldReady
-		claudetui.ResetForTest()
+		tuiRuntimeSettings = oldConfig
 	})
 	return provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: "tui@example.com"}}
 }
@@ -60,10 +60,12 @@ func tuiAccount(t *testing.T, wrapper string) provider.Provider {
 // reaped, before the test's other cleanups put the bridge back.
 func tuiTestServer(t *testing.T) *Server {
 	t.Helper()
+	before := claudeRoomLive()
 	s := New()
 	t.Cleanup(func() {
+		s.subscription.abortAll()
 		s.tui.Shutdown()
-		waitFor(t, "the TUI runs end", func() bool { return !s.tui.Busy() })
+		waitFor(t, "the TUI runs end", func() bool { return !s.tui.Busy() && claudeRoomLive() <= before })
 	})
 	return s
 }
@@ -322,7 +324,7 @@ func TestClaudeTUICallbackTokenLivesWithTheRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := tuiAccount(t, wrapper)
-	claudetui.Init(&claudetui.Config{AddCallback: addCallback, DropCallback: dropCallback})
+	initTUIRuntime(&tuiRuntimeConfig{AddCallback: addCallback, DropCallback: dropCallback})
 	s := tuiTestServer(t)
 	body := `{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
 	done := make(chan struct{})

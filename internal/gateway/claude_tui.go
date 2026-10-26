@@ -17,7 +17,6 @@ import (
 
 	"github.com/yetone/magpie/internal/claudebridge"
 	"github.com/yetone/magpie/internal/claudecode"
-	"github.com/yetone/magpie/internal/claudetui"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
@@ -126,7 +125,7 @@ var tuiReady struct {
 var tuiServer atomic.Pointer[Server]
 
 // claudeTUIBun is the Bun TUI runs use; tests set their own.
-var claudeTUIBun = func() (string, error) { return plugin.BunPath(claudetui.MinBun) }
+var claudeTUIBun = func() (string, error) { return plugin.BunPath(tuiRuntimeMinBun) }
 
 // setUpClaudeTUI gives the bridge the gateway's own: its room for Claude
 // Code processes, its callbacks, the account's proxy and config folder,
@@ -135,18 +134,18 @@ var claudeTUIBun = func() (string, error) { return plugin.BunPath(claudetui.MinB
 func setUpClaudeTUI(ctx context.Context) error {
 	tuiReady.once.Do(func() {
 		tuiReady.err = func() error {
-			if err := claudetui.Supported(); err != nil {
+			if err := tuiRuntimeSupported(); err != nil {
 				return err
 			}
 			if err := claudebridge.LoadMCPConfig(); err != nil {
 				return err
 			}
-			claudetui.Init(tuiConfig())
-			deps, err := claudetui.Check(ctx, claudeTUIPath, claudeTUIBun)
+			initTUIRuntime(tuiConfig())
+			deps, err := tuiRuntimeCheck(ctx, claudeTUIPath, claudeTUIBun)
 			if err != nil {
 				return err
 			}
-			bundle, err := claudetui.InstallWrapper()
+			bundle, err := tuiRuntimeInstallWrapper()
 			if err != nil {
 				return err
 			}
@@ -154,12 +153,12 @@ func setUpClaudeTUI(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			claudetui.Init(&claudetui.Config{
+			initTUIRuntime(&tuiRuntimeConfig{
 				Tmux:       deps.Tmux,
 				Wrapper:    []string{deps.Bun, bundle},
 				HelperArgv: []string{exe, "claude-mcp-helper"},
 			})
-			claudetui.Sweep()
+			tuiRuntimeSweep()
 			log.Printf("claude-tui: ready: tmux %s, Claude Code %s, Bun %s, MCP server %q", deps.TmuxVersion, deps.ClaudeVersion, deps.Bun, claudebridge.MCPServerName())
 			return nil
 		}()
@@ -179,12 +178,12 @@ func claudeTUIPath() (string, error) {
 	return "", errors.New("Claude Code is not installed: install it, " + claudecode.InstallHint)
 }
 
-func tuiConfig() *claudetui.Config {
+func tuiConfig() *tuiRuntimeConfig {
 	budget, _ := claudeRunBudget()
 	if mib := settings.Load().ClaudeTuiMaxRSSMiB; mib > 0 {
 		budget = int64(mib) << 20
 	}
-	return &claudetui.Config{
+	return &tuiRuntimeConfig{
 		ClaudePath: claudeTUIPath,
 		MCPServer:  claudebridge.MCPServerName(),
 		CallbackBase: func() string {
@@ -205,26 +204,15 @@ func tuiConfig() *claudetui.Config {
 		},
 		MaxRSS:    budget,
 		CanSearch: canSearch,
-		SearchHandler: func(ctx context.Context, query string) (string, []claudetui.Hit, error) {
+		SearchHandler: func(ctx context.Context, query string) (string, []Hit, error) {
 			s := tuiServer.Load()
 			if s == nil {
 				return "", nil, errNoSearcher
 			}
-			said, hits, err := s.webSearch(ctx, query)
-			out := make([]claudetui.Hit, len(hits))
-			for i, h := range hits {
-				out[i] = claudetui.Hit{Title: h.Title, URL: h.URL, PageAge: h.PageAge}
-			}
-			return said, out, err
+			return s.webSearch(ctx, query)
 		},
-		NoteLimits: func(user string, limits []claudetui.ClaudeLimit) {
-			kept := make([]provider.ClaudeLimit, len(limits))
-			for i, l := range limits {
-				kept[i] = provider.ClaudeLimit{Kind: l.Kind, Used: l.Used, ResetsAt: l.ResetsAt}
-			}
-			provider.NoteClaudeLimits(user, kept)
-		},
-		MovedOff: provider.ClaudeCodeMovedOff,
+		NoteLimits: provider.NoteClaudeLimits,
+		MovedOff:   provider.ClaudeCodeMovedOff,
 	}
 }
 
@@ -245,7 +233,7 @@ func (s *Server) serveClaudeTUI(w http.ResponseWriter, r *http.Request, from pro
 	user := p.Account.User
 	ctx := p.Via(r.Context())
 	if searching(ctx) {
-		ctx = claudetui.WithSearch(ctx)
+		ctx = tuiRuntimeWithSearch(ctx)
 	}
 	dir, err := tuiAccountDir(ctx, p)
 	if err != nil {
@@ -262,7 +250,7 @@ func (s *Server) serveClaudeTUI(w http.ResponseWriter, r *http.Request, from pro
 	}
 	owner := p.ID + "\x00" + user
 	out := &tuiResponder{w: w, r: r, from: from, req: req, usage: usage, owner: owner}
-	return s.tui.Serve(r.WithContext(ctx), out, model, claudetui.Owner(p.ID, user, claudebridge.MCPServerName()), sessionOf(r.Header), dir, anthropic)
+	return s.tui.Serve(r.WithContext(ctx), out, model, tuiRuntimeOwner(p.ID, user, claudebridge.MCPServerName()), sessionOf(r.Header), dir, anthropic)
 }
 
 // tuiAccountDir is the config folder a TUI run on p's account runs in: its
@@ -314,69 +302,9 @@ func (t *tuiResponder) Fail(status int, msg string) (int, string) {
 	return writeError(t.w, t.from, status, msg), msg
 }
 
-func (t *tuiResponder) Relay(events <-chan claudetui.Event, _ bool, abort func(), ended func(said, stop string, ok bool)) (int, string) {
-	ch := make(chan Event)
-	done := make(chan struct{})
-	defer close(done)
-	// every event is read to the end, the relay's or not: the run's sender
-	// holds its lock while it waits for a reader
-	go func() {
-		defer close(ch)
-		for ev := range events {
-			select {
-			case ch <- tuiEvent(ev):
-			case <-done:
-			}
-		}
-	}()
+func (t *tuiResponder) Relay(events <-chan Event, _ bool, abort func(), ended func(said, stop string, ok bool)) (int, string) {
 	limitHeaders(t.w, t.owner)
-	return relay(t.w, t.r, t.from, "Claude Code", t.req, ch, t.usage, abort, func() { limitHeaders(t.w, t.owner) }, ended)
-}
-
-// tuiEvent is a bridge event as the gateway's.
-func tuiEvent(ev claudetui.Event) Event {
-	out := Event{
-		Status: ev.Status, Text: ev.Text, ID: ev.ID, Name: ev.Name, MsgID: ev.MsgID, Model: ev.Model, Stop: ev.Stop,
-		Code: ev.Code, RequestID: ev.RequestID, SafeguardResults: ev.SafeguardResults,
-		Usage: Usage{
-			Input: ev.Usage.Input, Output: ev.Usage.Output, CacheRead: ev.Usage.CacheRead, CacheWrite: ev.Usage.CacheWrite,
-			CacheWrite1h: ev.Usage.CacheWrite1h, Reasoning: ev.Usage.Reasoning, Served: ev.Usage.Served, Upstream: ev.Usage.Upstream,
-			RequestID: ev.Usage.RequestID, ResponseID: ev.Usage.ResponseID, ErrType: ev.Usage.ErrType, Stop: ev.Usage.Stop,
-		},
-	}
-	for _, h := range ev.Hits {
-		out.Hits = append(out.Hits, Hit{Title: h.Title, URL: h.URL, PageAge: h.PageAge})
-	}
-	switch ev.Kind {
-	case claudetui.KStart:
-		out.Kind = KStart
-	case claudetui.KText:
-		out.Kind = KText
-	case claudetui.KThinkStart:
-		out.Kind = KThinkStart
-	case claudetui.KThink:
-		out.Kind = KThink
-	case claudetui.KSig:
-		out.Kind = KSig
-	case claudetui.KToolStart:
-		out.Kind = KToolStart
-	case claudetui.KToolArgs:
-		out.Kind = KToolArgs
-	case claudetui.KStop:
-		out.Kind = KStop
-	case claudetui.KUsage:
-		out.Kind = KUsage
-	case claudetui.KError:
-		out.Kind = KError
-		out.Status = claudetui.ErrorStatus(ev.Status, ev.Text)
-	case claudetui.KSearch:
-		out.Kind = KSearch
-	case claudetui.KImage:
-		out.Kind = KImage
-	default:
-		out.Kind = KAlive
-	}
-	return out
+	return relay(t.w, t.r, t.from, "Claude Code", t.req, events, t.usage, abort, func() { limitHeaders(t.w, t.owner) }, ended)
 }
 
 // claudeMCP answers a run's MCP helper: the TUI bridge's runs' and the

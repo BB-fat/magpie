@@ -156,6 +156,13 @@ type Tool struct {
 
 // Request is a call to a model, whichever API it arrived in.
 type Request struct {
+	compactHistory []Message
+	compactSystem  string
+	seedHistory    []Message
+	replayKey      string
+	resumedCopy    bool
+	tuiSearchTool  string
+
 	// clientCache is non-nil only for the Claude bridge's explicit opt-in.
 	clientCache *clientCache
 	// leanPrompt has the Claude bridge give the caller's instructions as

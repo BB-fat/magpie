@@ -48,7 +48,8 @@ Example for a 1GB box: `MAGPIE_CLAUDE_IDLE_MAX=1` and/or
 
 A Claude subscription account can be answered by the interactive Claude
 Code in a private tmux instead of the stream-json bridge, ported from
-claude-tui-boost v0.2.16 into `internal/claudetui`; see
+claude-tui-boost v0.2.16 into the gateway's TUI runtime, with its embedded
+wrapper under `internal/claudetui/wrapper`; see
 [Claude TUI bridge](subsystems/claude-tui-bridge.md). Every account is
 `standard` until set otherwise:
 

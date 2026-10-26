@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/yetone/magpie/internal/claudetui"
 	"io"
 	"log"
 	"net"
@@ -419,7 +418,7 @@ type Server struct {
 	unfit        map[string]bool
 	subscription *subscriptionBridge
 	// the Claude TUI bridge, for accounts set to it (claude_tui.go)
-	tui *claudetui.Bridge
+	tui *tuiRuntimeBridge
 	// imageStore is the image MCP server's jobs and images (image_mcp.go)
 	imageStore   imageMCPStore
 	debug        bool
@@ -473,7 +472,7 @@ func New() *Server {
 		client:       &http.Client{Transport: rpmTransport{upstreamTransport()}},
 		unfit:        make(map[string]bool),
 		subscription: newSubscriptionBridge(),
-		tui:          claudetui.New(),
+		tui:          newTUIBridge(),
 		debug:        os.Getenv("MAGPIE_DEBUG") != "",
 	}
 }

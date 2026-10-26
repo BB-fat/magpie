@@ -121,6 +121,9 @@ func isolatedTests(m *testing.M) (int, error) {
 	restoreDefaultClaudeBridgeEnv()
 	// no route writes a request body in place while it is held
 	guardHeldBodies()
+	if err := initTUIRuntimeForTests(home); err != nil {
+		return 1, err
+	}
 	return heldWrittenAfter(m.Run()), nil
 }
 

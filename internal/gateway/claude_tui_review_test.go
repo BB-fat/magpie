@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
-	"github.com/yetone/magpie/internal/claudetui"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -84,13 +83,13 @@ func tuiReviewSearch(t *testing.T, s *Server) {
 	t.Helper()
 	old := tuiServer.Swap(s)
 	t.Cleanup(func() { tuiServer.Store(old) })
-	claudetui.Init(tuiConfig())
+	initTUIRuntime(tuiConfig())
 	callbacks := httptest.NewServer(s.Handler())
 	t.Cleanup(func() {
 		s.tui.Shutdown()
 		callbacks.Close()
 	})
-	claudetui.Init(&claudetui.Config{CallbackBase: func() string { return callbacks.URL }})
+	initTUIRuntime(&tuiRuntimeConfig{CallbackBase: func() string { return callbacks.URL }})
 }
 
 func tuiReviewStarts(t *testing.T, wrapper string) int {

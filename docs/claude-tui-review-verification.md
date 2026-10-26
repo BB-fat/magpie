@@ -1,4 +1,61 @@
-# Claude TUI review fixes: verification
+# Claude TUI: gateway reuse and review verification
+
+## Gateway reuse (PR #6, 2026-10-26)
+
+The Go runtime and its regression tests now live in `internal/gateway`.
+They use the existing gateway request, event, usage and MCP models,
+Anthropic codec, bounded request reader, response relay, Claude CLI usage
+decoder and provider allowance types. The copied protocol stack and
+gateway/TUI event conversion are removed. `internal/claudetui` supplies
+only the embedded wrapper and its sources and licences. Wrapper JavaScript,
+dependencies, account modes and the standard bridge remain unchanged.
+
+The shared parser preserves opaque Anthropic `redacted_thinking` blocks and
+the `defer_loading` tool flag in the gateway model. Native transcript rebuilds
+also preserve opaque thinking. The new sealed-thinking round-trip test failed
+against the original TUI codec because the block disappeared. The native
+transcript test also failed before its serializer handled the shared sealed
+part. Both now pass. These are behavioral failures, not compile failures.
+
+Native quota classification still happens before events enter the shared
+relay, preserving the TUI's 429 response for synthetic quota errors. Tests
+share the gateway's isolated `TestMain` rather than resetting configuration
+after each test while a run is still finishing. Native keepalive and RSS
+monitors stop before terminal cleanup, and lifecycle tests wait for cleanup;
+their exclusivity assertion is scoped to both owner and outer session.
+
+Checks use Go 1.26.8, temporary HOME directories, pinned Go caches, umask 022,
+and a child subreaper for fake process tests. `TMPDIR=/var/tmp` avoids the
+cloud platform's protected `.git` mounts in ordinary temporary directories.
+The Pi fixture used by repository tests is pinned to the repository's version.
+
+| Check | Result |
+| --- | --- |
+| `go test -race -tags nogui ./internal/gateway -run '^TestClaudeTUI' -count=1` | Passed: 296 top-level tests, 6 conditional skips, 97.854s. |
+| Account/room and owner/lifecycle regression, `-race -count=20` | Passed: four top-level tests repeated 20 times, 15.845s. |
+| `go test -tags nogui -p 2 ./... -count=1 -timeout=25m` | 71 packages passed; `internal/provider` failed with the existing synctest panic described below. The complete gateway package passed. |
+| Linux `go vet -tags nogui -p 2 ./...` and Windows `go vet -p 2 ./...` | Passed. |
+| Linux nogui and Windows builds | Passed. |
+| Changed Go files' `gofmt -l` and `git diff --check` | Passed, no output. |
+
+The provider package panics in `TestUnreadLoginsWriteErrorsKeepCredentials`:
+`fatal error: close of synctest channel from outside bubble`, through
+`internal/filememo/filememo.go:91`. Running the complete provider package
+from a separate archive of the original PR head
+`1818a6ec610fda2e97dd46cc643cd8d5abd0182b` reproduced the same fatal error.
+The full-suite command is therefore unsuccessful; this PR does not fix that
+unrelated failure or claim a merge-ready full-suite pass.
+
+Not rerun: browser and wrapper tests, since their sources and bundle are
+unchanged. Real Claude account requests and real native CLI scenarios were
+not run: this environment has no Claude Code or tmux. The native desktop
+build/vet still lack the GTK/WebKitGTK development libraries. Windows was
+cross-built and vetted, not run on Windows.
+
+## Original review verification
+
+The remainder records the earlier review, before the gateway-reuse refactor.
+Its old package paths and command results are historical, not current checks.
 
 Reviewed base: `8cc75e40b4e22a8c19d6c067e58b5e9b7c3c1b26` (PR #5).
 Fixes are on `fix/claude-tui-review`, in a separate worktree. The original

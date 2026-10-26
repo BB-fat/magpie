@@ -1,6 +1,7 @@
 # Provenance
 
-`internal/claudetui` is ported from
+The gateway's `claude_tui_runtime_*.go` and this package's embedded wrapper
+are ported from
 [claude-tui-boost](https://github.com/Guuuu233/claude-tui-boost) v0.2.16,
 commit `f57ee457cf7f41ecc18ed8284519ab565f46ad16`: its Go runtime's bridge
 (`runtime/internal/bridge`, itself a fork of magpie's
@@ -15,3 +16,7 @@ commit `f57ee457cf7f41ecc18ed8284519ab565f46ad16`: its Go runtime's bridge
 The plugin's precompiled runtime and helper binaries are not used. What
 was left out and what was changed is in
 [docs/subsystems/claude-tui-bridge.md](../../docs/subsystems/claude-tui-bridge.md).
+
+The Go runtime reuses magpie's gateway protocol types, codecs, usage, MCP
+models and response relay. This directory retains the wrapper sources, bundle
+and the upstream licences; it no longer contains a copied gateway protocol stack.
