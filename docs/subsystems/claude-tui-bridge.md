@@ -152,12 +152,21 @@ process environment string at about 128 KiB (`MAX_ARG_STRLEN`), so the
 interactive transport does **not** put marshaled `CLAUDE_CODE_EXTRA_BODY`
 on the Bun wrapper's exec environment. It writes the JSON to
 `<run-tmp>/extra-body.json` and sets `CLAUDE_CODE_EXTRA_BODY_FILE` to that
-path (plus `ANTHROPIC_BETAS` when needed). The embedded wrapper launches native Claude with `node -r` and a run-local
-preload that reads the file into `process.env` **inside** the Claude
-process, so no exec hop passes a string above `MAX_ARG_STRLEN`. Mid-turn
-updates still use
-`apply_flag_settings` over the control channel (stdin), not exec env.
-Client tools and JSON Schema already use run-local files the same way.
+path (plus `ANTHROPIC_BETAS` when needed). The embedded wrapper then:
+
+- **Node launcher Claude** (`#!/usr/bin/env node` script): launches with
+  `node -r` and a run-local preload that reads the file into
+  `process.env` inside the Claude process, so no exec hop passes a string
+  above `MAX_ARG_STRLEN` (any size up to the transport max).
+- **Native ELF Claude** (current AU installs): reads the file in the
+  wrapper and passes inline `CLAUDE_CODE_EXTRA_BODY` on the tmux child
+  only when the marshaled body is at most 120 KiB; larger payloads fail
+  with an explicit error before the PTY starts (native Claude does not
+  implement `CLAUDE_CODE_EXTRA_BODY_FILE`).
+
+Mid-turn updates still use `apply_flag_settings` over the control channel
+(stdin), not exec env. Client tools and JSON Schema already use run-local
+files the same way.
 
 ## The wrapper
 

@@ -428,12 +428,58 @@ printf '%s\n' '{"type":"result","session_id":"inner-think","stop_reason":"end_tu
 	}
 }
 
+func tuiRuntimeTestNodeLauncherClaude(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "entry.js"), []byte("export {};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "claude")
+	if err := os.WriteFile(bin, []byte("#!/usr/bin/env node\nimport './entry.js';\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+func TestClaudeTUIRuntimeClaudeNodeLauncher(t *testing.T) {
+	node := tuiRuntimeTestNodeLauncherClaude(t)
+	if !tuiRuntimeClaudeNodeLauncher(node) {
+		t.Fatal("node launcher script not detected")
+	}
+	native := filepath.Join(t.TempDir(), "claude-native")
+	if err := os.WriteFile(native, []byte{0x7f, 'E', 'L', 'F', 0}, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if tuiRuntimeClaudeNodeLauncher(native) {
+		t.Fatal("native ELF must not be treated as node launcher")
+	}
+}
+
+func TestClaudeTUIRuntimeInteractiveTransportRejectsOversizedSafeguardsOnNativeClaude(t *testing.T) {
+	native := filepath.Join(t.TempDir(), "claude-native")
+	if err := os.WriteFile(native, []byte{0x7f, 'E', 'L', 'F', 0}, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tuiRuntimeWithConfig(t, &tuiRuntimeConfig{
+		ClaudePath: func() (string, error) { return native, nil },
+	})
+	largeContext := strings.Repeat("c", tuiRuntimeInteractiveSafeguardInlineMax+1)
+	sg := json.RawMessage(`[{"type":"dangerous_tool_use","classifier_context":` + jsonString(largeContext) + `}]`)
+	body := tuiRuntimeSafeguardBody(sg)
+	if err := tuiRuntimeValidateInteractiveSafeguardLaunch(native, len(body)); err == nil {
+		t.Fatal("expected oversized native safeguards to be rejected")
+	}
+}
+
 func TestClaudeTUIRuntimeInteractiveTransportLargeSafeguardsUseFileNotEnv(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
 	bodyPath := filepath.Join(dir, "extra-body.txt")
 	betaPath := filepath.Join(dir, "betas.txt")
 	wrapper := filepath.Join(dir, "safeguard-bridge")
+	tuiRuntimeWithConfig(t, &tuiRuntimeConfig{
+		ClaudePath: func() (string, error) { return tuiRuntimeTestNodeLauncherClaude(t), nil },
+	})
 	script := `#!/bin/sh
 if [ -n "$CLAUDE_CODE_EXTRA_BODY_FILE" ]; then
   cat "$CLAUDE_CODE_EXTRA_BODY_FILE" > "$INTERACTIVE_SAFEGUARD_BODY"
