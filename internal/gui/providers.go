@@ -228,6 +228,15 @@ type providerJSON struct {
 	// each key's or account's own limit over it (#892), by its name in
 	// lower case or its key id; 0 there is none
 	AccountConcurrency map[string]int `json:"accountConcurrency,omitempty"`
+	// a Claude subscription's accounts set to the Claude TUI, by name in
+	// lower case ("tui"), and those the gateway serving runs on it now: a
+	// change takes effect once it restarts. ClaudeTUILive is false with
+	// no gateway serving.
+	AccountClaudeModes map[string]string `json:"accountClaudeModes,omitempty"`
+	ClaudeTUINow       map[string]bool   `json:"claudeTuiNow,omitempty"`
+	ClaudeTUILive      bool              `json:"claudeTuiLive,omitempty"`
+	// ClaudeTUIHere: this machine runs the Claude TUI (Linux)
+	ClaudeTUIHere bool `json:"claudeTuiHere,omitempty"`
 	// how many may wait for each key or account, and for how many seconds
 	// (0: no bound)
 	QueueLimit int `json:"queueLimit,omitempty"`
@@ -603,6 +612,21 @@ func providerInfoWith(p provider.Provider, agents []agentUse, desktop map[string
 		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), PriceRate: p.PriceRate,
 		AccountConcurrency: p.AccountConcurrency, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM,
 		Outputs: provider.OutputsOf(p.ID), Compacts: provider.CompactsOf(p.ID),
+	}
+	if p.Account != nil && p.Account.Agent == "claude" {
+		out.AccountClaudeModes = p.AccountClaudeModes
+		out.ClaudeTUIHere = provider.ClaudeTUIGOOS == "linux"
+		if live, ok := gateway.ReadTUILive(); ok {
+			out.ClaudeTUILive = true
+			for _, r := range p.AccountRefs() {
+				if live.Runs(p.ID, r) {
+					if out.ClaudeTUINow == nil {
+						out.ClaudeTUINow = map[string]bool{}
+					}
+					out.ClaudeTUINow[strings.ToLower(r)] = true
+				}
+			}
+		}
 	}
 	if p.Account != nil {
 		for _, r := range p.AccountRefs() {
@@ -1093,6 +1117,20 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		}
 		writeJSON(rw, providersState())
 	})
+	// how the gateway runs a Claude account from its next start: standard,
+	// or the Claude TUI
+	mux.HandleFunc("POST /api/providers/claude-mode", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ ID, Account, Mode string }
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := provider.SetAccountClaudeMode(in.ID, in.Account, in.Mode); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, providersState())
+	})
 	// a picture for a provider, picked in the editor: kept by content before
 	// the provider is saved, which then points at it. The page sends it as
 	// base64 in JSON — the app's web view hands a scheme handler no body for
@@ -1577,7 +1615,8 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if old != nil {
 					in.AccountCaps, in.AccountWindowCaps = old.AccountCaps, old.AccountWindowCaps
 					in.AccountConcurrency = old.AccountConcurrency
-					in.AccountNames = old.AccountNames // with accountname
+					in.AccountClaudeModes = old.AccountClaudeModes // with claude-mode
+					in.AccountNames = old.AccountNames             // with accountname
 				}
 				// a Zhipu key's team likewise: {} clears it
 				if in.ZhipuTeam == nil && old != nil {
