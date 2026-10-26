@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { buildClaudeLaunchCommand } from "../src/launch-command.ts";
 import { resolveClaudeNodeLaunch } from "../src/claude-node-entry.ts";
+import {
+  NATIVE_INLINE_EXTRA_BODY_MAX,
+  nativeExtraBodyTooLargeMessage,
+  planExtraBodyLaunch,
+} from "../src/extra-body-launch.ts";
 
 const root = mkdtempSync(join(tmpdir(), "launch-extra-body-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -67,5 +72,64 @@ require("fs").writeFileSync(process.env.PROBE_OUT, String(v.length));
     const n = Number(readFileSync(join(d, "probe-out.txt"), "utf8"));
     expect(n).toBe(body.length);
     expect(n).toBeGreaterThan(128 * 1024);
+  });
+
+  test("native claude gets inline EXTRA_BODY when small", () => {
+    const d = mkdtempSync(join(root, "native-inline-"));
+    const bodyFile = join(d, "extra-body.json");
+    const body = JSON.stringify({ safeguards: [{ classifier_context: "tiny" }] });
+    writeFileSync(bodyFile, body);
+    mkdirSync(join(d, "bin"), { recursive: true });
+    const claude = join(d, "bin", "claude");
+    writeFileSync(claude, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0]), { mode: 0o755 });
+    writeFileSync(
+      join(d, "probe.sh"),
+      `#!/bin/sh
+printf '%s' "$CLAUDE_CODE_EXTRA_BODY" > "$PROBE_OUT"
+`,
+      { mode: 0o755 }
+    );
+    const planned = planExtraBodyLaunch({
+      extraBodyFile: bodyFile,
+      claudePath: claude,
+      runDir: d,
+      preloadSourcePath: new URL("../src/extra-body-preload.cjs", import.meta.url).pathname,
+    });
+    expect(planned).toEqual({ kind: "native-inline", inlineExtraBody: body });
+    if (!("kind" in planned) || planned.kind !== "native-inline") throw new Error("unreachable");
+    const cmd = buildClaudeLaunchCommand({
+      claudePath: join(d, "probe.sh"),
+      claudeArgs: [],
+      unsetEnvArgs: ["-u", "CLAUDE_CODE_EXTRA_BODY_FILE"],
+      envArgs: [`CLAUDE_CODE_EXTRA_BODY=${planned.inlineExtraBody}`, `PROBE_OUT=${join(d, "probe-out.txt")}`],
+      exitStatusPath: join(d, "exit-status"),
+      holdMs: 1000,
+    });
+    const res = spawnSync("/bin/sh", ["-lc", cmd], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, CLAUDE_CODE_EXTRA_BODY_FILE: bodyFile },
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.status).toBe(0);
+    expect(readFileSync(join(d, "probe-out.txt"), "utf8")).toBe(body);
+  });
+
+  test("native claude rejects safeguards above inline limit", () => {
+    const d = mkdtempSync(join(root, "native-large-"));
+    const bodyFile = join(d, "extra-body.json");
+    writeFileSync(bodyFile, JSON.stringify({ safeguards: ["x".repeat(NATIVE_INLINE_EXTRA_BODY_MAX + 1)] }));
+    const bodyLen = readFileSync(bodyFile, "utf8").length;
+    const claude = join(d, "claude");
+    writeFileSync(claude, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0]), { mode: 0o755 });
+    const planned = planExtraBodyLaunch({
+      extraBodyFile: bodyFile,
+      claudePath: claude,
+      runDir: d,
+      preloadSourcePath: new URL("../src/extra-body-preload.cjs", import.meta.url).pathname,
+    });
+    expect("error" in planned).toBe(true);
+    if (!("error" in planned)) throw new Error("unreachable");
+    expect(planned.error).toBe(nativeExtraBodyTooLargeMessage(bodyLen));
   });
 });

@@ -1322,6 +1322,12 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	if err != nil {
 		return nil, nil, err
 	}
+	if len(req.Safeguards) > 0 {
+		body := tuiRuntimeSafeguardBody(req.Safeguards)
+		if err := tuiRuntimeValidateInteractiveSafeguardLaunch(claudePath, len(body)); err != nil {
+			return nil, nil, err
+		}
+	}
 	helperExe, helperArgv, err := tuiRuntimeMcpHelperCommand()
 	if err != nil {
 		return nil, nil, err
