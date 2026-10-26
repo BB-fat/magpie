@@ -845,6 +845,13 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// before the first paint rather than after the settings come
 		list := builtinsState()
 		boot["featuresOff"] = builtinsOff(list)
+		// and where the gateway listens, so the sidebar's line at its foot
+		// is drawn from the start, not held back until providers has come
+		// in (#1519's read waits for the agents); only this process's own,
+		// for one served by another magpie is the providers' read to find
+		if served.Load() != nil {
+			boot["sideGateway"] = map[string]any{"url": gateway.URL(), "running": true, "boot": true}
+		}
 		// and the settings of those the page draws (kernel.js)
 		boot["pluginConfig"] = builtinConfig(list)
 		// on Omarchy the page takes its theme's look before it paints
@@ -1218,6 +1225,10 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// nor whether the masked words match in any case
 		if _, sent := fields["redactWordsAnyCase"]; !sent {
 			in.RedactWordsAnyCase = cur.RedactWordsAnyCase
+		}
+		// nor whether a key goes as a made-up one of its form
+		if _, sent := fields["redactShape"]; !sent {
+			in.RedactShape = cur.RedactShape
 		}
 		// nor how long an image is given to be drawn
 		if _, sent := fields["imageTimeout"]; !sent {
@@ -2419,8 +2430,9 @@ func state() stateJSON {
 		if a.Import != nil {
 			aj.Import = a.Import()
 			if a.Added != nil {
-				added := a.Added()
-				aj.Added = &added
+				if added, known := a.Added(); known {
+					aj.Added = &added
+				}
 			}
 		}
 		if a.Launch != nil {
@@ -2520,6 +2532,13 @@ func fail(rw http.ResponseWriter, err error) {
 			out["reason"] = admin.Err.Error()
 		}
 	}
+	// a bun this Windows or processor can't run at all: said, with what
+	// to do, in the reader's language (zgcwkj on Discord)
+	var bun *plugin.BunUnstartableError
+	if errors.As(err, &bun) {
+		out["code"], out["bun"], out["bunWhy"] = "bun_unstartable", bun.Bun, bun.Why
+		out["said"] = bunSaid[bun.Why]
+	}
 	_ = json.NewEncoder(rw).Encode(out)
 }
 
@@ -2593,4 +2612,12 @@ func countClient(m map[string]string, client, as string) (map[string]string, err
 	}
 	out[strings.ToLower(client)] = as
 	return out, nil
+}
+
+// bunSaid is what the page says for a bun that can't start, by why: an
+// i18n.js key the page's api() puts through t(), kept here so app.js
+// carries one line for it, not both sentences
+var bunSaid = map[string]string{
+	"windows": "Bun, which runs plugins, can't start on this version of Windows: it needs Windows 10 version 1809 or later, or Windows Server 2019 or later. Update Windows to use plugins, or set MAGPIE_BUN to a bun that runs here.",
+	"cpu":     "Bun, which runs plugins, can't start on this computer's processor: it needs an x64 processor with SSE4.2 (Intel or AMD from 2008 on; in a virtual machine, a CPU type that passes it through). Run magpie on such a processor to use plugins, or set MAGPIE_BUN to a bun that runs here.",
 }

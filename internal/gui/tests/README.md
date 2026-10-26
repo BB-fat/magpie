@@ -41,6 +41,14 @@ a live gateway.
 
 ## Gateway Caller Keys
 
+`gateway-keys-empty.test.cjs` checks the Gateway page with no gateway key
+yet, as magpie web on a 390px phone: "No gateway keys yet" sits inside the
+list's card, inset from its edges, in the muted colour and size of Recent
+calls' empty line, in Chromium and WebKit, light and dark, and every
+language. A list that can't be read says why in the same card, still there
+after the page is drawn again; a list read before stays when a later read
+fails, and the error goes to the status line.
+
 `gateway-caller-keys.test.cjs` checks the named caller-key list on the
 Gateway page, including creation, copying, renaming, disabling, enabling,
 rotation and deletion. It verifies key-level usage overview, request filtering and
@@ -330,6 +338,11 @@ why one didn't load, updates one and removes one. The add sheet's
 "More in Plugins" row (the providers list has no button of its own) and
 "look for a plugin" link lead there. English and Chinese, Chromium and WebKit,
 with the API faked.
+
+`plugins-more-discover.test.cjs` checks that the add sheet's "More in
+Plugins" row and its "look for a plugin" link open Plugins on Discover,
+after Built-in or Installed was the tab open last (outloudvi on Discord).
+English and Chinese, Chromium and WebKit, with the API faked.
 
 `plugin-git.test.cjs` checks a plugin installed from a git repository: the
 market's field says it takes a GitHub repo, and Install sends
@@ -2038,8 +2051,16 @@ It runs in Chromium and WebKit
 with the real assets and an isolated API fixture:
 
 ```sh
-node --test internal/gui/tests/otel.test.cjs
+node --test internal/gui/tests/otel.test.cjs internal/gui/tests/otel-langfuse.test.cjs
 ```
+
+`otel-langfuse.test.cjs` checks the Langfuse setup: picking Langfuse and giving
+two keys saves Cloud EU's endpoint, the Basic header, the ingestion header,
+metrics off and export on, and nothing is saved on one key alone; Cloud US and
+a self-hosted address change only the endpoint. A Langfuse set up by hand opens
+with its keys filled in, nothing saved on opening, and a changed key keeps its
+other headers, metrics and export choice; another collector's headers aren't
+carried over. Every language at 1100, 520 and 360px, in Chromium and WebKit.
 
 `account-arrange.test.cjs` drags a subscription's accounts and a provider's
 keys by their rows (no handle) in every routing mode, and by Alt+↑/↓: the

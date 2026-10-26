@@ -44,6 +44,10 @@ import (
 // the version is part of the directory's name, so a cache written by an older
 // one is never read (pruneCalls).
 const callCacheVersion = "calls-v15"
+
+// CallCacheVersion is callCacheVersion, for a cache of what is made of the
+// calls (usage's requests-v1.bin).
+const CallCacheVersion = callCacheVersion
 const maxKeptCalls = 131072
 const maxKeptFiles = 64
 
@@ -55,6 +59,15 @@ var callCounts = map[string]int{} // small allocation hints, never call records
 var callOrder []string
 var callRoot string
 
+// callSwept is when pruneCalls last looked for shards no session file
+// names any more. Every Requests page lists the sources, and reading a
+// folder of ~16k shards and hashing every path each time was a tenth of
+// a warm page (#3493). The shard of a file read here goes as soon as the
+// file does; any other is left for a minute at most.
+var callSwept time.Time
+
+const callSweepEvery = time.Minute
+
 func callCacheDir() string             { return filepath.Join(filepath.Dir(CachePath()), callCacheVersion) }
 func callCachePath(path string) string { return filepath.Join(callCacheDir(), hashHead(path)+".gob") }
 
@@ -65,6 +78,7 @@ func resetCalls() {
 	callContinuations, callContinuationOrder = map[string]callContinuation{}, nil
 	callCounts = map[string]int{}
 	callRoot = ""
+	callSwept = time.Time{}
 	callGeneration++
 	resetOCCalls()
 	// ZCode's listing and WorkBuddy's gateway ids name another HOME's files
@@ -89,10 +103,8 @@ func pruneCalls(files []file) {
 		callCounts = map[string]int{}
 	}
 	on := make(map[string]bool, len(files))
-	shards := make(map[string]bool, len(files))
 	for _, f := range files {
 		on[f.path] = true
-		shards[hashHead(f.path)+".gob"] = true
 	}
 	order := callOrder[:0]
 	for _, path := range callOrder {
@@ -103,9 +115,11 @@ func pruneCalls(files []file) {
 		}
 	}
 	callOrder = order
+	gone := false
 	for path := range callCounts {
 		if !on[path] {
 			delete(callCounts, path)
+			gone = true
 		}
 	}
 	order = callContinuationOrder[:0]
@@ -119,6 +133,11 @@ func pruneCalls(files []file) {
 	callContinuationOrder = order
 
 	trimCallRevisions(time.Now())
+	// a session file read here and gone since takes its shard with it now
+	sweep := moved || gone || time.Since(callSwept) >= callSweepEvery
+	if sweep {
+		callSwept = time.Now()
+	}
 	callsMu.Unlock()
 	if moved {
 		// an older version's shards are never read again
@@ -129,7 +148,14 @@ func pruneCalls(files []file) {
 			}
 		}
 	}
+	if !sweep {
+		return
+	}
 	// IO never holds the metadata lock. A grace period protects live writers.
+	shards := make(map[string]bool, len(files))
+	for _, f := range files {
+		shards[hashHead(f.path)+".gob"] = true
+	}
 	entries, _ := os.ReadDir(root)
 	for _, e := range entries {
 		if e.IsDir() {
@@ -240,7 +266,7 @@ func readCalls(f file) *callFile {
 	old, generation := callCache[f.path], callGeneration
 	callsMu.Unlock()
 	if old == nil {
-		old = restoreCallContinuation(loadCalls(f))
+		old = loadKept(f)
 	}
 	if old != nil && old.Size == f.size && old.Mod == f.mod.UnixNano() {
 		callsMu.Lock()
@@ -373,7 +399,7 @@ func callsAlong(f file) *callsRide {
 	old, generation := callCache[f.path], callGeneration
 	callsMu.Unlock()
 	if old == nil {
-		old = restoreCallContinuation(loadCalls(f))
+		old = loadKept(f)
 	}
 	if old != nil && old.Size == f.size && old.Mod == f.mod.UnixNano() {
 		lock.Unlock()
@@ -434,7 +460,22 @@ type callFrame struct {
 	State   callDiskState
 	Strings []string
 	Patches []callPatch
+	// More: the frames after it, up to one without More, are one write's
+	// (framePatches); a file ending in one was cut off mid-write
+	More bool
+	// Calls is how many calls the file holds after this write's frames,
+	// to make room for them all at the first
+	Calls int
 }
+
+// framePatches is the most patches one frame holds. A write was one frame
+// whatever its size, and a frame is decoded whole: a Codex session of 52k
+// calls was one 8 MB frame, and reading it allocated ~100 MB and held ~70 MB
+// at once (24 MB of patches beside the calls made of them), the largest
+// part of the peak a start after an update reached in rebuilding the
+// Requests cache (#3493). A write is cut into frames of this many, read one
+// after another into the same buffers.
+const framePatches = 2048
 
 // Disk state contains only scalar continuation metadata. Even a nil runtime
 // index makes gob emit its recursive type descriptors in every append frame.
@@ -489,14 +530,44 @@ func callText(c *Call) [13]*string {
 	return [13]*string{&c.Agent, &c.Session, &c.ThreadID, &c.Model, &c.Requested, &c.Effort, &c.Cwd, &c.Upstream, &c.AccountID, &c.UserID, &c.Error, &c.ErrorText, &c.File}
 }
 
+// frameBuffer is what loadCalls reads a shard's frames into, kept between
+// shards: a cold Requests build reads every one of ~15.6k, and a new
+// buffer, slice of patches and slice of strings for each frame came to
+// ~400 MB of it (#3493). Nothing read out of a frame points into these:
+// gob copies every string and byte slice out of its input, and a patch's
+// call is copied into the file's calls.
+type frameBuffer struct {
+	data []byte
+	f    callFrame
+}
+
+var frameBuffers = sync.Pool{New: func() any { return new(frameBuffer) }}
+
+// frame is k's frame emptied for the next to be decoded into it. gob
+// leaves out a field of the zero value and leaves the field it decodes
+// into as it was, so a patch or string is cleared from the last frame,
+// not only cut off: a reused slice is decoded into in place.
+func (k *frameBuffer) frame() *callFrame {
+	clear(k.f.Patches)
+	clear(k.f.Strings)
+	k.f = callFrame{Strings: k.f.Strings[:0], Patches: k.f.Patches[:0]}
+	return &k.f
+}
+
 func loadCalls(f file) *callFile {
 	in, err := os.Open(callCachePath(f.path))
 	if err != nil {
 		return nil
 	}
 	defer in.Close()
+	k := frameBuffers.Get().(*frameBuffer)
+	defer func() {
+		k.frame() // the pool holds no file's strings
+		frameBuffers.Put(k)
+	}()
 	var st *callFile
 	var calls []Call
+	var big, more bool
 	msgs := map[string]int{}
 	began := map[string]time.Time{}
 	for {
@@ -512,21 +583,29 @@ func loadCalls(f file) *callFile {
 		if size == 0 || size > 256<<20 {
 			return nil
 		}
-		data := make([]byte, int(size))
+		data := k.data[:0]
+		if cap(data) < int(size) {
+			data = make([]byte, int(size))
+		}
+		data = data[:size]
+		k.data = data
 		if _, err = io.ReadFull(in, data); err != nil || crc32.ChecksumIEEE(data) != binary.LittleEndian.Uint32(header[4:]) {
 			return nil
 		}
-		var frame callFrame
-		if gob.NewDecoder(bytes.NewReader(data)).Decode(&frame) != nil || frame.State.Path != f.path || frame.State.Agent != f.agent {
+		frame := k.frame()
+		if decodeFrame(data, frame) != nil || frame.State.Path != f.path || frame.State.Agent != f.agent {
 			return nil
 		}
 		if st != nil && frame.State.Off < st.Off {
 			return nil
 		}
-		// a frame's patches are mostly new calls: room for them at once,
-		// rather than append's doublings, which a warm start paid ~500 MB
-		// for across every cached file
-		calls = slices.Grow(calls, len(frame.Patches))
+		big = big || len(frame.Patches) > framePatches
+		more = frame.More
+		// room for the write's calls at once (its frames' Calls; an older
+		// frame's patches, mostly new calls), rather than append's
+		// doublings, which a warm start paid ~500 MB for across every
+		// cached file
+		calls = slices.Grow(calls, max(len(frame.Patches), frame.Calls-len(calls)))
 		for _, p := range frame.Patches {
 			if p.Index < 0 || p.Index > len(calls) {
 				return nil
@@ -552,17 +631,58 @@ func loadCalls(f file) *callFile {
 		}
 		st = frame.State.restore()
 	}
-	if st == nil {
+	if st == nil || more {
 		return nil
 	}
 	st.Calls, st.Msgs, st.Began = calls, msgs, began
+	st.bigFrame = big
+	return st
+}
+
+// loadKept is the calls kept on disk for f, under f's callLock. A file
+// written as one frame larger than framePatches, before frames were cut,
+// is written again in frames, once.
+func loadKept(f file) *callFile {
+	st := restoreCallContinuation(loadCalls(f))
+	if st != nil && st.bigFrame {
+		st.bigFrame = false
+		writeCalls(st, 0, false)
+	}
 	return st
 }
 
 func writeCalls(st *callFile, start int, appendOnly bool) {
-	frame := callFrame{State: diskCallState(st), Strings: []string{""}}
-	dict := map[string]uint32{"": 0}
+	state := diskCallState(st)
+	var data bytes.Buffer
+	var frame callFrame
+	var dict map[string]uint32
+	var header [8]byte
+	ok := true
+	// flush adds the frame to data, its header in front
+	flush := func(more bool) {
+		frame.More = more
+		at := data.Len()
+		data.Write(header[:])
+		if gob.NewEncoder(&data).Encode(frame) != nil {
+			ok = false
+			return
+		}
+		b := data.Bytes()
+		binary.LittleEndian.PutUint32(b[at:], uint32(len(b)-at-len(header)))
+		binary.LittleEndian.PutUint32(b[at+4:], crc32.ChecksumIEEE(b[at+len(header):]))
+	}
+	begin := func() {
+		frame = callFrame{State: state, Strings: []string{""}, Calls: len(st.Calls)}
+		dict = map[string]uint32{"": 0}
+	}
+	begin()
 	add := func(i int) {
+		if len(frame.Patches) == framePatches {
+			if flush(true); !ok {
+				return
+			}
+			begin()
+		}
 		p := callPatch{Index: i, Call: st.Calls[i], Began: st.Began[st.Calls[i].Msg]}
 		p.Call.File = ""
 		for j, field := range callText(&p.Call) {
@@ -585,13 +705,9 @@ func writeCalls(st *callFile, start int, appendOnly bool) {
 	for i := start; i < len(st.Calls); i++ {
 		add(i)
 	}
-	var data bytes.Buffer
-	if gob.NewEncoder(&data).Encode(frame) != nil {
+	if flush(false); !ok {
 		return
 	}
-	var header [8]byte
-	binary.LittleEndian.PutUint32(header[:4], uint32(data.Len()))
-	binary.LittleEndian.PutUint32(header[4:], crc32.ChecksumIEEE(data.Bytes()))
 	dir := callCacheDir()
 	if os.MkdirAll(dir, 0700) != nil {
 		return
@@ -609,10 +725,7 @@ func writeCalls(st *callFile, start int, appendOnly bool) {
 	if !appendOnly {
 		defer os.Remove(out.Name())
 	}
-	_, err = out.Write(header[:])
-	if err == nil {
-		_, err = out.Write(data.Bytes())
-	}
+	_, err = out.Write(data.Bytes())
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
 	}

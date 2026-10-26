@@ -66,7 +66,7 @@ const records = [
 ];
 
 function serve(lang, sum, asked, opts = {}) {
-  const settings = { theme: "light", lang, tray: "panel", currency: "usd", redact: !opts.off, redactPersonal: !opts.off, redactActions: { PRIVATE_KEY: "block" } };
+  const settings = { theme: "light", lang, tray: "panel", currency: "usd", redact: !opts.off, redactPersonal: !opts.off, redactActions: { PRIVATE_KEY: "block" }, ...opts.settings };
   return async (route) => {
     const req = route.request(), url = new URL(req.url());
     const json = (data) => route.fulfill({ json: data });
@@ -93,20 +93,21 @@ function serve(lang, sum, asked, opts = {}) {
     if (url.pathname === "/api/masking/records") {
       asked.push(url.search);
       const q = url.searchParams, kinds = q.get("kind")?.split(",");
-      const rs = (opts.none ? [] : records).filter((r) => (!kinds || r.values.some((v) => kinds.includes(v.k))) && (!q.get("by") || r.values.some((v) => v.b === q.get("by")))
+      const rs = (opts.none ? [] : opts.records || records).filter((r) => (!kinds || r.values.some((v) => kinds.includes(v.k))) && (!q.get("by") || r.values.some((v) => v.b === q.get("by")))
         && (!q.get("agent") || r.agent === q.get("agent")) && (!q.get("provider") || r.provider === q.get("provider")) && (!q.get("blocked") || r.blocked));
       return json({ records: rs, more: false });
     }
     if (url.pathname === "/api/masking/record") {
-      const r = records.find((r) => r.key === +url.searchParams.get("key"));
+      const r = (opts.records || records).find((r) => r.key === +url.searchParams.get("key"));
       return r ? json(r) : route.fulfill({ status: 404, body: "404 page not found" });
     }
     if (url.pathname === "/api/masking/sent") {
       asked.push("sent " + url.searchParams.get("key"));
-      return url.searchParams.get("key") === "1002" ? json({ body: SENT }) : route.fulfill({ status: 404, body: "404 page not found" });
+      const body = opts.sent ? opts.sent[url.searchParams.get("key")] : url.searchParams.get("key") === "1002" && SENT;
+      return body ? json({ body }) : route.fulfill({ status: 404, body: "404 page not found" });
     }
     if (url.pathname === "/api/masking/values") {
-      const known = { [KEY]: SECRET, [MAIL]: ADDR };
+      const known = { [KEY]: SECRET, [MAIL]: ADDR, ...opts.known };
       const ps = JSON.parse(req.postData()).ps;
       asked.push("values " + ps.join(","));
       return json({ values: Object.fromEntries(ps.filter((p) => known[p]).map((p) => [p, known[p]])) });
@@ -124,7 +125,7 @@ function serve(lang, sum, asked, opts = {}) {
 
 async function open(engine, lang, width, sum, where, opts) {
   const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
-  const page = await (await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: "reduce" })).newPage();
+  const page = await (await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: opts?.motion ? "no-preference" : "reduce" })).newPage();
   page.setDefaultTimeout(8000);
   const errors = [], asked = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -165,6 +166,38 @@ async function stillClick(page, loc) {
   assert.deepEqual(await scrolled(page), before, "no click moved the page");
 }
 
+// The page comes to rest while it sits open (#3185): the flow's dots, its
+// scan mark and the Live dot each play a few times when drawn. Endless,
+// the dots (SMIL) laid the page out ~700 times a second in Chromium, 16%
+// of a core and ~0.5W; in WebKit 180 wakeups a second. SMIL's clock is
+// moved on and each CSS animation's end is read, so nothing waits.
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const width of [1100, 640]) {
+    test(`${engine} ${width}px: the masking page's motion ends`, async (t) => {
+      const { browser, page, errors } = await open(engine, "en", width, summary, "", { motion: true });
+      t.after(() => browser.close());
+      const card = page.locator("#maskCard");
+      await card.locator(".mo-flow .mo-dot").first().waitFor({ state: "attached" });
+      await page.locator("#maskList .msk-live i").waitFor({ state: "attached" });
+      const rest = await page.evaluate(() => {
+        const smil = [...document.querySelectorAll("#view-masking animate, #view-masking animateMotion")];
+        for (const svg of new Set(smil.map((a) => a.ownerSVGElement))) svg.setCurrentTime(3600);
+        // WebKit keeps an ended one's start time, so only Chromium is asked
+        // the clock; both are asked each one's own timing
+        const on = smil.filter((a) => { try { a.getStartTime(); return true; } catch { return false; } }).length;
+        const forever = smil.filter((a) => ["repeatCount", "repeatDur", "dur", "end"].some((k) => a.getAttribute(k) === "indefinite") || !(+a.getAttribute("repeatCount") > 0)).length;
+        const endless = document.getAnimations().filter((a) => a.effect?.getComputedTiming().endTime === Infinity).map((a) => a.animationName || a.id || "?");
+        return { smil: smil.length, on, forever, endless };
+      });
+      assert(rest.smil > 0, "the flow moves when drawn");
+      assert.equal(rest.forever, 0, "a dot set to go round for good");
+      if (engine === "chromium") assert.equal(rest.on, 0, "an hour on, a dot still goes round");
+      assert.deepEqual(rest.endless, [], "an animation that never ends");
+      assert.deepEqual(errors, []);
+    });
+  }
+}
+
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   for (const lang of ["en", "zh", "zh-TW", "ja", "de"]) {
     for (const width of [1100, 640]) {
@@ -188,11 +221,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // to the ring's top left)
         const bird = await card.locator(".msk-hub svg").boundingBox();
         assert(Math.abs(bird.x + bird.width / 2 - (hub.x + hub.width / 2)) < 1 && Math.abs(bird.y + bird.height / 2 - (hub.y + hub.height / 2)) < 1, "the bird in the middle of its ring");
-        // each agent and provider with its logo, on the side the lines are
+        // each agent and provider with its logo
         assert.deepEqual(await card.locator(".mo-node .ic").evaluateAll((ns) => ns.map((n) => n.dataset.icon)), ["claudecode-color", "codex-color", "anthropic", "openai"]);
-        const agentNode = card.locator(".mo-col.agent .mo-node").first(), provNode = card.locator(".mo-col.provider .mo-node").first();
-        assert((await agentNode.locator(".ic").boundingBox()).x > (await agentNode.locator(".nm").boundingBox()).x, "an agent's logo after its name");
-        assert((await provNode.locator(".ic").boundingBox()).x < (await provNode.locator(".nm").boundingBox()).x, "a provider's logo before its name");
+        // on both sides the logo first, then the name; a side's logos in one
+        // column and its names on one edge; every logo on a disc of one size
+        // (bare, a logo that fills its box and one that doesn't read as two
+        // sizes)
+        const nodes = await card.locator(".mo-node:not(:disabled)").evaluateAll((ns) => ns.map((b) => {
+          const ic = b.querySelector(".ic").getBoundingClientRect(), nm = b.querySelector(".nm").getBoundingClientRect();
+          return { side: b.parentElement.classList.contains("agent") ? "agent" : "provider", ic: { x: ic.x, w: ic.width, h: ic.height, r: getComputedStyle(b.querySelector(".ic")).borderRadius }, nm: nm.x };
+        }));
+        for (const n of nodes) {
+          assert(n.ic.x + n.ic.w <= n.nm, `the logo before the name: ${JSON.stringify(n)}`);
+          assert.deepEqual([n.ic.w, n.ic.h, n.ic.r], [24, 24, "50%"], `one disc for every logo: ${JSON.stringify(n)}`);
+        }
+        for (const side of ["agent", "provider"]) {
+          const of = nodes.filter((n) => n.side === side);
+          assert(of.every((n) => Math.abs(n.ic.x - of[0].ic.x) < 0.5 && Math.abs(n.nm - of[0].nm) < 0.5), `${side}s' logos in one column, names on one edge: ${JSON.stringify(of)}`);
+        }
         assert.match(await card.locator(".mo-cap").textContent(), /magpie/);
         assert.equal(await page.evaluate(() => [...document.querySelectorAll("#maskCard, #maskCard *")].some((n) => /gradient/.test(getComputedStyle(n).backgroundImage))), false, "flat: no gradient");
         // short: the list starts in the first screen
@@ -305,6 +351,41 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.locator("#maskCard:not(.off) .msk-head").waitFor();
       assert.deepEqual(errors, []);
     });
+    // what the off card promises is what its button turns on: secrets,
+    // not emails or computer names. Then, with secrets alone on and
+    // nothing masked, the card says so and where personal data is turned
+    // on, not a bare 0 (Lesnolie on X: "一直是 0"); your own words alone
+    // mask, and the card says masking is on
+    test(`${engine} ${lang}: secrets alone and nothing masked, the card says what is masked and where personal data is`, async (t) => {
+      const empty = (d) => ({ ...summary(d), requests: 0, n: 0, distinct: 0, blocked: 0, kinds: [], agents: [], providers: [], values: [], by: {} });
+      const { browser, page, errors } = await open(engine, lang, 640, empty, null, { off: true, none: true });
+      t.after(() => browser.close());
+      await page.locator("#maskCard.off").waitFor();
+      if (lang === "en") {
+        const off = await page.locator("#maskCard").innerText();
+        assert(!/computer names|emails become/.test(off), `the off card promises what Turn on masking doesn't turn on: ${off}`);
+      }
+      await page.locator("#maskCard .primary").click();
+      const none = page.locator("#maskCard .msk-flow-none");
+      await none.locator("button").waitFor();
+      if (lang === "en") assert.match(await none.innerText(), /^Only keys, passwords and tokens are masked now.*Mask personal data is on, in Settings › Privacy$/s);
+      else for (const w of ["Only keys", "Emails and phone", "A request that carries"]) assert(!(await none.innerText()).includes(w), `${w} left in English`);
+      assert.deepEqual(await wide(page), { page: false, over: [] });
+      await shot(page, `${engine}-${lang}-secrets-only`);
+      await none.locator("button").click();
+      await page.locator("#view-settings").waitFor({ state: "visible" });
+      assert.deepEqual(errors, []);
+    });
+    test(`${engine} ${lang}: your own words alone are masking on`, async (t) => {
+      const empty = (d) => ({ ...summary(d), requests: 0, n: 0, distinct: 0, blocked: 0, kinds: [], agents: [], providers: [], values: [], by: {} });
+      const { browser, page, errors } = await open(engine, lang, 640, empty, null, { off: true, none: true, settings: { redactWords: ["Nightjar"] } });
+      t.after(() => browser.close());
+      await page.locator("#maskCard .msk-head").waitFor();
+      assert.equal(await page.locator("#maskCard.off").count(), 0, "words alone mask, the card says off");
+      assert.equal(await page.locator("#maskCard .msk-head button").count(), 0, "no Turn on masking while words mask");
+      assert(!(await page.locator("#maskCard .msk-flow-none").innerText()).includes("Only keys"), "words alone: not the secrets-only line");
+      assert.deepEqual(errors, []);
+    });
   }
 
   test(`${engine}: a masked call on the Gateway page, and a key in the address, open its request`, async (t) => {
@@ -332,4 +413,33 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     await page.locator("#maskCard .msk-num").waitFor();
     assert.deepEqual(errors, []);
   });
+}
+
+// "Keep a key's form" sends a made-up key of the real one's form in place of
+// a {{…}} placeholder (redact's shape.go): the page marks it, and puts the
+// real key against it, as it does a placeholder (#3599)
+const MADE = "sk_hYQWRBFmdHNIo5XVT2VnIIGh4mmMiJNm", REAL = "sk_w3axCByTQgK1PxqPhfKTrJOLBqz6sbZv";
+const made = {
+  records: [{ key: 1005, t: ago(60e3), route: "chat", what: "chat", agent: "codex", provider: "openai", model: "gpt-5", n: 2, back: { [MADE]: 1 },
+    values: [{ p: MADE, k: "API_KEY", b: "rule", h: "sk_w", l: 35, n: 2, known: true }],
+    snips: { [MADE]: `OPENAI_API_KEY=${MADE}` } }],
+  sent: { 1005: JSON.stringify({ model: "gpt-5", messages: [{ role: "user", content: `OPENAI_API_KEY=${MADE} sk_live_other\nonce more: ${MADE}` }] }) },
+  known: { [MADE]: REAL },
+};
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of ["en", "zh"]) {
+    test(`${engine} ${lang}: a made-up key is marked as a placeholder is`, async (t) => {
+      const { browser, page, errors } = await open(engine, lang, 1100, summary, "", made);
+      t.after(() => browser.close());
+      await page.locator("#maskList .msk-row").first().click();
+      const one = page.locator("#maskOne");
+      await one.locator(".msk-msg").first().waitFor();
+      assert.deepEqual(await one.locator(".msk-msg .msk-text").last().locator("mark").allTextContents(), [MADE, MADE], "as the vendor got it");
+      assert.deepEqual(await one.locator(".msk-msg .msk-text").first().locator("mark").allTextContents(), [REAL, REAL], "as written here");
+      await stillClick(page, one.locator(".msk-val").first());
+      assert.equal(await one.locator("mark.lit").count(), 4);
+      await untranslated(page, lang);
+      assert.deepEqual(errors, []);
+    });
+  }
 }

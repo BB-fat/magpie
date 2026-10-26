@@ -337,6 +337,8 @@ function costHead(c, note, title) {
   cost.append(el("span", note ? "unpriced" : "", note || t("effective prices")));
   cost.title = title;
 }
+// a request magpie sent a provider by itself to test it (SourceProbe)
+const probeWhy = () => t("magpie sent this itself to test the provider (Test, Detect APIs or a model list), not for an agent. It is not counted in any total.");
 const unpricedCalls = (n) => t(n === 1 ? "{n} call unpriced" : "{n} calls unpriced", { n: ledNum(n) });
 const unpricedCallsWhy = (n) => n ? t(n === 1 ? "{n} call had no known price and is not counted" : "{n} calls had no known price and are not counted", { n }) : t("Estimated using effective model prices, including custom prices");
 // renderCosts redraws whatever on the Usage page shows a cost, once the
@@ -1936,10 +1938,17 @@ function renderLedger() {
     // one made on another computer, whose usage sync brought (#542)
     const at = r.computerName ? t("{agent} · on {computer}", { agent: name, computer: r.computerName }) : name;
     who.append(icon(r.icon || "generic"), el("span", "", [r.via ? t("{agent} · via {host}", { agent: at, host: r.via }) : at, r.callerKeyLabel || r.callerKeyName].filter(Boolean).join(" · ")));
-    // a request magpie made by itself, apart from the agents' own (#1839)
-    if (r.agent === "magpie") who.append(ownBadge());
+    // a request magpie made by itself, apart from the agents' own (#1839);
+    // one that tested the provider (the editor's Test, Detect APIs, a model
+    // list) is counted nowhere, and says so (neiko on Discord)
+    const probe = r.source === "probe";
+    if (r.agent === "magpie") {
+      const own = ownBadge();
+      if (probe) own.title = probeWhy();
+      who.append(own);
+    }
     td(who, "", [r.kind, r.session && t("session {id}", { id: r.session })].filter(Boolean).join(" · "));
-    td(r.req || "—", "model" + (r.req ? "" : " faint"), r.req || t("Not kept for requests before this version"));
+    td(r.req || "—", "model" + (r.req ? "" : " faint"), r.req || (probe ? "" : t("Not kept for requests before this version")));
     const local = r.source === "log";
     // A session file names the provider it was set up to call, which is
     // where a call that went straight to a vendor went: nothing stood
@@ -1979,6 +1988,11 @@ function renderLedger() {
     if (r.source === "reported") {
       const k = el("span", "src reported", t("Reported"));
       k.title = t("Reported by the app that made it, through POST /v1/magpie/usage/requests: the call went straight to its vendor, not through magpie.");
+      badges.append(k);
+    }
+    if (probe) {
+      const k = el("span", "src probe", window.kindName ? window.kindName(r.kind) : r.kind);
+      k.title = probeWhy();
       badges.append(k);
     }
     if (badges.childElementCount) wc.append(badges);
@@ -3609,10 +3623,22 @@ function refreshUsage(now = false) {
   return flight;
 }
 renderUsageEvery();
-setInterval(() => {
-  if (!usageEvery || view !== "usage" || document.hidden || document.querySelector(".pop:not([hidden])")) return;
-  if (performance.now() - usageLast >= usageEvery * 1000) refreshUsage();
-}, 1000);
+// the refresh is looked at each second only while the page is in sight: a
+// look with nothing to do wakes the web content process all the same
+// (#3185), so out of sight there is none until it is shown again
+let usageSecond = 0;
+function usageTicks() {
+  if ($("#view-usage").hidden || document.hidden) { clearInterval(usageSecond); usageSecond = 0; return; }
+  usageSecond ||= setInterval(() => {
+    if ($("#view-usage").hidden || document.hidden) return usageTicks();
+    if (!usageEvery || view !== "usage" || document.querySelector(".pop:not([hidden])")) return;
+    if (performance.now() - usageLast >= usageEvery * 1000) refreshUsage();
+  }, 1000);
+}
+new MutationObserver(usageTicks).observe($("#view-usage"), { attributes: true, attributeFilter: ["hidden"] });
+document.addEventListener("visibilitychange", usageTicks);
+window.addEventListener("focus", usageTicks);
+usageTicks();
 // opened from the tray panel's Usage tab: on the Requests of one provider or agent
 if (mode === "window" && params.get("view") === "usage") {
   // An explicit destination takes precedence over the remembered tab.

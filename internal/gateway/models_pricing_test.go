@@ -94,12 +94,12 @@ func TestModelsListPricing(t *testing.T) {
 func TestPerToken(t *testing.T) {
 	for in, want := range map[float64]string{0: "0", 3: "0.000003", 0.3: "0.0000003", 3.75: "0.00000375",
 		15: "0.000015", 1234567: "1.234567", 12345678.9: "12.3456789", 0.075: "0.000000075"} {
-		if got := perToken(in); got != want {
-			t.Errorf("perToken(%v) = %s, want %s", in, got, want)
+		if got := catalog.PerToken(in); got != want {
+			t.Errorf("PerToken(%v) = %s, want %s", in, got, want)
 		}
 	}
 	// a user's free price is known: both parts there, at 0
-	got, _ := json.Marshal(openRouterPricing(catalog.Price{}))
+	got, _ := json.Marshal(catalog.OpenRouterPricing(catalog.Price{}))
 	if string(got) != `{"completion":"0","prompt":"0"}` {
 		t.Errorf("a free model's pricing: %s", got)
 	}
