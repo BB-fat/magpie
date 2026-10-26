@@ -84,3 +84,27 @@ magpie-tui-runtime --serve ... \
 `exec.LookPath` + regular-executable check accepts it directly. No extra
 shim is required, but a thin wrapper script that `exec bun <path>/cli.ts`
 also works.
+
+## magpie's changes (from claude-tui-boost v0.2.16, f57ee457)
+
+magpie embeds this wrapper in its Claude TUI bridge
+(`internal/claudetui`). On top of the plugin's copy above:
+
+- tmux: a run's own server, `tmux -S $CLAUDE_BRIDGE_TMUX_SOCKET -f /dev/null`
+  started in the foreground (`-D`) under the wrapper, every tmux command
+  on that socket, and `kill-server` on shutdown (`startPrivateTmux`).
+  `CLAUDE_BRIDGE_TMUX_PATH` and `CLAUDE_BRIDGE_CLAUDE_PATH` name the tmux
+  and Claude Code to run; standalone, they are found on PATH as before.
+- Hooks: written only to the run's `.claude/settings.local.json` (the
+  global `~/.claude/settings.json` paths, and `--desplega-install` /
+  `--desplega-uninstall`, are removed), run as `<absolute bun> <bundle>`
+  (`process.execPath`), never through `#!/usr/bin/env bun`.
+- `user-context.ts` takes the MCP server's name from
+  `CLAUDE_BRIDGE_MCP_SERVER`.
+- `.claude.json` and settings are written whole, 0600 (`fs-atomic.ts`);
+  under magpie the wrapper refuses to run without `CLAUDE_CONFIG_DIR`.
+- `json-schema.ts` checks a schema and a reply within bounds before zod
+  sees them (`JSON_LIMITS`), and says at most 8 issues.
+- The native tmux ownership marker records the run's socket.
+- Dependencies: `zod` 4.6.6, locked in `bun.lock`, built into
+  `dist/claude-bridge.js`; `test/magpie.test.ts` tests the changes.
