@@ -4,7 +4,7 @@ package gateway
 // between calls. Preserve the original tool schemas, order, context and
 // effort; accepting arbitrary changes here could bind a result to a
 // different execution context. A remapped or unmatched handoff is not proof.
-func (r *tuiRuntimeSubscriptionRun) exactInteractiveToolGrowth(owner string, req *Request, how string) bool {
+func (r *tuiRuntimeSubscriptionRun) exactInteractiveToolGrowth(owner string, req *tuiRuntimeRequest, how string) bool {
 	if r == nil || req == nil || how != tuiRuntimeByExactID {
 		return false
 	}

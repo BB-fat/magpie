@@ -50,7 +50,7 @@ func TestClaudeTUIRuntimeNativeTmuxGuardRefusesLegacyResumeWithoutOriginalMarker
 	defer tuiRuntimeBridges.Delete(b)
 	owner, outer := "owner", "legacy-with-checkpoint"
 	tuiRuntimeArSave(t, b, owner, outer, "legacy-inner", false)
-	req := &Request{Model: tuiRuntimeAutoTestModel, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "continue"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: tuiRuntimeAutoTestModel, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "continue"}}}}}}
 	_, _, err := b.startInteractiveWithPromptImages(context.Background(), req, tuiRuntimeAutoTestModel, "", owner, outer, "continue", "legacy-inner", nil, false)
 	if err == nil {
 		t.Fatal("older uninstrumented Claude/tmux run was resumed without an ownership marker")

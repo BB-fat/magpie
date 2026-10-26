@@ -26,7 +26,7 @@ func TestClaudeTUIRuntimeRecoveryAdmissionDiagnosticRetrySuffix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			msgs := append([]Message(nil), base...)
 			msgs[len(msgs)-1] = tc.last
-			req := &Request{Messages: msgs}
+			req := &tuiRuntimeRequest{Request: Request{Messages: msgs}}
 			before := tuiRuntimeInteractiveReadOnlyOptInIndex(req)
 			got := tuiRuntimeInteractiveRestoreRejectionDiagnostic(tuiRuntimeInteractiveSessionEntry{Dirty: true}, req)
 			if !strings.Contains(got, tc.want) || !strings.Contains(got, "transport_502=true") {

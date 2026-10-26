@@ -49,7 +49,7 @@ func tuiRuntimeNewTestServer() *tuiRuntimeServer {
 // where `proto` was provider.Protocol. In the bridge package it is a
 // plain string and only protoAnthropic is ever passed.
 func (s *tuiRuntimeServer) serveSubscription(w http.ResponseWriter, r *http.Request, from, name, model, owner string, body []byte, usage *Usage,
-	start func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error)) (int, string) {
+	start func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error)) (int, string) {
 	// Tests reseat s.subscription with a bridge of their own; the runtime
 	// handler must consult the same one.
 	s.rt.bridge = s.subscription

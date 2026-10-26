@@ -31,7 +31,7 @@ func TestClaudeTUIRuntimeRestoreSkipsKnownFailedDesktopCompanionWithoutToolRepla
 				"API Error: 502 NTT VPS Claude: Claude TUI: Claude interactive persisted resume failed: %s; refusing full history replay. This is a server-side issue.", reason)}}}
 			user := Message{Role: "user", Parts: []Part{{Kind: Text, Text: "new question"}}}
 			msgs := append(append([]Message{}, base...), companion, errorReply, user)
-			_, suffix, status := b.restoreInteractiveSession(owner, outer, &Request{Messages: msgs})
+			_, suffix, status := b.restoreInteractiveSession(owner, outer, &tuiRuntimeRequest{Request: Request{Messages: msgs}})
 			if status != tuiRuntimeInteractiveRestoreExact || len(suffix) != 1 || suffix[0].Parts[0].Text != "new question" {
 				t.Fatalf("got status=%s, suffix=%#v", status, suffix)
 			}
@@ -98,7 +98,7 @@ func TestClaudeTUIRuntimeRestoreReplyAnchorAfterLargeCompactionAndRepeated502s(t
 		)
 	}
 	compacted = append(compacted, Message{Role: "user", Parts: []Part{{Kind: Text, Text: "continue after compact"}}})
-	_, suffix, status := b.restoreInteractiveSession(owner, outer, &Request{Messages: compacted})
+	_, suffix, status := b.restoreInteractiveSession(owner, outer, &tuiRuntimeRequest{Request: Request{Messages: compacted}})
 	if status != tuiRuntimeInteractiveRestoreReplyAnchor || len(suffix) != 1 || suffix[0].Parts[0].Text != "continue after compact" {
 		t.Fatalf("unexpected compacted continuation: status=%q suffix=%#v", status, suffix)
 	}
@@ -142,7 +142,7 @@ func TestClaudeTUIRuntimeRestoreDesktopCompanionRequiresCheckpointAndToolFreeTai
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, since, status := b.restoreInteractiveSession(owner, outer, &Request{Messages: tc.msgs})
+			_, since, status := b.restoreInteractiveSession(owner, outer, &tuiRuntimeRequest{Request: Request{Messages: tc.msgs}})
 			if tc.ok {
 				if status != tuiRuntimeInteractiveRestoreCompanion || len(since) != 1 || since[0].Parts[0].Text != companion.Parts[0].Text {
 					t.Fatalf("safe companion refused: %s %#v", status, since)
@@ -197,7 +197,7 @@ func TestClaudeTUIRuntimeRestore120TurnsCompactionsAndTransportFailures(t *testi
 		}
 		requestText := fmt.Sprintf("request-%d", i)
 		messages = append(messages, user(requestText))
-		_, since, status := b.restoreInteractiveSession(owner, outer, &Request{Messages: messages})
+		_, since, status := b.restoreInteractiveSession(owner, outer, &tuiRuntimeRequest{Request: Request{Messages: messages}})
 		want := tuiRuntimeInteractiveRestoreExact
 		if compressed {
 			want = tuiRuntimeInteractiveRestoreReplyAnchor

@@ -18,17 +18,17 @@ import (
 )
 
 func TestClaudeTUIRuntimeInteractiveTransportRejectsUnsupportedRequests(t *testing.T) {
-	first := &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hi"}}}}}
+	first := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hi"}}}}}}
 	if err := tuiRuntimeValidateInteractiveFirstTurn(first); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
 		name string
-		req  Request
+		req  tuiRuntimeRequest
 	}{
-		{"replay", Request{Messages: []Message{{Role: "user"}, {Role: "assistant"}, {Role: "user"}}}},
-		{"tool result", Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: ToolResult}}}}}},
-		{"file", Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: File, MediaType: "application/pdf", Data: "AA=="}}}}}},
+		{"replay", tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user"}, {Role: "assistant"}, {Role: "user"}}}}},
+		{"tool result", tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: ToolResult}}}}}}},
+		{"file", tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: File, MediaType: "application/pdf", Data: "AA=="}}}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := tuiRuntimeValidateInteractiveFirstTurn(&tc.req); err == nil {
@@ -72,7 +72,7 @@ func TestClaudeTUIRuntimeInteractiveTransportToolContinuationShape(t *testing.T)
 	user := Message{Role: "user", Parts: []Part{{Kind: Text, Text: "run tool"}}}
 	call := Message{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "c1", Name: "echo_test"}}}
 	result := Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "c1", Text: "HELLO"}, {Kind: Text, Text: "<system-reminder>new user message</system-reminder>"}}}
-	req := Request{Messages: []Message{user, call, result}, Tools: []Tool{{Name: "echo_test"}}}
+	req := tuiRuntimeRequest{Request: Request{Messages: []Message{user, call, result}, Tools: []Tool{{Name: "echo_test"}}}}
 	if err := tuiRuntimeValidateInteractiveToolContinuation(&req); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestClaudeTUIRuntimeInteractiveTransportToolContinuationShape(t *testing.T)
 
 func TestClaudeTUIRuntimeInteractiveExactIDContinuationCanOmitAssistantWireRow(t *testing.T) {
 	body := []byte("{\"model\":\"claude-opus-5-5\",\"max_tokens\":64,\"tools\":[{\"name\":\"echo_test\",\"input_schema\":{\"type\":\"object\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"run tool\"},{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"c1\",\"content\":\"DONE\"}]}]}")
-	req, err := parseAnthropic(body)
+	req, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestClaudeTUIRuntimeInteractiveTransportMissingWrapperFailsClosed(t *testin
 		t.Fatal("unavailable PTY wrapper silently accepted")
 	}
 	if _, _, err := tuiRuntimeNewSubscriptionBridge().startInteractiveOneTurn(context.Background(),
-		&Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hi"}}}}},
+		&tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hi"}}}}}},
 		"claude-haiku-4-5", "", "account", ""); err == nil {
 		t.Fatal("unavailable PTY wrapper silently fell back to -p")
 	}
@@ -238,7 +238,7 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn","session_id":"fake-inne
 	tuiRuntimeSetWrapper(t, wrapper)
 	t.Setenv("INTERACTIVE_TEST_ARGS", flagsPath)
 	t.Setenv("INTERACTIVE_TEST_PROMPT", promptPath)
-	req := &Request{Model: "claude-haiku-4-5", System: "custom system", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello from outer client"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-haiku-4-5", System: "custom system", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello from outer client"}}}}}}
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
 	run, events, err := b.startInteractiveOneTurn(context.Background(), req, req.Model, "", "test-owner", "")
@@ -324,7 +324,7 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
 	tuiRuntimeSetWrapper(t, wrapper)
 	t.Setenv("INTERACTIVE_SCHEMA_ARGS", argsPath)
 	schema := json.RawMessage(`{"type":"object","properties":{"color":{"type":"string"}},"required":["color"]}`)
-	req := &Request{Model: "claude-haiku-4-5", Format: &Format{Type: "json_schema", Schema: schema}, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "sky?"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-haiku-4-5", Format: &Format{Type: "json_schema", Schema: schema}, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "sky?"}}}}}}
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
 	run, events, err := b.startInteractiveOneTurn(context.Background(), req, req.Model, "", "owner", "outer-schema")
@@ -384,7 +384,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-think","stop_reason":"end_tu
 	tuiRuntimeSetWrapper(t, wrapper)
 	t.Setenv("INTERACTIVE_THINK_ARGS", argsPath)
 	t.Setenv("INTERACTIVE_THINK_PROMPT", promptPath)
-	req := &Request{Model: "claude-haiku-4-5", ThinkOff: true, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-haiku-4-5", ThinkOff: true, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
 	run, events, err := b.startInteractiveOneTurn(context.Background(), req, req.Model, "", "owner", "outer-think")
@@ -451,7 +451,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-sg","stop_reason":"end_turn"
 	t.Setenv("INTERACTIVE_SAFEGUARD_BETA", betaPath)
 	sg := json.RawMessage(`[{"type":"dangerous_tool_use","classifier_context":"project edits allowed"}]`)
 	beta := "dangerous-tool-use-2026-09-03"
-	req := &Request{Model: "claude-haiku-4-5", Safeguards: sg, SafeguardBeta: beta, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-haiku-4-5", Safeguards: sg, SafeguardBeta: beta, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
 	run, events, err := b.startInteractiveOneTurn(context.Background(), req, req.Model, "", "owner", "outer-sg")
@@ -495,7 +495,7 @@ func TestClaudeTUIRuntimeInteractiveTransportRejectsSafeguardChangeDuringMCP(t *
 	defer tuiRuntimeBridges.Delete(b)
 	beta := "dangerous-tool-use-2026-09-03"
 	body := []byte(`{"model":"claude-haiku-4-5","max_tokens":64,"safeguards":[{"context":"B"}],"tools":[{"name":"echo_test","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"run tool"},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"echo_test","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"done"}]}]}`)
-	parsed, err := parseAnthropic(body)
+	parsed, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +514,7 @@ func TestClaudeTUIRuntimeInteractiveTransportRejectsSafeguardChangeDuringMCP(t *
 	req.Header.Set("anthropic-beta", beta)
 	rec := httptest.NewRecorder()
 	started := false
-	start := func(context.Context, *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(context.Context, *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		started = true
 		return nil, nil, errors.New("must not start a replacement run")
 	}
@@ -537,7 +537,7 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn","session_id":"inner"}'
 		t.Fatal(err)
 	}
 	tuiRuntimeSetWrapper(t, wrapper)
-	req := &Request{Model: "claude-haiku-4-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hi"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-haiku-4-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hi"}}}}}}
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
 	start := func(owner, outer string) (string, *tuiRuntimeSubscriptionRun) {
@@ -579,8 +579,8 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn","session_id":"inner"}'
 func TestClaudeTUIRuntimeInteractiveOuterThreadClaimIsolatesHelpers(t *testing.T) {
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
-	mainReq := &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "main conversation"}}}}}
-	helperReq := &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "Perform a web search for example"}}}}}
+	mainReq := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "main conversation"}}}}}}
+	helperReq := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "Perform a web search for example"}}}}}}
 	if got := b.claimInteractiveOuterSession("owner", "outer", mainReq); got != "outer" {
 		t.Fatalf("main did not claim outer session: %q", got)
 	}
@@ -601,12 +601,12 @@ func TestClaudeTUIRuntimeInteractiveOuterThreadClaimIsolatesHelpers(t *testing.T
 func TestClaudeTUIRuntimeInteractiveOuterThreadClaimRaceHasOneWinner(t *testing.T) {
 	for n := 0; n < 40; n++ {
 		b := tuiRuntimeNewSubscriptionBridge()
-		a := &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "thread A"}}}}}
-		c := &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "thread B"}}}}}
+		a := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "thread A"}}}}}}
+		c := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "thread B"}}}}}}
 		start := make(chan struct{})
 		got := make(chan string, 2)
-		for _, req := range []*Request{a, c} {
-			go func(req *Request) {
+		for _, req := range []*tuiRuntimeRequest{a, c} {
+			go func(req *tuiRuntimeRequest) {
 				<-start
 				got <- b.claimInteractiveOuterSession("owner", "outer", req)
 			}(req)
@@ -621,15 +621,15 @@ func TestClaudeTUIRuntimeInteractiveOuterThreadClaimRaceHasOneWinner(t *testing.
 }
 
 func TestClaudeTUIRuntimeClaudeDesktopSuggestionIsRecognizedBeforeOuterClaim(t *testing.T) {
-	ordinary := &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}
+	ordinary := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
 	if tuiRuntimeClaudeDesktopSuggestion(ordinary) {
 		t.Fatal("ordinary request classified as suggestion")
 	}
-	suggestion := &Request{Messages: []Message{
+	suggestion := &tuiRuntimeRequest{Request: Request{Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "  [SUGGESTION MODE: suggest next input]\nshort"}}},
-	}}
+	}}}
 	if !tuiRuntimeClaudeDesktopSuggestion(suggestion) {
 		t.Fatal("Desktop suggestion marker not recognized")
 	}
@@ -639,7 +639,7 @@ func TestClaudeTUIRuntimeClaudeDesktopSuggestionIsRecognizedBeforeOuterClaim(t *
 	if got := b.claimInteractiveOuterSession("owner", "outer", ordinary); got != "outer" {
 		t.Fatal("main did not claim outer")
 	}
-	if got := b.outerThread("owner", "outer"); got != firstWords(ordinary) {
+	if got := b.outerThread("owner", "outer"); got != firstWords(&ordinary.Request) {
 		t.Fatalf("wrong canonical thread: %q", got)
 	}
 	side := tuiRuntimeClaudeDesktopSuggestionRequest(suggestion)
@@ -693,7 +693,7 @@ printf '{"type":"result","session_id":"%s","stop_reason":"end_turn"}\n' "$sid"
 		}
 		return text, stop
 	}
-	firstReq := &Request{Model: model, Tools: []Tool{{Name: "read"}}, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}
+	firstReq := &tuiRuntimeRequest{Request: Request{Model: model, Tools: []Tool{{Name: "read"}}, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
 	main1, events, err := b.startInteractiveRequest(context.Background(), firstReq, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -706,11 +706,11 @@ printf '{"type":"result","session_id":"%s","stop_reason":"end_turn"}\n' "$sid"
 	}
 
 	suggestionText := "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]\nReturn one short suggestion."
-	suggestionReq := &Request{Model: model, System: "MAIN_SYSTEM_MUST_NOT_LEAK", Tools: []Tool{{Name: "read"}}, Messages: []Message{
+	suggestionReq := &tuiRuntimeRequest{Request: Request{Model: model, System: "MAIN_SYSTEM_MUST_NOT_LEAK", Tools: []Tool{{Name: "read"}}, Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: text1}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: suggestionText}}},
-	}}
+	}}}
 	side, sideEvents, err := b.startInteractiveRequest(context.Background(), suggestionReq, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -725,11 +725,11 @@ printf '{"type":"result","session_id":"%s","stop_reason":"end_turn"}\n' "$sid"
 		t.Fatalf("suggestion advanced main checkpoint:\nbefore=%#v\nafter=%#v", before, after)
 	}
 
-	nextReq := &Request{Model: model, Tools: firstReq.Tools, Messages: []Message{
+	nextReq := &tuiRuntimeRequest{Request: Request{Model: model, Tools: firstReq.Tools, Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: text1}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "real next turn"}}},
-	}}
+	}}}
 	main2, events2, err := b.startInteractiveRequest(context.Background(), nextReq, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -797,7 +797,7 @@ printf '{"type":"result","session_id":"%s","stop_reason":"end_turn"}\n' "$sid"
 		}
 		return text, stop
 	}
-	main1Req := &Request{Model: "claude-opus-5-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "main thread"}}}}}
+	main1Req := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "main thread"}}}}}}
 	main1, events1, err := b.startInteractiveRequest(context.Background(), main1Req, main1Req.Model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -809,7 +809,7 @@ printf '{"type":"result","session_id":"%s","stop_reason":"end_turn"}\n' "$sid"
 		t.Fatalf("main checkpoint missing: %#v, %v", before, ok)
 	}
 
-	helperReq := &Request{Model: "claude-haiku-4-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "summarize fetched web page"}}}}}
+	helperReq := &tuiRuntimeRequest{Request: Request{Model: "claude-haiku-4-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "summarize fetched web page"}}}}}}
 	helper, helperEvents, err := b.startInteractiveRequest(context.Background(), helperReq, helperReq.Model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -824,11 +824,11 @@ printf '{"type":"result","session_id":"%s","stop_reason":"end_turn"}\n' "$sid"
 		t.Fatalf("auxiliary model advanced main checkpoint:\nbefore=%#v\nafter=%#v", before, after)
 	}
 
-	main2Req := &Request{Model: "claude-opus-5-5", Messages: []Message{
+	main2Req := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "main thread"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: text1}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "main next"}}},
-	}}
+	}}}
 	main2, events2, err := b.startInteractiveRequest(context.Background(), main2Req, main2Req.Model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -896,7 +896,7 @@ printf '{"type":"result","session_id":"%s","stop_reason":"end_turn"}\n' "$sid"
 		}
 		return text, stop
 	}
-	mainReq := &Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "main thread"}}}}}
+	mainReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "main thread"}}}}}}
 	main, mainEvents, err := b.startInteractiveRequest(context.Background(), mainReq, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -908,7 +908,7 @@ printf '{"type":"result","session_id":"%s","stop_reason":"end_turn"}\n' "$sid"
 		t.Fatalf("main checkpoint missing: %#v, %v", before, ok)
 	}
 
-	sideReq := &Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "Perform a web search for example"}}}}}
+	sideReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "Perform a web search for example"}}}}}}
 	side, sideEvents, err := b.startInteractiveRequest(context.Background(), sideReq, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -923,11 +923,11 @@ printf '{"type":"result","session_id":"%s","stop_reason":"end_turn"}\n' "$sid"
 		t.Fatalf("same-model side thread advanced main checkpoint:\nbefore=%#v\nafter=%#v", before, after)
 	}
 
-	nextReq := &Request{Model: model, Messages: []Message{
+	nextReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "main thread"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: mainText}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "main next"}}},
-	}}
+	}}}
 	next, nextEvents, err := b.startInteractiveRequest(context.Background(), nextReq, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -974,23 +974,23 @@ printf '%s\n' '{"type":"result","session_id":"sess-side-hist","stop_reason":"end
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
 	owner, outer, model := "owner", "desktop-historical-side", "claude-opus-5-5"
-	mainReq := &Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "main conversation"}}}}}
-	if got := b.seedOuterThread(owner, outer, firstWords(mainReq)); got != firstWords(mainReq) {
+	mainReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "main conversation"}}}}}}
+	if got := b.seedOuterThread(owner, outer, firstWords(&mainReq.Request)); got != firstWords(&mainReq.Request) {
 		t.Fatalf("failed to seed main outer thread: %q", got)
 	}
 	mainCheckpoint := tuiRuntimeInteractiveSessionEntry{
-		SessionID: "sess-main", Model: model, ThreadKey: firstWords(mainReq),
+		SessionID: "sess-main", Model: model, ThreadKey: firstWords(&mainReq.Request),
 		ConvKey: "main-conv", ReplyKey: "main-reply", ContextKey: "main-context",
 	}
 	b.saveInteractiveSession(owner, outer, mainCheckpoint)
 
-	sideReq := &Request{Model: model, Messages: []Message{
+	sideReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "HELPER_OLD_USER"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "HELPER_VISIBLE"}, {Kind: ToolCall, ID: "old-side-call", Name: "dangerous_old_tool"}}},
 		{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old-side-call", Text: "STALE_SIDE_RESULT"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "HELPER_AFTER_TOOL"}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "CURRENT_HELPER_REQUEST"}}},
-	}}
+	}}}
 	run, events, err := b.startInteractiveRequest(context.Background(), sideReq, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -1036,7 +1036,7 @@ func TestClaudeTUIRuntimeInteractiveTransportHistoryBootstrapsButLiveToolWithout
 	tuiRuntimeSetWrapper(t, "/not-a-wrapper")
 	s := tuiRuntimeNewTestServer()
 	called := false
-	start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		called = true
 		return s.subscription.startInteractiveRequest(ctx, req, "claude-sonnet-5", "", "test-owner", "outer")
 	}
@@ -1126,14 +1126,14 @@ printf '%s\n' '{"type":"result","session_id":"inner-recovered","stop_reason":"en
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original question"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "SAVED_REPLY"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-dirty", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-dirty", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
 
-	req := &Request{Model: model, Messages: []Message{
+	req := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{
 		base[0], base[1],
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "run the old tool"}}},
 		{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "stale-call", Name: "dangerous_old_tool"}}},
@@ -1143,7 +1143,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-recovered","stop_reason":"en
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "continue now"}}},
 		{Role: "system", Parts: []Part{{Kind: Text, Text: "CURRENT_RECOVERY_ENVIRONMENT"}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "[Request interrupted by user]"}}},
-	}}
+	}}}
 	run, events, err := b.startInteractiveRequest(context.Background(), req, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -1185,24 +1185,24 @@ printf '%s\n' '{"type":"result","session_id":"inner-recovered","stop_reason":"en
 }
 
 func TestClaudeTUIRuntimeInteractiveAbandonedToolRecoveryIsSuffixOnly(t *testing.T) {
-	req := &Request{Messages: []Message{
+	req := &tuiRuntimeRequest{Request: Request{Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "old question"}}},
 		{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "old-call", Name: "read"}}},
 		{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old-call", Text: "old result"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "completed answer"}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "new question"}}},
-	}}
+	}}}
 	if got := tuiRuntimeInteractiveAbandonedToolRecoveryIndex(req); got >= 0 {
 		t.Fatalf("completed historical tool exchange was treated as abandoned suffix at %d", got)
 	}
 
-	compacted := &Request{Messages: []Message{
+	compacted := &tuiRuntimeRequest{Request: Request{Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "compacted summary"}}},
 		{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "stale", Text: "old result"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "API Error: 409 US VPS Claude: Claude interactive migration: no preceding assistant turn"}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "继续"}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "[Request interrupted by user]"}}},
-	}}
+	}}}
 	if got := tuiRuntimeInteractiveAbandonedToolRecoveryIndex(compacted); got != 3 {
 		t.Fatalf("real stale-result recovery index = %d, want 3", got)
 	}
@@ -1243,7 +1243,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-A","stop_reason":"end_turn"}
 	t.Setenv("INTERACTIVE_TEST_RELEASE", release)
 	s := tuiRuntimeNewTestServer()
 	var run *tuiRuntimeSubscriptionRun
-	start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		var err error
 		var events <-chan Event
 		run, events, err = s.subscription.startInteractiveOneTurn(ctx, req, "claude-haiku-4-5", "", "owner-A", "outer-A")
@@ -1389,7 +1389,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-chain","stop_reason":"end_tu
 	s := tuiRuntimeNewTestServer()
 	starts := 0
 	var run *tuiRuntimeSubscriptionRun
-	start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		starts++
 		var err error
 		var events <-chan Event
@@ -1508,10 +1508,10 @@ func TestClaudeTUIRuntimeInteractiveTransportParallelMCPResultsCanArriveTogether
 		{Kind: ToolResult, CallID: "call_1", Text: "ONE"},
 		{Kind: ToolResult, CallID: "call_2", Text: "TWO"},
 	}}
-	req := &Request{
+	req := &tuiRuntimeRequest{Request: Request{
 		Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "parallel"}}}, assistant, user},
 		Tools:    []Tool{{Name: "echo_test"}},
-	}
+	}}
 	if err := tuiRuntimeValidateInteractiveToolContinuation(req); err != nil {
 		t.Fatal(err)
 	}
@@ -1538,7 +1538,7 @@ func TestClaudeTUIRuntimeInteractiveTransportToolResultWaitsForLateCallbackRegis
 		pending: map[string]chan tuiRuntimeMcpToolResult{}, tools: map[string]bool{"echo_test": true},
 	}
 	b.runs[run.token] = run
-	req := &Request{
+	req := &tuiRuntimeRequest{Request: Request{
 		Model: "claude-haiku-4-5",
 		Messages: []Message{
 			{Role: "user", Parts: []Part{{Kind: Text, Text: "call it"}}},
@@ -1546,7 +1546,7 @@ func TestClaudeTUIRuntimeInteractiveTransportToolResultWaitsForLateCallbackRegis
 			{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "call_late", Text: "LATE_OK"}}},
 		},
 		Tools: []Tool{{Name: "echo_test"}},
-	}
+	}}
 	waiter := make(chan tuiRuntimeMcpToolResult, 1)
 	registered := make(chan struct{})
 	go func() {
@@ -1765,7 +1765,7 @@ printf '%s\n' '{"type":"result","session_id":"quiet-inner","stop_reason":"end_tu
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	var usage Usage
-	start := func(ctx context.Context, parsed *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(ctx context.Context, parsed *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		return s.subscription.startInteractiveOneTurn(ctx, parsed, parsed.Model, "", "keepalive-owner", "")
 	}
 	code, failed := s.serveSubscription(rec, req, protoAnthropic, "Claude Code", "claude-haiku-4-5", "keepalive-owner", []byte(body), &usage, start)
@@ -1830,7 +1830,7 @@ printf '{"type":"result","session_id":"inner-main","stop_reason":"end_turn"}\n'
 		}
 		return text, stop
 	}
-	req1 := &Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}
+	req1 := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
 	run1, events1, err := b.startInteractiveRequest(context.Background(), req1, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -1849,11 +1849,11 @@ printf '{"type":"result","session_id":"inner-main","stop_reason":"end_turn"}\n'
 	b2 := tuiRuntimeNewSubscriptionBridge() // simulate a Magpie gateway restart
 	defer tuiRuntimeBridges.Delete(b2)
 
-	req2 := &Request{Model: model, Messages: []Message{
+	req2 := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: text1}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "and?"}}},
-	}}
+	}}}
 	if err := tuiRuntimeValidateInteractiveRequest(req2); err != nil {
 		t.Fatalf("ordinary next turn rejected before restore: %v", err)
 	}
@@ -1913,7 +1913,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-effort","stop_reason":"end_t
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
 	owner, outer, model := "owner", "outer-effort", "claude-opus-5-5"
-	collect := func(run *tuiRuntimeSubscriptionRun, events <-chan Event, req *Request) string {
+	collect := func(run *tuiRuntimeSubscriptionRun, events <-chan Event, req *tuiRuntimeRequest) string {
 		t.Helper()
 		var text, stop string
 		for ev := range events {
@@ -1937,17 +1937,17 @@ printf '%s\n' '{"type":"result","session_id":"inner-effort","stop_reason":"end_t
 		}
 		return text
 	}
-	req1 := &Request{Model: model, Effort: "high", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}
+	req1 := &tuiRuntimeRequest{Request: Request{Model: model, Effort: "high", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
 	run1, ev1, err := b.startInteractiveRequest(context.Background(), req1, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	first := collect(run1, ev1, req1)
-	req2 := &Request{Model: model, Effort: "max", Messages: []Message{
+	req2 := &tuiRuntimeRequest{Request: Request{Model: model, Effort: "max", Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: first}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "more"}}},
-	}}
+	}}}
 	run2, ev2, err := b.startInteractiveRequest(context.Background(), req2, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -1990,21 +1990,21 @@ printf '%s\n' '{"type":"result","session_id":"inner-anchor","stop_reason":"end_t
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original history"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "SAVED_REPLY"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-anchor", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-anchor", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil),
 	})
 	// The same Runtime normally still remembers the original outer prefix.
 	// A compacted prefix must not be mistaken for a helper before checking
 	// the unique saved assistant anchor.
-	b.seedOuterThread(owner, outer, firstWords(baseReq))
-	rewritten := &Request{Model: model, Messages: []Message{
+	b.seedOuterThread(owner, outer, firstWords(&baseReq.Request))
+	rewritten := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "compacted earlier history"}}},
 		base[1],
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "new request"}}},
-	}}
+	}}}
 	run, events, err := b.startInteractiveRequest(context.Background(), rewritten, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -2024,7 +2024,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-anchor","stop_reason":"end_t
 		t.Fatalf("reply-anchor resume = %q %q", text, stop)
 	}
 	run.ended(rewritten, text, stop, true)
-	if run.outerSession != outer || b.outerThread(owner, outer) != firstWords(rewritten) {
+	if run.outerSession != outer || b.outerThread(owner, outer) != firstWords(&rewritten.Request) {
 		t.Fatal("verified compacted continuation was not retained as the canonical outer thread")
 	}
 	logBytes, err := os.ReadFile(logPath)
@@ -2047,14 +2047,14 @@ func TestClaudeTUIRuntimeInteractivePersistedResumeFailsClosedWhenDirtyOrModelCh
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	entry := tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil),
 	}
 	b.saveInteractiveSession(owner, outer, entry)
-	next := &Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: "next"}}})}
+	next := &tuiRuntimeRequest{Request: Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: "next"}}})}}
 
 	b.markInteractiveSessionDirty(owner, outer)
 	if _, _, err := b.startInteractiveRequest(context.Background(), next, model, "", owner, outer); err == nil || !strings.Contains(err.Error(), "dirty") {
@@ -2094,16 +2094,16 @@ printf '%s\n' '{"type":"result","session_id":"inner-context","stop_reason":"end_
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original hello"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "SAVED_REPLY"}}},
 	}
-	baseReq := &Request{Model: model, System: "old system", Tools: []Tool{{Name: "old_tool"}}, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, System: "old system", Tools: []Tool{{Name: "old_tool"}}, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-context", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-context", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil),
 	})
-	changed := &Request{
+	changed := &tuiRuntimeRequest{Request: Request{
 		Model: model, System: "new system", ToolChoice: "required", Tools: []Tool{{Name: "new_tool"}},
 		Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: "current request"}}}),
-	}
+	}}
 	run, events, err := b.startInteractiveRequest(context.Background(), changed, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -2163,14 +2163,14 @@ printf '%s\n' '{"type":"result","session_id":"inner-companion","stop_reason":"en
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "SAVED_REPLY"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-companion", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-companion", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
 	companionText := "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap."
-	req := &Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: companionText}}})}
+	req := &tuiRuntimeRequest{Request: Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: companionText}}})}}
 	run, events, err := b.startInteractiveRequest(context.Background(), req, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -2262,7 +2262,7 @@ esac
 		return
 	}
 
-	req1 := &Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}
+	req1 := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
 	run1, ev1, err := b.startInteractiveRequest(context.Background(), req1, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -2281,7 +2281,7 @@ esac
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: text1}}},
 	}
-	req2 := &Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: "trigger crash"}}})}
+	req2 := &tuiRuntimeRequest{Request: Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: "trigger crash"}}})}}
 	run2, ev2, err := b.startInteractiveRequest(context.Background(), req2, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -2298,7 +2298,7 @@ esac
 		t.Fatalf("crash did not leave dirty checkpoint: %#v, %v", dirty, ok)
 	}
 
-	ordinary := &Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: "ordinary after crash"}}})}
+	ordinary := &tuiRuntimeRequest{Request: Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: "ordinary after crash"}}})}}
 	if _, _, err := b.startInteractiveRequest(context.Background(), ordinary, model, "", owner, outer); err == nil || !strings.Contains(err.Error(), "dirty") {
 		t.Fatalf("ordinary turn did not fail closed on dirty checkpoint: %v", err)
 	}
@@ -2307,7 +2307,7 @@ esac
 	}
 
 	companionText := "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap."
-	companion := &Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: companionText}}})}
+	companion := &tuiRuntimeRequest{Request: Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: companionText}}})}}
 	run3, ev3, err := b.startInteractiveRequest(context.Background(), companion, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -2359,7 +2359,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-bootstrap","stop_reason":"en
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
 	owner, outer, model := "owner", "old-desktop-session", "claude-opus-5-5"
-	req := &Request{
+	req := &tuiRuntimeRequest{Request: Request{
 		Model: model, System: "CURRENT_SYSTEM", Tools: []Tool{{Name: "current_tool"}},
 		Messages: []Message{
 			{Role: "user", Parts: []Part{{Kind: Text, Text: "OLD_USER_TEXT"}}},
@@ -2368,7 +2368,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-bootstrap","stop_reason":"en
 			{Role: "assistant", Parts: []Part{{Kind: Text, Text: "POST_TOOL_VISIBLE_TEXT"}}},
 			{Role: "user", Parts: []Part{{Kind: Text, Text: "CURRENT_ONLY"}}},
 		},
-	}
+	}}
 	run, events, err := b.startInteractiveRequest(context.Background(), req, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -2413,11 +2413,11 @@ printf '%s\n' '{"type":"result","session_id":"inner-bootstrap","stop_reason":"en
 }
 
 func TestClaudeTUIRuntimeInteractiveHistoricalBootstrapRejectsLiveToolContinuation(t *testing.T) {
-	req := &Request{Messages: []Message{
+	req := &tuiRuntimeRequest{Request: Request{Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "old"}}},
 		{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "live", Name: "tool"}}},
 		{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "live", Text: "result"}, {Kind: Text, Text: "new text"}}},
-	}}
+	}}}
 	if _, err := tuiRuntimeRenderInteractiveHistoricalBootstrap(req); err == nil || !strings.Contains(err.Error(), "live tool continuation") {
 		t.Fatalf("live tool continuation was imported as history: %v", err)
 	}
@@ -2427,11 +2427,11 @@ func TestClaudeTUIRuntimeInteractiveHistoricalBootstrapCapsTotalUTF8Bytes(t *tes
 	old := "OLDEST_START" + strings.Repeat("中", 220_000) + "OLDEST_END"
 	newest := "RECENT_HISTORY_KEEP_ME"
 	current := "当前请求必须完整保留：继续核验，不要丢前半段。"
-	req := &Request{Messages: []Message{
+	req := &tuiRuntimeRequest{Request: Request{Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: old}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: newest}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: current}}},
-	}}
+	}}}
 	prompt, err := tuiRuntimeRenderInteractiveHistoricalBootstrap(req)
 	if err != nil {
 		t.Fatal(err)
@@ -2460,12 +2460,12 @@ func TestClaudeTUIRuntimeInteractiveHistoricalBootstrapCapsTotalUTF8Bytes(t *tes
 }
 
 func TestClaudeTUIRuntimeInteractiveHistoricalBootstrapKeepsFinalUserRoleRunAsCurrentRequest(t *testing.T) {
-	req := &Request{Messages: []Message{
+	req := &tuiRuntimeRequest{Request: Request{Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "OLD_USER"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "OLD_ASSISTANT"}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "CURRENT_PREFIX"}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "CURRENT_SUFFIX"}}},
-	}}
+	}}}
 	prompt, err := tuiRuntimeRenderInteractiveHistoricalBootstrap(req)
 	if err != nil {
 		t.Fatal(err)
@@ -2487,10 +2487,10 @@ func TestClaudeTUIRuntimeInteractiveHistoricalBootstrapKeepsFinalUserRoleRunAsCu
 
 func TestClaudeTUIRuntimeInteractiveImagePromptUsesPrivateMCPTool(t *testing.T) {
 	im := Part{Kind: Image, MediaType: "image/png", Data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"}
-	req := &Request{
+	req := &tuiRuntimeRequest{Request: Request{
 		Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "describe image"}, im}}},
 		Tools:    []Tool{{Name: "read"}, {Name: tuiRuntimeInteractiveImageTool}},
-	}
+	}}
 	if err := tuiRuntimeValidateInteractiveFirstTurn(req); err != nil {
 		t.Fatalf("inline image rejected before render: %v", err)
 	}
@@ -2521,7 +2521,7 @@ func TestClaudeTUIRuntimeInteractiveImagePromptUsesPrivateMCPTool(t *testing.T) 
 	if private != 1 || read != 1 {
 		t.Fatalf("private image tool was duplicated or caller tools lost: %#v", tools)
 	}
-	urlReq := &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Image, URL: "https://example.com/a.png"}}}}}
+	urlReq := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Image, URL: "https://example.com/a.png"}}}}}}
 	if _, _, err := tuiRuntimeRenderInteractiveFirstPromptWithImages(urlReq); err == nil || !strings.Contains(err.Error(), "URL image") {
 		t.Fatalf("URL image was silently accepted: %v", err)
 	}
@@ -2615,7 +2615,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-img","stop_reason":"end_turn
 	tuiRuntimeSetWrapper(t, wrapper)
 	s := tuiRuntimeNewTestServer()
 	var run *tuiRuntimeSubscriptionRun
-	start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		var events <-chan Event
 		var err error
 		run, events, err = s.subscription.startInteractiveOneTurn(ctx, req, "claude-haiku-4-5", "", "owner-img", "")

@@ -32,11 +32,11 @@ func TestClaudeTUIRuntimeOrphanRecoveryRefusalDiagnosticsDoNotMutateOrLeak(t *te
 			if tc.checkpoint != "missing" {
 				tuiRuntimeArSave(t, b, owner, outer, "SECRET_NATIVE", tc.checkpoint == "dirty")
 			}
-			req := &Request{Messages: []Message{
+			req := &tuiRuntimeRequest{Request: Request{Messages: []Message{
 				{Role: "user", Parts: []Part{{Kind: Text, Text: "先读一下配置"}}},
 				{Role: "assistant", Parts: []Part{{Kind: Text, Text: "配置已读"}}},
 				{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "SECRET_CALL", Text: "SECRET_RESULT"}}},
-			}}
+			}}}
 			before := append([]Message(nil), req.Messages...)
 			if tc.reason == "checkpoint_prefix_present" {
 				req.Messages[len(req.Messages)-1] = Message{Role: "user", Parts: []Part{{Kind: Text, Text: "SECRET_NEW_USER_TEXT"}}}

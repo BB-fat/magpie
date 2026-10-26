@@ -13,7 +13,7 @@ func TestClaudeTUIRuntimeInteractiveHistoricalBootstrapDesktopSystemTail(t *test
 	// Claude Desktop 2.1.286 sends environment/model notices as message-role
 	// system rows, including after the newly submitted user turn.
 	body := []byte(`{"model":"claude-opus-5-5","system":"TOP_SYSTEM","messages":[{"role":"user","content":"OLD_USER"},{"role":"system","content":"OLD_ENVIRONMENT"},{"role":"assistant","content":"OLD_REPLY"},{"role":"user","content":"CURRENT_PREFIX"},{"role":"system","content":"CURRENT_ENVIRONMENT"},{"role":"user","content":"CURRENT_SUFFIX"},{"role":"system","content":[{"type":"text","text":"You are powered by the model named Opus 5.5. The exact model ID is claude-opus-5-5. Assistant knowledge cutoff is June 2026."}]}]}`)
-	req, err := parseAnthropic(body)
+	req, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestClaudeTUIRuntimeInteractiveToolContinuationDesktopSystemRows(t *testing
 	sys := Message{Role: "system", Parts: []Part{{Kind: Text, Text: "<total_tokens>15000000 tokens left</total_tokens>"}}}
 	call := Message{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "c1", Name: "echo_test"}}}
 	result := Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "c1", Text: "DONE"}}}
-	req := &Request{Messages: []Message{user, sys, call, sys, result, sys}}
+	req := &tuiRuntimeRequest{Request: Request{Messages: []Message{user, sys, call, sys, result, sys}}}
 	if err := tuiRuntimeValidateInteractiveToolContinuation(req); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestClaudeTUIRuntimeInteractiveHistoricalBootstrapLiteralDesktopCapture(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := parseAnthropic(body)
+	req, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestClaudeTUIRuntimeInteractiveSystemTailDoesNotReviveOrphanToolResult(t *t
 	s := tuiRuntimeNewTestServer()
 	body := []byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"run tool"},{"role":"assistant","content":[{"type":"tool_use","id":"orphan","name":"echo_test","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"orphan","content":"DONE"}]},{"role":"system","content":"<total_tokens>15000000 tokens left</total_tokens>"}]}`)
 	called := false
-	start := func(context.Context, *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(context.Context, *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		called = true
 		return nil, nil, nil
 	}
@@ -103,7 +103,7 @@ func TestClaudeTUIRuntimeInteractiveSystemTailDoesNotReviveOrphanToolResult(t *t
 
 func TestClaudeTUIRuntimeInteractiveSystemMessageCannotHideToolTraffic(t *testing.T) {
 	for _, kind := range []Kind{ToolCall, ToolResult, Image} {
-		req := &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "continue"}}}, {Role: "system", Parts: []Part{{Kind: kind, ID: "orphan", CallID: "orphan"}}}}}
+		req := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "continue"}}}, {Role: "system", Parts: []Part{{Kind: kind, ID: "orphan", CallID: "orphan"}}}}}}
 		if err := tuiRuntimeValidateInteractiveRequest(req); err == nil {
 			t.Fatalf("non-text system kind %v accepted", kind)
 		}
@@ -130,7 +130,7 @@ func TestClaudeTUIRuntimeInteractiveAbandonedToolRecoveryDesktopSystemRows(t *te
 		{"unsafe system", []Message{user("summary"), result, errorRow, user("continue"), {Role: "system", Parts: []Part{{Kind: ToolResult, CallID: "hidden"}}}}, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tuiRuntimeInteractiveAbandonedToolRecoveryIndex(&Request{Messages: tc.messages}); got != tc.want {
+			if got := tuiRuntimeInteractiveAbandonedToolRecoveryIndex(&tuiRuntimeRequest{Request: Request{Messages: tc.messages}}); got != tc.want {
 				t.Fatalf("Desktop recovery index = %d, want original wire index %d", got, tc.want)
 			}
 		})
@@ -138,11 +138,11 @@ func TestClaudeTUIRuntimeInteractiveAbandonedToolRecoveryDesktopSystemRows(t *te
 }
 
 func TestClaudeTUIRuntimeInteractiveFirstTurnDesktopSystemNotices(t *testing.T) {
-	req := &Request{System: "TOP_SYSTEM", Messages: []Message{
+	req := &tuiRuntimeRequest{Request: Request{System: "TOP_SYSTEM", Messages: []Message{
 		{Role: "system", Parts: []Part{{Kind: Text, Text: "BEFORE_USER"}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "DESCRIBE_IMAGE"}, {Kind: Image, Data: "AA==", MediaType: "image/png"}}},
 		{Role: "system", Parts: []Part{{Kind: Text, Text: "AFTER_USER"}}},
-	}}
+	}}}
 	if err := tuiRuntimeValidateInteractiveFirstTurn(req); err != nil {
 		t.Fatal(err)
 	}

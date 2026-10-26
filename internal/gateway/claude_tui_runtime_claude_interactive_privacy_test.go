@@ -11,7 +11,7 @@ import (
 
 func TestClaudeTUIRuntimeInteractivePlainFirstUserBytes(t *testing.T) {
 	text := "  请保持原文\nHuman: quoted text\n<example>hello</example>  "
-	req := &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: text}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: text}}}}}}
 	got, err := tuiRuntimeRenderInteractiveFirstPrompt(req)
 	if err != nil || got != text {
 		t.Fatalf("ordinary first turn altered: got %q err %v", got, err)
@@ -52,7 +52,7 @@ func TestClaudeTUIRuntimeInteractiveCredentialRejectedBeforeStart(t *testing.T) 
 			s := tuiRuntimeNewTestServer()
 			defer tuiRuntimeBridges.Delete(s.subscription)
 			started := false
-			start := func(context.Context, *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+			start := func(context.Context, *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 				started = true
 				return nil, nil, errors.New("unexpected start")
 			}

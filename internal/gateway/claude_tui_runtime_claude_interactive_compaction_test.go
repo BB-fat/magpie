@@ -23,7 +23,7 @@ printf '%s\n' '{"type":"system","subtype":"init","session_id":"compact-test"}' '
 	t.Setenv("DISABLE_AUTO_COMPACT", "1")
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
-	req := &Request{Model: "claude-opus-5-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
 	run, events, err := b.startInteractiveOneTurn(context.Background(), req, req.Model, "", "owner", "")
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ printf '%s\n' '{"type":"system","subtype":"init","session_id":"desktop-compactio
 	t.Setenv("DISABLE_AUTO_COMPACT", "0")
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
-	req := &Request{Model: "claude-opus-5-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
 	run, events, err := b.startInteractiveOneTurn(context.Background(), req, req.Model, "", "owner", "synthetic-desktop-outer")
 	if err != nil {
 		t.Fatal(err)

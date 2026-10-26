@@ -38,11 +38,11 @@ func TestClaudeTUIRuntimeInteractiveThinkingKeepsSignedBlocks(t *testing.T) {
 }
 
 func TestClaudeTUIRuntimeLiteRebuiltSessionKeepsSignedThinking(t *testing.T) {
-	req := &Request{Model: "claude-sonnet-5", Messages: []Message{
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-sonnet-5", Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "hi"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Thinking, Signature: "sig-empty"}, {Kind: Thinking, Text: "reason", Signature: "sig-reason"}, {Kind: Text, Text: "answer"}}},
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "continue"}}},
-	}}
+	}}}
 	messages, _ := tuiRuntimeLiteSeedTranscript(t, req)
 	if len(messages) != 2 || len(messages[1].Content) != 3 {
 		t.Fatalf("rebuilt signed history changed: %+v", messages)
@@ -62,7 +62,7 @@ func TestClaudeTUIRuntimeInteractiveThinkingStreamRoundTrip(t *testing.T) {
 			go run.readInteractiveOneTurn(strings.NewReader(tuiRuntimeInteractiveSignedRows))
 			out := httptest.NewRecorder()
 			request := httptest.NewRequest("POST", "/v1/messages", nil)
-			_, msg := (tuiRuntimeAnthropicResponder{w: out, r: request, usage: &Usage{}}).Relay(&Request{Stream: stream}, events, func() {}, func(string, string, bool) {})
+			_, msg := (tuiRuntimeAnthropicResponder{w: out, r: request, usage: &Usage{}}).Relay(&tuiRuntimeRequest{Request: Request{Stream: stream}}, events, func() {}, func(string, string, bool) {})
 			if msg != "" {
 				t.Fatal(msg)
 			}

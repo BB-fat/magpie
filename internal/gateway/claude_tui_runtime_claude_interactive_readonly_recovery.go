@@ -102,7 +102,7 @@ func tuiRuntimeInteractiveKnownUnknownSlashCommandNotice(s string) bool {
 //     different Part kind, so they cannot reach the match);
 //   - the sentinel must be a suffix-only signal: a matching text in any
 //     earlier message does not count.
-func tuiRuntimeInteractiveOptInRecoveryIndex(req *Request) int {
+func tuiRuntimeInteractiveOptInRecoveryIndex(req *tuiRuntimeRequest) int {
 	clean, positions, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return -1
@@ -178,7 +178,7 @@ func tuiRuntimeInteractiveOptInRecoveryIndex(req *Request) int {
 // user message (that is what makes it "merged"); the pre-existing path
 // requires the whole user suffix to stay inside the existing pure-text
 // recovery rules, which are kept as the conservative subset.
-func tuiRuntimeInteractiveReadOnlyOptInIndex(req *Request) int {
+func tuiRuntimeInteractiveReadOnlyOptInIndex(req *tuiRuntimeRequest) int {
 	if i := tuiRuntimeInteractiveOptInRecoveryIndex(req); i >= 0 {
 		return i
 	}
@@ -227,7 +227,7 @@ func tuiRuntimeInteractiveReadOnlyOptInIndex(req *Request) int {
 // wire-request content, and ContextKey/turnKey computed on the sanitized
 // copy honestly records the empty tool set so the next ordinary turn sees
 // a context change and re-advertises its real tools.
-func tuiRuntimeInteractiveSanitizeReadOnly(req *Request) *Request {
+func tuiRuntimeInteractiveSanitizeReadOnly(req *tuiRuntimeRequest) *tuiRuntimeRequest {
 	out := *req
 	out.Tools = nil
 	out.ToolChoice = ""
@@ -252,7 +252,7 @@ func tuiRuntimeInteractiveSanitizeReadOnly(req *Request) *Request {
 //     sentinel-only rule applies to that shape too;
 //   - the closing instruction forbids claiming that tool results were
 //     verified, since the model cannot see them.
-func tuiRuntimeRenderInteractiveReadOnlyBootstrap(req *Request) (string, error) {
+func tuiRuntimeRenderInteractiveReadOnlyBootstrap(req *tuiRuntimeRequest) (string, error) {
 	original := req
 	clean, positions, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {

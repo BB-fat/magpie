@@ -84,7 +84,7 @@ func tuiRuntimeInteractiveWrapper() ([]string, error) {
 	return slices.Clone(argv), nil
 }
 
-func tuiRuntimeValidateInteractiveFirstTurn(req *Request) error {
+func tuiRuntimeValidateInteractiveFirstTurn(req *tuiRuntimeRequest) error {
 	clean, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return err
@@ -111,7 +111,7 @@ func tuiRuntimeValidateInteractiveFirstTurn(req *Request) error {
 // Desktop can interleave text-only system notices with conversation turns.
 // Use a role-only view for shape checks while keeping the original wire rows
 // for live ownership and persisted conversation hashes.
-func tuiRuntimeInteractiveRequestWithoutSystem(req *Request) (*Request, []int, error) {
+func tuiRuntimeInteractiveRequestWithoutSystem(req *tuiRuntimeRequest) (*tuiRuntimeRequest, []int, error) {
 	clean := *req
 	clean.Messages = nil
 	var positions []int
@@ -133,7 +133,7 @@ func tuiRuntimeInteractiveRequestWithoutSystem(req *Request) (*Request, []int, e
 // A live tool continuation can follow completed persisted turns. Validate
 // only the assistant-tool/user-result suffix that belongs to the currently
 // blocked PTY run; run.follows checks the earlier wire history separately.
-func tuiRuntimeValidateInteractiveToolContinuation(req *Request) error {
+func tuiRuntimeValidateInteractiveToolContinuation(req *tuiRuntimeRequest) error {
 	clean, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return err
@@ -219,7 +219,7 @@ func tuiRuntimeValidateInteractiveToolContinuation(req *Request) error {
 	return nil
 }
 
-func tuiRuntimeValidateInteractiveRequest(req *Request) error {
+func tuiRuntimeValidateInteractiveRequest(req *tuiRuntimeRequest) error {
 	clean, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return err
@@ -235,7 +235,7 @@ func tuiRuntimeValidateInteractiveRequest(req *Request) error {
 	return nil
 }
 
-func tuiRuntimeValidateInteractiveMatchedContinuation(req *Request, run *tuiRuntimeSubscriptionRun, results []Part, how string) error {
+func tuiRuntimeValidateInteractiveMatchedContinuation(req *tuiRuntimeRequest, run *tuiRuntimeSubscriptionRun, results []Part, how string) error {
 	if err := tuiRuntimeValidateInteractiveToolContinuation(req); err == nil {
 		return tuiRuntimeValidateInteractiveNativeResultSet(run, results)
 	} else if how != tuiRuntimeByExactID || tuiRuntimeInteractiveTrailingAssistantHasToolCall(req) {
@@ -270,7 +270,7 @@ func tuiRuntimeValidateInteractiveNativeResultSet(run *tuiRuntimeSubscriptionRun
 	return nil
 }
 
-func tuiRuntimeInteractiveTrailingAssistantHasToolCall(req *Request) bool {
+func tuiRuntimeInteractiveTrailingAssistantHasToolCall(req *tuiRuntimeRequest) bool {
 	clean, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return true
@@ -295,7 +295,7 @@ func tuiRuntimeInteractiveTrailingAssistantHasToolCall(req *Request) bool {
 // tool_result. An exact live CallID match is stronger ownership evidence than
 // replayed transcript shape, but we still validate the user suffix and require
 // results for the complete set of client tool calls the live run showed.
-func tuiRuntimeValidateInteractiveExactIDContinuation(req *Request, run *tuiRuntimeSubscriptionRun, results []Part) error {
+func tuiRuntimeValidateInteractiveExactIDContinuation(req *tuiRuntimeRequest, run *tuiRuntimeSubscriptionRun, results []Part) error {
 	if run == nil || len(results) == 0 {
 		return errors.New("Claude interactive migration: exact live tool continuation has no results")
 	}
@@ -367,7 +367,7 @@ func tuiRuntimeValidateInteractiveExactIDContinuation(req *Request, run *tuiRunt
 // tool results this live Claude process has already received. The old HTTP
 // stream vanished, but its reply has not: reattach instead of sending MCP
 // results twice or starting another Claude process.
-func tuiRuntimeInteractiveAlreadyDeliveredHandoff(run *tuiRuntimeSubscriptionRun, req *Request, results []Part) bool {
+func tuiRuntimeInteractiveAlreadyDeliveredHandoff(run *tuiRuntimeSubscriptionRun, req *tuiRuntimeRequest, results []Part) bool {
 	if run == nil || len(results) == 0 {
 		return false
 	}
@@ -445,7 +445,7 @@ func tuiRuntimeInteractiveHeardPrefixEnd(run *tuiRuntimeSubscriptionRun, msgs []
 // Exact shown IDs and the heard history can already prove live ownership.
 // Remapped, partial, duplicated, ambiguous and historical results cannot use
 // this path. continueWith queues the proven result until that callback arrives.
-func (b *tuiRuntimeSubscriptionBridge) matchInteractiveShown(req *Request, results []Part, before map[string]bool) *tuiRuntimeSubscriptionRun {
+func (b *tuiRuntimeSubscriptionBridge) matchInteractiveShown(req *tuiRuntimeRequest, results []Part, before map[string]bool) *tuiRuntimeSubscriptionRun {
 	if len(results) == 0 {
 		return nil
 	}
@@ -487,7 +487,7 @@ func (b *tuiRuntimeSubscriptionBridge) matchInteractiveShown(req *Request, resul
 	return found
 }
 
-func tuiRuntimeInteractiveToolContinuation(req *Request) bool {
+func tuiRuntimeInteractiveToolContinuation(req *tuiRuntimeRequest) bool {
 	userStart := len(req.Messages)
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		m := req.Messages[i]
@@ -515,7 +515,7 @@ func tuiRuntimeInteractiveToolContinuation(req *Request) bool {
 	return false
 }
 
-func tuiRuntimeInteractiveAbandonedToolRecoveryIndex(req *Request) int {
+func tuiRuntimeInteractiveAbandonedToolRecoveryIndex(req *tuiRuntimeRequest) int {
 	clean, positions, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return -1
@@ -571,7 +571,7 @@ func tuiRuntimeInteractiveAbandonedToolRecoveryIndex(req *Request) int {
 // Keep current Desktop notices while dropping the interruption markers that
 // follow an explicit abandoned-tool recovery request. The index is always in
 // the original wire request, never the role-only validation view.
-func tuiRuntimeInteractiveRecoveryMessages(req *Request, current int) []Message {
+func tuiRuntimeInteractiveRecoveryMessages(req *tuiRuntimeRequest, current int) []Message {
 	out := append([]Message(nil), req.Messages[:current+1]...)
 	for _, m := range req.Messages[current+1:] {
 		if m.Role == "system" {
@@ -649,7 +649,7 @@ func tuiRuntimeInteractiveRecoverySyntheticAssistant(m Message) bool {
 	return strings.HasPrefix(s, "API Error: 409 ") && strings.Contains(s, "Claude interactive migration:")
 }
 
-func tuiRuntimeClaudeDesktopSuggestion(req *Request) bool {
+func tuiRuntimeClaudeDesktopSuggestion(req *tuiRuntimeRequest) bool {
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		m := req.Messages[i]
 		if m.Role != "user" {
@@ -665,7 +665,7 @@ func tuiRuntimeClaudeDesktopSuggestion(req *Request) bool {
 	return false
 }
 
-func tuiRuntimeClaudeDesktopSuggestionRequest(req *Request) *Request {
+func tuiRuntimeClaudeDesktopSuggestionRequest(req *tuiRuntimeRequest) *tuiRuntimeRequest {
 	out := *req
 	out.System = ""
 	out.Tools = nil
@@ -710,11 +710,11 @@ func tuiRuntimeClaudeDesktopSuggestionRequest(req *Request) *Request {
 // thread that first claimed it in this Magpie process. Desktop helper calls
 // can reuse the same outer id; a different first-user fingerprint therefore
 // gets an ephemeral PTY cwd instead of the canonical conversation's cwd.
-func (b *tuiRuntimeSubscriptionBridge) claimInteractiveOuterSession(owner, outerSession string, req *Request) string {
+func (b *tuiRuntimeSubscriptionBridge) claimInteractiveOuterSession(owner, outerSession string, req *tuiRuntimeRequest) string {
 	if outerSession == "" {
 		return ""
 	}
-	thread := firstWords(req)
+	thread := firstWords(&req.Request)
 	if thread == "" {
 		return ""
 	}
@@ -724,7 +724,7 @@ func (b *tuiRuntimeSubscriptionBridge) claimInteractiveOuterSession(owner, outer
 	return outerSession
 }
 
-func (b *tuiRuntimeSubscriptionBridge) startInteractiveAuxiliaryRequest(ctx context.Context, req *Request, model, configDir, owner string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+func (b *tuiRuntimeSubscriptionBridge) startInteractiveAuxiliaryRequest(ctx context.Context, req *tuiRuntimeRequest, model, configDir, owner string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	shape, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return nil, nil, err
@@ -744,7 +744,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveAuxiliaryRequest(ctx cont
 	return b.startInteractiveWithPromptImages(ctx, req, model, configDir, owner, "", prompt, "", images, false)
 }
 
-func (b *tuiRuntimeSubscriptionBridge) startInteractiveRequest(ctx context.Context, req *Request, model, configDir, owner, outerSession string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+func (b *tuiRuntimeSubscriptionBridge) startInteractiveRequest(ctx context.Context, req *tuiRuntimeRequest, model, configDir, owner, outerSession string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	if outerSession != "" {
 		if err := b.verifyInteractiveSessionStore(); err != nil {
 			log.Printf("Claude interactive start rejected checkpoint store: %v", err)
@@ -775,7 +775,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveRequest(ctx context.Conte
 		return b.startInteractiveOneTurn(ctx, req, model, configDir, owner, "")
 	}
 
-	thread := firstWords(req)
+	thread := firstWords(&req.Request)
 	active := b.outerThread(owner, outerSession)
 	saved, savedOK, err := b.loadInteractiveSession(owner, outerSession)
 	if err != nil {
@@ -940,7 +940,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveRequest(ctx context.Conte
 	}
 }
 
-func tuiRuntimeRenderInteractiveExternalInstructions(req *Request) string {
+func tuiRuntimeRenderInteractiveExternalInstructions(req *tuiRuntimeRequest) string {
 	if req.System == "" && req.ToolChoice != "required" && !strings.HasPrefix(req.ToolChoice, "name:") {
 		return "There are no current external system instructions.\n"
 	}
@@ -957,7 +957,7 @@ func tuiRuntimeRenderInteractiveExternalInstructions(req *Request) string {
 	return text.String()
 }
 
-func tuiRuntimeRenderInteractiveContextRefresh(req *Request) string {
+func tuiRuntimeRenderInteractiveContextRefresh(req *tuiRuntimeRequest) string {
 	var text strings.Builder
 	text.WriteString("<external_context_refresh>\n")
 	text.WriteString("The outer client context changed since the previous turn. The current MCP tool set, response constraints, model settings, and external instructions supersede the previous outer-client context. Continue the existing conversation without replaying prior history.\n")
@@ -984,12 +984,12 @@ func tuiRuntimeInteractiveWrapperArgs(model, mcpConfig, effort, resumeID string,
 	return args
 }
 
-func tuiRuntimeRenderInteractiveFirstPrompt(req *Request) (string, error) {
+func tuiRuntimeRenderInteractiveFirstPrompt(req *tuiRuntimeRequest) (string, error) {
 	prompt, _, err := tuiRuntimeRenderInteractiveFirstPromptWithImages(req)
 	return prompt, err
 }
 
-func tuiRuntimeRenderInteractiveFirstPromptWithImages(req *Request) (string, map[string]Part, error) {
+func tuiRuntimeRenderInteractiveFirstPromptWithImages(req *tuiRuntimeRequest) (string, map[string]Part, error) {
 	clean, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return "", nil, err
@@ -1059,8 +1059,8 @@ func tuiRuntimeInteractiveImageID(p Part) string {
 	return fmt.Sprintf("img_%x", sum[:8])
 }
 
-func tuiRuntimeInteractiveTools(req *Request, hasImages bool) []tuiRuntimeBridgeTool {
-	tools := bridgeTools(req)
+func tuiRuntimeInteractiveTools(req *tuiRuntimeRequest, hasImages bool) []tuiRuntimeBridgeTool {
+	tools := bridgeTools(&req.Request)
 	if !hasImages {
 		return tools
 	}
@@ -1081,7 +1081,7 @@ func tuiRuntimeInteractiveTools(req *Request, hasImages bool) []tuiRuntimeBridge
 // for an established outer conversation that predates persisted checkpoints.
 // Historical tool traffic is omitted and can never become live work. Only
 // the latest user text is actionable in this migration stage.
-func tuiRuntimeRenderInteractiveHistoricalBootstrap(req *Request) (string, error) {
+func tuiRuntimeRenderInteractiveHistoricalBootstrap(req *tuiRuntimeRequest) (string, error) {
 	prompt, _, err := tuiRuntimeRenderInteractiveHistoricalBootstrapWithImages(req)
 	return prompt, err
 }
@@ -1096,7 +1096,7 @@ func tuiRuntimeRenderInteractiveHistoricalBootstrap(req *Request) (string, error
 // copied), URL-only images keep the existing refusal, and every other rule
 // of the text bootstrap — stripped historical tool traffic, the UTF-8
 // transport budget, the external-instructions prefix — is unchanged.
-func tuiRuntimeRenderInteractiveHistoricalBootstrapWithImages(req *Request) (string, map[string]Part, error) {
+func tuiRuntimeRenderInteractiveHistoricalBootstrapWithImages(req *tuiRuntimeRequest) (string, map[string]Part, error) {
 	original := req
 	clean, positions, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
@@ -1279,7 +1279,7 @@ func tuiRuntimeUtf8TailWithinBytes(s string, max int) string {
 	return s[start:]
 }
 
-func (b *tuiRuntimeSubscriptionBridge) startInteractiveOneTurn(ctx context.Context, req *Request, model, configDir, owner, outerSession string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+func (b *tuiRuntimeSubscriptionBridge) startInteractiveOneTurn(ctx context.Context, req *tuiRuntimeRequest, model, configDir, owner, outerSession string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	if err := tuiRuntimeValidateInteractiveFirstTurn(req); err != nil {
 		return nil, nil, err
 	}
@@ -1290,7 +1290,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveOneTurn(ctx context.Conte
 	return b.startInteractiveWithPromptImages(ctx, req, model, configDir, owner, outerSession, prompt, "", images, false)
 }
 
-func (b *tuiRuntimeSubscriptionBridge) startInteractiveResumeTurn(ctx context.Context, req *Request, model, configDir, owner, outerSession string, saved tuiRuntimeInteractiveSessionEntry, since []Message, contextChanged bool) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+func (b *tuiRuntimeSubscriptionBridge) startInteractiveResumeTurn(ctx context.Context, req *tuiRuntimeRequest, model, configDir, owner, outerSession string, saved tuiRuntimeInteractiveSessionEntry, since []Message, contextChanged bool) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	if saved.SessionID == "" || outerSession == "" {
 		return nil, nil, errors.New("Claude interactive migration: persisted resume has no inner or outer session")
 	}
@@ -1308,11 +1308,11 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveResumeTurn(ctx context.Co
 	return b.startInteractiveWithPromptImages(ctx, req, model, configDir, owner, outerSession, prompt, saved.SessionID, images, false)
 }
 
-func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPrompt(ctx context.Context, req *Request, model, configDir, owner, outerSession, prompt, resumeID string, readOnly bool) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPrompt(ctx context.Context, req *tuiRuntimeRequest, model, configDir, owner, outerSession, prompt, resumeID string, readOnly bool) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	return b.startInteractiveWithPromptImages(ctx, req, model, configDir, owner, outerSession, prompt, resumeID, nil, readOnly)
 }
 
-func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx context.Context, req *Request, model, configDir, owner, outerSession, prompt, resumeID string, images map[string]Part, readOnly bool) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx context.Context, req *tuiRuntimeRequest, model, configDir, owner, outerSession, prompt, resumeID string, images map[string]Part, readOnly bool) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	wrapper, err := tuiRuntimeInteractiveWrapper()
 	if err != nil {
 		return nil, nil, err // fail closed, not claude -p
@@ -1523,7 +1523,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 			s := tuiRuntimeInteractiveContextDiagnosticFromRequest(req)
 			return &s
 		}(),
-		outerSession: outerSession, threadKey: firstWords(req), sessionID: resumeID, images: images,
+		outerSession: outerSession, threadKey: firstWords(&req.Request), sessionID: resumeID, images: images,
 		searchName: req.tuiSearchTool, nativeSearch: nativeSearch, schema: len(req.Format.schema()) > 0, readOnlyRecovery: readOnly, tmuxSocket: sock,
 		safeguards: bytes.Clone(req.Safeguards), safeguardBeta: req.SafeguardBeta}
 	if b.toolJournal != nil && os.Getenv("MAGPIE_CLAUDE_FIRST_TURN_ANCHOR") == "1" &&

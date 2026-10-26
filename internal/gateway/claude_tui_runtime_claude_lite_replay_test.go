@@ -18,9 +18,9 @@ func tuiRuntimeReplayBody(extra string) string {
 	return `{"model":"claude-opus-5-5","max_tokens":64,"system":"S1","tools":[{"name":"echo","input_schema":{"type":"object"}}],` + extra + tuiRuntimeReplayHistory + `}`
 }
 
-func tuiRuntimeReplayReq(t *testing.T, body string) *Request {
+func tuiRuntimeReplayReq(t *testing.T, body string) *tuiRuntimeRequest {
 	t.Helper()
-	req, err := parseAnthropic([]byte(body))
+	req, err := tuiRuntimeParseRequest([]byte(body))
 	if err != nil {
 		t.Fatal(err)
 	}

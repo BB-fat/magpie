@@ -69,7 +69,7 @@ func TestClaudeTUIRuntimeInteractiveChangedHistoryExplains409WithoutReplay(t *te
 	s := tuiRuntimeNewTestServer()
 	defer tuiRuntimeBridges.Delete(s.subscription)
 	body := []byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"changed prompt"},{"role":"assistant","content":[{"type":"tool_use","id":"call-one","name":"echo","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-one","content":"already executed"}]}]}`)
-	req, err := parseAnthropic(body)
+	req, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestClaudeTUIRuntimeInteractiveChangedHistoryExplains409WithoutReplay(t *te
 	s.subscription.calls["call-one"] = r
 	defer r.abort()
 	started := false
-	start := func(context.Context, *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(context.Context, *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		started = true
 		return nil, nil, errors.New("unexpected bootstrap")
 	}
@@ -114,15 +114,15 @@ func TestClaudeTUIRuntimeInteractiveMatchedHistoryDriftOptInStartsOnlyReadOnlyRe
 	// original request eligible for abandoned-turn tail trimming. Automatic
 	// recovery must not accidentally trim its own tool-free sentinel.
 	body := []byte(`{"model":"claude-opus-5-5","tools":[{"name":"echo","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"FIRST_IMMUTABLE_USER_TEXT"},{"role":"user","content":"CHANGED_SECOND_USER_TEXT"},{"role":"assistant","content":[{"type":"tool_use","id":"call-one","name":"echo","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-one","content":"already executed"}]},{"role":"user","content":"NEW_USER_MESSAGE_NOT_A_TOOL_RESULT"}]}`)
-	req, err := parseAnthropic(body)
+	req, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := b.seedOuterThread(owner, outer, firstWords(req)); got != firstWords(req) {
+	if got := b.seedOuterThread(owner, outer, firstWords(&req.Request)); got != firstWords(&req.Request) {
 		t.Fatal("failed to seed canonical outer thread")
 	}
 	if err := b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-existing", Model: req.Model, ThreadKey: firstWords(req),
+		SessionID: "inner-existing", Model: req.Model, ThreadKey: firstWords(&req.Request),
 		ConvKey: "known-persistent-conversation", ContextKey: tuiRuntimeTurnKey(owner, req, nil), Dirty: true,
 	}); err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestClaudeTUIRuntimeInteractiveMatchedHistoryDriftOptInStartsOnlyReadOnlyRe
 	b.calls["call-one"] = run
 	defer run.abort()
 	started := false
-	start := func(_ context.Context, got *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(_ context.Context, got *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		started = true
 		if len(got.Tools) != 0 || got.WebSearch || got.ToolChoice != "" || len(got.Format.schema()) != 0 {
 			t.Fatal("unsafe tool surface remained on history-drift reconstruction")
@@ -174,7 +174,7 @@ func TestClaudeTUIRuntimeInteractiveMatchedHistoryDriftOptInStartsOnlyReadOnlyRe
 }
 
 func TestClaudeTUIRuntimeInteractiveRecoveryDiagnosticIsBoundedAndPrivate(t *testing.T) {
-	r := &Request{}
+	r := &tuiRuntimeRequest{Request: Request{}}
 	for i := 0; i < 10; i++ {
 		r.Messages = append(r.Messages, Message{Role: "user", Parts: []Part{{Kind: Text, Text: "PRIVATE_PROMPT"}, {Kind: ToolResult, CallID: "SECRET_TOOL_ID", Text: "SECRET_RESULT"}}})
 	}

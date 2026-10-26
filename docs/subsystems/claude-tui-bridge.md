@@ -86,6 +86,21 @@ results, Anthropic codec, bounded body reader and response relay directly.
 Protocol changes are owned by the gateway implementation; the TUI keeps only its
 native-session, checkpoint, recovery and terminal-process state.
 
+TUI-only request state lives in `tuiRuntimeRequest`
+(`internal/gateway/claude_tui_runtime_request.go`), not the gateway's
+`Request`. It embeds the shared request by value, preserving the existing
+copy-before-transform behavior for compaction, history seeding and resumed
+branches. Replay fingerprints and injected search-tool names stay in this
+wrapper too. Parsing still delegates to the shared Anthropic codec; shared
+gateway helpers receive the embedded request. No protocol fields or codec
+implementations are copied into the TUI wrapper.
+
+The UI's additional script allowance is kept in
+`internal/gui/claude_tui_budget_test.go`. The upstream budget constants and
+their history remain unchanged; only the test's effective thresholds add
+the TUI allowance. This keeps recurring upstream budget updates separate
+from the fork's per-account mode control.
+
 ## What the bridge is given (`tuiRuntimeConfig`)
 
 | Field | From the gateway |

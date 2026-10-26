@@ -117,7 +117,7 @@ func TestClaudeTUIRuntimeInteractiveCompletedCanonicalTurnWritesCheckpoint(t *te
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
-	req := &Request{
+	req := &tuiRuntimeRequest{Request: Request{
 		Model: "claude-opus-5-5",
 		Tools: []Tool{{Name: "echo_test"}},
 		Messages: []Message{
@@ -125,17 +125,17 @@ func TestClaudeTUIRuntimeInteractiveCompletedCanonicalTurnWritesCheckpoint(t *te
 			{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "call_1", Name: "echo_test"}}},
 			{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "call_1", Text: "done"}}},
 		},
-	}
+	}}
 	run := &tuiRuntimeSubscriptionRun{
 		bridge: b, interactive: true, owner: "owner", model: req.Model,
-		outerSession: "outer-main", threadKey: firstWords(req), sessionID: "inner-main",
+		outerSession: "outer-main", threadKey: firstWords(&req.Request), sessionID: "inner-main",
 	}
 	run.ended(req, "FINAL", "stop", true)
 	got, ok := b.interactiveSession("owner", "outer-main")
 	if !ok {
 		t.Fatal("completed canonical PTY turn did not write a checkpoint")
 	}
-	if got.SessionID != "inner-main" || got.Model != req.Model || got.ThreadKey != firstWords(req) ||
+	if got.SessionID != "inner-main" || got.Model != req.Model || got.ThreadKey != firstWords(&req.Request) ||
 		got.ConvKey == "" || got.ReplyKey == "" || got.ContextKey != tuiRuntimeTurnKey("owner", req, nil) || got.Dirty {
 		t.Fatalf("incomplete checkpoint: %+v", got)
 	}
@@ -149,10 +149,10 @@ func TestClaudeTUIRuntimeInteractiveCompletedHelperCannotWriteCheckpoint(t *test
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
-	req := &Request{Model: "claude-haiku-4-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "helper request"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-haiku-4-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "helper request"}}}}}}
 	run := &tuiRuntimeSubscriptionRun{
 		bridge: b, interactive: true, owner: "owner", model: req.Model,
-		outerSession: "", threadKey: firstWords(req), sessionID: "inner-helper",
+		outerSession: "", threadKey: firstWords(&req.Request), sessionID: "inner-helper",
 	}
 	run.ended(req, "SIDE", "stop", true)
 	state := tuiRuntimeReadInteractiveSessionState()
@@ -170,13 +170,13 @@ func TestClaudeTUIRuntimeInteractiveRestoreDecisionExactReplyAnchorDirtyAndCompa
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	req0 := &Request{Model: "claude-opus-5-5", Messages: base}
+	req0 := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	if len(keys) != 1 {
 		t.Fatalf("conversation key count = %d", len(keys))
 	}
 	entry := tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner", Model: req0.Model, ThreadKey: firstWords(req0),
+		SessionID: "inner", Model: req0.Model, ThreadKey: firstWords(&req0.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]),
 		ContextKey: tuiRuntimeTurnKey(owner, req0, nil),
 	}
@@ -227,20 +227,20 @@ func TestClaudeTUIRuntimeInteractiveRestoreRejectsUnsafeSuffixesAndAmbiguousRepl
 		SessionID: "inner", ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: "ctx",
 	}
 	b.saveInteractiveSession(owner, "tool", entry)
-	toolReq := &Request{Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old", Text: "stale"}}})}
+	toolReq := &tuiRuntimeRequest{Request: Request{Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old", Text: "stale"}}})}}
 	_, _, status := b.restoreInteractiveSession(owner, "tool", toolReq)
 	if status != tuiRuntimeInteractiveRestoreSuffixRejected {
 		t.Fatalf("tool-result suffix accepted: %q", status)
 	}
 
 	b.saveInteractiveSession(owner, "ambiguous", entry)
-	ambiguous := &Request{Messages: []Message{
+	ambiguous := &tuiRuntimeRequest{Request: Request{Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "rewritten"}}},
 		base[1],
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "middle"}}},
 		base[1],
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "next"}}},
-	}}
+	}}}
 	_, _, status = b.restoreInteractiveSession(owner, "ambiguous", ambiguous)
 	if status != tuiRuntimeInteractiveRestoreSuffixRejected {
 		t.Fatalf("ambiguous repeated reply anchor accepted: %q", status)
@@ -260,11 +260,11 @@ func TestClaudeTUIRuntimeInteractiveRestoreSkipsOnlyFailedCompanionTransportArti
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner", ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: "ctx",
 	})
-	req := &Request{Messages: append(append([]Message{}, base...),
+	req := &tuiRuntimeRequest{Request: Request{Messages: append(append([]Message{}, base...),
 		Message{Role: "user", Parts: []Part{{Kind: Text, Text: "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap."}}},
 		Message{Role: "assistant", Parts: []Part{{Kind: Text, Text: "API Error: 502 US VPS Claude: Claude Code: Claude interactive persisted resume failed: dirty; refusing full history replay. This is a server-side issue."}}},
 		Message{Role: "user", Parts: []Part{{Kind: Text, Text: "real next turn"}}},
-	)}
+	)}}
 	_, since, status := b.restoreInteractiveSession(owner, outer, req)
 	if status != tuiRuntimeInteractiveRestoreExact || len(since) != 1 || since[0].Parts[0].Text != "real next turn" {
 		t.Fatalf("failed companion artifact not skipped safely: %q %#v", status, since)

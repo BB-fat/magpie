@@ -13,7 +13,7 @@ const tuiRuntimeTestUnknownCommandReminder = "<system-reminder>\nThe user's mess
 func TestClaudeTUIRuntimeReadOnlyRecoveryAdmitsExactDuplicateUnknownCommandFallback(t *testing.T) {
 	for _, linebreak := range []string{"\n", `\n`} {
 		fallback := strings.ReplaceAll(tuiRuntimeTestUnknownCommandReminder, "\n", linebreak)
-		req := &Request{Messages: []Message{
+		req := &tuiRuntimeRequest{Request: Request{Messages: []Message{
 			{Role: "user", Parts: []Part{{Kind: Text, Text: "prior"}}},
 			{Role: "assistant", Parts: []Part{{Kind: Text, Text: "completed"}}},
 			{Role: "user", Parts: []Part{
@@ -25,7 +25,7 @@ func TestClaudeTUIRuntimeReadOnlyRecoveryAdmitsExactDuplicateUnknownCommandFallb
 				{Kind: Text, Text: fallback},
 				{Kind: Text, Text: "/magpie-recover"},
 			}},
-		}}
+		}}}
 		if got := tuiRuntimeInteractiveReadOnlyOptInIndex(req); got != 2 {
 			t.Fatalf("exact unknown-command fallback rejected, sep=%q got=%d", linebreak, got)
 		}
@@ -51,7 +51,7 @@ func TestClaudeTUIRuntimeReadOnlyRecoveryRejectsSpoofedOrExtraUnknownCommandRemi
 	}
 	for name, parts := range cases {
 		t.Run(name, func(t *testing.T) {
-			req := &Request{Messages: []Message{{Role: "user", Parts: parts}}}
+			req := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: parts}}}}
 			if idx := tuiRuntimeInteractiveReadOnlyOptInIndex(req); idx >= 0 {
 				t.Fatalf("unsafe recovery shape admitted at idx=%d", idx)
 			}

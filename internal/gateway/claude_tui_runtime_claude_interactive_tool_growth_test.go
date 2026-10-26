@@ -11,7 +11,7 @@ import (
 )
 
 func TestClaudeTUIRuntimeExactInteractiveToolGrowthRequiresUnchangedOriginalContext(t *testing.T) {
-	base := &Request{Model: "claude-opus-5-5", Effort: "high", System: "same system", Tools: []Tool{{Name: "echo", Schema: json.RawMessage(`{"type":"object"}`)}}}
+	base := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Effort: "high", System: "same system", Tools: []Tool{{Name: "echo", Schema: json.RawMessage(`{"type":"object"}`)}}}}
 	run := &tuiRuntimeSubscriptionRun{interactive: true, tools: map[string]bool{"echo": true}, effort: base.Effort, interactiveContextKey: tuiRuntimeTurnKey("owner", base, nil)}
 	withMore := *base
 	withMore.Tools = append(append([]Tool(nil), base.Tools...), Tool{Name: "extra", Schema: json.RawMessage(`{"type":"object"}`)})
@@ -57,7 +57,7 @@ func TestClaudeTUIRuntimeExactInteractiveToolGrowthRequiresUnchangedOriginalCont
 
 func TestClaudeTUIRuntimeExactInteractiveToolGrowthPassesHTTPHandoffWithoutReplay(t *testing.T) {
 	const body = `{"model":"claude-opus-5-5","messages":[{"role":"user","content":"run echo"},{"role":"assistant","content":[{"type":"tool_use","id":"known-call","name":"echo","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"known-call","content":"completed"}]}],"tools":[{"name":"echo","input_schema":{"type":"object"}},{"name":"new_tool","input_schema":{"type":"object"}}]}`
-	req, err := parseAnthropic([]byte(body))
+	req, err := tuiRuntimeParseRequest([]byte(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestClaudeTUIRuntimeExactInteractiveToolGrowthPassesHTTPHandoffWithoutRepla
 		}
 	}()
 	startCalls := 0
-	start := func(context.Context, *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(context.Context, *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		startCalls++
 		return nil, nil, errors.New("must not bootstrap a replacement")
 	}

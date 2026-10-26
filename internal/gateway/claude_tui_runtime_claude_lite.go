@@ -57,7 +57,7 @@ const tuiRuntimeStatelessSession = "stateless"
 // configDir is the Claude config folder the account runs in ("" for
 // Claude Code's own, as the plugin's runtime ran).
 func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model, owner, outerSession, configDir string, body []byte) (int, string) {
-	req, err := parseAnthropic(body)
+	req, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		return out.Fail(http.StatusBadRequest, err.Error())
 	}
@@ -99,7 +99,7 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 		return out.Relay(req, events, func() {}, func(string, string, bool) {})
 	}
 	upstream := func() (int, string) {
-		start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+		start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 			return rt.bridge.startInteractiveRequest(ctx, req, model, configDir, owner, outerSession)
 		}
 		return rt.serveMessagesInner(out, r, "Claude Code", model, owner, outerSession, body, start)
@@ -191,7 +191,7 @@ type tuiRuntimeLiteCompletedTurn struct {
 
 // liteReplayKey requires the complete semantic request, independently of
 // the loose history matcher. Client metadata and response streaming are ignored.
-func tuiRuntimeLiteReplayKey(owner string, req *Request) string {
+func tuiRuntimeLiteReplayKey(owner string, req *tuiRuntimeRequest) string {
 	if req.replayKey != "" {
 		return req.replayKey
 	}
@@ -237,7 +237,7 @@ func tuiRuntimeLiteReplayKey(owner string, req *Request) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (b *tuiRuntimeSubscriptionBridge) noteLiteCompletedToolTurn(owner, outerSession string, req *Request, reply ...string) {
+func (b *tuiRuntimeSubscriptionBridge) noteLiteCompletedToolTurn(owner, outerSession string, req *tuiRuntimeRequest, reply ...string) {
 	if b == nil || outerSession == "" || req == nil || !tuiRuntimeInteractiveToolContinuation(req) {
 		return
 	}
@@ -254,12 +254,12 @@ func (b *tuiRuntimeSubscriptionBridge) noteLiteCompletedToolTurn(owner, outerSes
 	b.liteCompleted[key] = tuiRuntimeLiteCompletedTurn{key: tuiRuntimeLiteReplayKey(owner, req), reply: answered}
 }
 
-func (b *tuiRuntimeSubscriptionBridge) liteToolTurnWasDelivered(owner, outerSession string, req *Request) bool {
+func (b *tuiRuntimeSubscriptionBridge) liteToolTurnWasDelivered(owner, outerSession string, req *tuiRuntimeRequest) bool {
 	_, ok := b.liteCompletedToolTurn(owner, outerSession, req)
 	return ok
 }
 
-func (b *tuiRuntimeSubscriptionBridge) liteCompletedToolTurn(owner, outerSession string, req *Request) (tuiRuntimeLiteCompletedTurn, bool) {
+func (b *tuiRuntimeSubscriptionBridge) liteCompletedToolTurn(owner, outerSession string, req *tuiRuntimeRequest) (tuiRuntimeLiteCompletedTurn, bool) {
 	if b == nil || outerSession == "" || req == nil || !tuiRuntimeInteractiveToolContinuation(req) {
 		return tuiRuntimeLiteCompletedTurn{}, false
 	}
@@ -270,7 +270,7 @@ func (b *tuiRuntimeSubscriptionBridge) liteCompletedToolTurn(owner, outerSession
 	return prior, prior.key != "" && prior.key == tuiRuntimeLiteReplayKey(owner, req)
 }
 
-func tuiRuntimeLiteVisibleToolHandoff(req *Request) error {
+func tuiRuntimeLiteVisibleToolHandoff(req *tuiRuntimeRequest) error {
 	if req == nil {
 		return errors.New("missing request")
 	}
@@ -313,7 +313,7 @@ func tuiRuntimeLiteVisibleToolHandoff(req *Request) error {
 // liteContinues reports whether req exactly continues run: the same owner,
 // model, conversation, tools and settings it was started with. Only then is
 // it handed to the run; anything else is a new turn.
-func tuiRuntimeLiteContinues(owner, model string, req *Request, run *tuiRuntimeSubscriptionRun, results []Part, how string) bool {
+func tuiRuntimeLiteContinues(owner, model string, req *tuiRuntimeRequest, run *tuiRuntimeSubscriptionRun, results []Part, how string) bool {
 	if !tuiRuntimeInteractiveToolContinuation(req) || !run.interactive || run.owner != owner || run.model != model {
 		return false
 	}
@@ -334,12 +334,12 @@ func tuiRuntimeLiteContinues(owner, model string, req *Request, run *tuiRuntimeS
 // liteCanonical is upstream's helper routing: a request on a conversation id
 // is that conversation's own turn unless it is a different thread the
 // checkpoint does not verify, or a one-message call for another model.
-func (b *tuiRuntimeSubscriptionBridge) liteCanonical(owner, outerSession, model string, req *Request) bool {
+func (b *tuiRuntimeSubscriptionBridge) liteCanonical(owner, outerSession, model string, req *tuiRuntimeRequest) bool {
 	shape, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return true
 	}
-	if active := b.outerThread(owner, outerSession); active != "" && active != firstWords(req) {
+	if active := b.outerThread(owner, outerSession); active != "" && active != firstWords(&req.Request) {
 		_, _, status := b.restoreInteractiveSession(owner, outerSession, req)
 		if status != tuiRuntimeInteractiveRestoreExact && status != tuiRuntimeInteractiveRestoreReplyAnchor && status != tuiRuntimeInteractiveRestoreCompanion {
 			return false
@@ -392,7 +392,7 @@ func (b *tuiRuntimeSubscriptionBridge) takeLiteTurn(ctx context.Context, owner, 
 // resumed when the request exactly follows it, a first turn as a first turn,
 // and otherwise a session rebuilt from the request's history. Stateless
 // requests (outerSession "") never read or write a checkpoint.
-func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *Request, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	shape, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return nil, nil, err
@@ -435,8 +435,8 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *Reque
 
 // anchorOuterThread records req's thread as the conversation's own, as
 // upstream does once a canonical start is verified.
-func (b *tuiRuntimeSubscriptionBridge) anchorOuterThread(owner, outerSession string, req *Request) {
-	thread := firstWords(req)
+func (b *tuiRuntimeSubscriptionBridge) anchorOuterThread(owner, outerSession string, req *tuiRuntimeRequest) {
+	thread := firstWords(&req.Request)
 	if thread == "" {
 		return
 	}
@@ -451,7 +451,7 @@ func (b *tuiRuntimeSubscriptionBridge) anchorOuterThread(owner, outerSession str
 // reply. Tool results there stay in the history, where the native session
 // sees them answer its calls. Unanswered calls are dropped; orphaned
 // results retain their content as labelled historical output.
-func tuiRuntimeLiteSeed(req *Request) (*Request, string, map[string]Part, error) {
+func tuiRuntimeLiteSeed(req *tuiRuntimeRequest) (*tuiRuntimeRequest, string, map[string]Part, error) {
 	k, results, turn := tuiRuntimeLiteTail(req.Messages)
 	history := tuiRuntimePairedToolTraffic(append(slices.Clone(req.Messages[:k]), results...))
 	if n := len(history); n > 0 && history[n-1].Role != "assistant" {
@@ -494,7 +494,7 @@ func tuiRuntimeLiteTail(msgs []Message) (k int, results, turn []Message) {
 
 // liteTurnPrompt is the prompt a resumed session is given for turn: what the
 // user said, or liteContinueText when the turn is only tool results.
-func tuiRuntimeLiteTurnPrompt(req *Request, turn []Message) (string, map[string]Part, error) {
+func tuiRuntimeLiteTurnPrompt(req *tuiRuntimeRequest, turn []Message) (string, map[string]Part, error) {
 	if !tuiRuntimeHasUserText(turn) {
 		turn = append(turn, Message{Role: "user", Parts: []Part{{Kind: Text, Text: tuiRuntimeLiteContinueText}}})
 	}
@@ -533,7 +533,7 @@ func (b *tuiRuntimeSubscriptionBridge) noteLiteParked(r *tuiRuntimeSubscriptionR
 // it has cached, where a session rebuilt from the request (liteSeed) would
 // write the whole conversation again. It returns the copy's id and the
 // turn's prompt, or false when req is not exactly those results.
-func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, model, configDir string, req *Request) (string, string, map[string]Part, bool) {
+func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, model, configDir string, req *tuiRuntimeRequest) (string, string, map[string]Part, bool) {
 	key := tuiRuntimeInteractiveSessionStateKey(owner, outerSession)
 	b.mu.Lock()
 	run := b.liteParked[key]

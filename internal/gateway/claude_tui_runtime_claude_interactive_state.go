@@ -489,7 +489,7 @@ func tuiRuntimeClaudeDesktopTurnCompanionMessage(m Message) bool {
 	return false
 }
 
-func tuiRuntimeClaudeDesktopTurnCompanionSuffix(req *Request) []Message {
+func tuiRuntimeClaudeDesktopTurnCompanionSuffix(req *tuiRuntimeRequest) []Message {
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		m := req.Messages[i]
 		if m.Role != "user" {
@@ -566,7 +566,7 @@ func tuiRuntimeClaudeDesktopFailedTurnCompanionReply(m Message) bool {
 // restoreInteractiveSession decides whether a persisted inner Claude session
 // can safely accept only the caller's new suffix. It never authorizes replay
 // of the entire outer history.
-func (b *tuiRuntimeSubscriptionBridge) restoreInteractiveSession(owner, outerSession string, req *Request) (tuiRuntimeInteractiveSessionEntry, []Message, tuiRuntimeInteractiveRestoreStatus) {
+func (b *tuiRuntimeSubscriptionBridge) restoreInteractiveSession(owner, outerSession string, req *tuiRuntimeRequest) (tuiRuntimeInteractiveSessionEntry, []Message, tuiRuntimeInteractiveRestoreStatus) {
 	saved, ok, err := b.loadInteractiveSession(owner, outerSession)
 	if err != nil {
 		return tuiRuntimeInteractiveSessionEntry{}, nil, tuiRuntimeInteractiveRestoreStateInvalid

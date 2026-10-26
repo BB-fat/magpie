@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func tuiRuntimeSemanticReplayRequest(t *testing.T) *Request {
+func tuiRuntimeSemanticReplayRequest(t *testing.T) *tuiRuntimeRequest {
 	t.Helper()
 	req := tuiRuntimeReplayReq(t, tuiRuntimeReplayBody(""))
 	req.Messages[0].Parts = append(req.Messages[0].Parts,
@@ -21,27 +21,27 @@ func tuiRuntimeSemanticReplayRequest(t *testing.T) *Request {
 }
 
 func TestClaudeTUIRuntimeLiteReplayRequiresAllSemanticContent(t *testing.T) {
-	for name, change := range map[string]func(*Request){
-		"arguments": func(r *Request) { r.Messages[1].Parts[0].Args = json.RawMessage(`{"path":"b"}`) },
-		"large integer": func(r *Request) {
+	for name, change := range map[string]func(*tuiRuntimeRequest){
+		"arguments": func(r *tuiRuntimeRequest) { r.Messages[1].Parts[0].Args = json.RawMessage(`{"path":"b"}`) },
+		"large integer": func(r *tuiRuntimeRequest) {
 			r.Messages[1].Parts[0].Args = json.RawMessage(`{"path":"a","nested":{"a":1,"b":2},"n":9007199254740993}`)
 		},
-		"result error": func(r *Request) { r.Messages[2].Parts[0].IsError = true },
-		"image bytes":  func(r *Request) { r.Messages[0].Parts[1].Data = "QkJC" },
-		"image type":   func(r *Request) { r.Messages[0].Parts[1].MediaType = "image/jpeg" },
-		"file bytes":   func(r *Request) { r.Messages[0].Parts[2].Data = "QkJC" },
-		"result image": func(r *Request) {
+		"result error": func(r *tuiRuntimeRequest) { r.Messages[2].Parts[0].IsError = true },
+		"image bytes":  func(r *tuiRuntimeRequest) { r.Messages[0].Parts[1].Data = "QkJC" },
+		"image type":   func(r *tuiRuntimeRequest) { r.Messages[0].Parts[1].MediaType = "image/jpeg" },
+		"file bytes":   func(r *tuiRuntimeRequest) { r.Messages[0].Parts[2].Data = "QkJC" },
+		"result image": func(r *tuiRuntimeRequest) {
 			r.Messages[2].Parts[0].Images[0].Data = "QkJC"
 		},
-		"call identity": func(r *Request) {
+		"call identity": func(r *tuiRuntimeRequest) {
 			r.Messages[1].Parts[0].ID = "another-call"
 			r.Messages[2].Parts[0].CallID = "another-call"
 		},
-		"text whitespace": func(r *Request) { r.Messages[0].Parts[0].Text = "run " },
-		"thinking":        func(r *Request) { r.Messages[1].Parts[1].Text = "another reason" },
-		"signature":       func(r *Request) { r.Messages[1].Parts[1].Signature = "another signature" },
-		"safeguards":      func(r *Request) { r.Safeguards = json.RawMessage(`{"policy":"b"}`) },
-		"safeguard beta":  func(r *Request) { r.SafeguardBeta = "dangerous-tool-use-another" },
+		"text whitespace": func(r *tuiRuntimeRequest) { r.Messages[0].Parts[0].Text = "run " },
+		"thinking":        func(r *tuiRuntimeRequest) { r.Messages[1].Parts[1].Text = "another reason" },
+		"signature":       func(r *tuiRuntimeRequest) { r.Messages[1].Parts[1].Signature = "another signature" },
+		"safeguards":      func(r *tuiRuntimeRequest) { r.Safeguards = json.RawMessage(`{"policy":"b"}`) },
+		"safeguard beta":  func(r *tuiRuntimeRequest) { r.SafeguardBeta = "dangerous-tool-use-another" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := &tuiRuntimeSubscriptionBridge{}

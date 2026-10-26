@@ -13,7 +13,7 @@ import (
 // retry must reattach to the pending answer, not deliver them again.
 func TestClaudeTUIRuntimeInteractiveAlreadyDeliveredToolResultsReconnect(t *testing.T) {
 	body := `{"model":"claude-opus-5-5","messages":[{"role":"user","content":"do two steps"},{"role":"assistant","content":[{"type":"tool_use","id":"first","name":"echo","input":{"n":1}},{"type":"tool_use","id":"second","name":"echo","input":{"n":2}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"first","content":"done one"},{"type":"tool_result","tool_use_id":"second","content":"done two"}]},{"role":"system","content":"session notice"}],"tools":[{"name":"echo","description":"echo","input_schema":{"type":"object"}}]}`
-	req, err := parseAnthropic([]byte(body))
+	req, err := tuiRuntimeParseRequest([]byte(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestClaudeTUIRuntimeInteractiveAlreadyDeliveredToolResultsReconnect(t *test
 		}
 	}()
 	started := false
-	start := func(context.Context, *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(context.Context, *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		started = true
 		return nil, nil, nil
 	}
@@ -67,7 +67,7 @@ func TestClaudeTUIRuntimeInteractiveAlreadyDeliveredRejectsFreshUserText(t *test
 	msg := []Message{{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "id", Name: "echo"}}}, {Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "id", Text: "done"}}}}
 	run := &tuiRuntimeSubscriptionRun{interactive: true, pending: map[string]chan tuiRuntimeMcpToolResult{}, parkedAt: time.Now()}
 	run.heard(msg)
-	req := &Request{Messages: append(append([]Message{}, msg...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: "a NEW request"}}})}
+	req := &tuiRuntimeRequest{Request: Request{Messages: append(append([]Message{}, msg...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: "a NEW request"}}})}}
 	if tuiRuntimeInteractiveAlreadyDeliveredHandoff(run, req, []Part{{Kind: ToolResult, CallID: "id"}}) {
 		t.Fatal("reconnection consumed a new user instruction")
 	}
@@ -79,7 +79,7 @@ func TestClaudeTUIRuntimeInteractiveRetryIgnoresOnlyDynamicBudgetNotice(t *testi
 		{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "id", Text: "done"}}}}
 	run := &tuiRuntimeSubscriptionRun{interactive: true, pending: map[string]chan tuiRuntimeMcpToolResult{}, parkedAt: time.Now()}
 	run.heard(msg)
-	req := &Request{Messages: append([]Message(nil), msg...)}
+	req := &tuiRuntimeRequest{Request: Request{Messages: append([]Message(nil), msg...)}}
 	req.Messages[1].Parts = []Part{{Kind: Text, Text: "<total_tokens>28000 tokens left</total_tokens>"}}
 	req.Messages = append(req.Messages, Message{Role: "system", Parts: []Part{{Kind: Text, Text: "<total_tokens>27000 tokens left</total_tokens>"}}})
 	if !tuiRuntimeInteractiveAlreadyDeliveredHandoff(run, req, []Part{{Kind: ToolResult, CallID: "id"}}) {

@@ -15,7 +15,7 @@ import (
 // A genuine adjacent user message must not become MCP tool data. Preserve
 // result ordering and remapped IDs from match, while taking text provenance
 // from the original wire messages (also retained for history ownership).
-func tuiRuntimeInteractiveToolHandoff(req *Request, matched []Part, heardEnd int) ([]Part, string, error) {
+func tuiRuntimeInteractiveToolHandoff(req *tuiRuntimeRequest, matched []Part, heardEnd int) ([]Part, string, error) {
 	start := len(req.Messages)
 	for start > 0 && req.Messages[start-1].Role != "assistant" {
 		start--

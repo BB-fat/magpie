@@ -59,7 +59,7 @@ func TestClaudeTUIRuntimeNativeLeaseTwoBridgesCannotStartSameInteractiveOuter(t 
 	b1, b2 := tuiRuntimeNewSubscriptionBridge(), tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b1)
 	defer tuiRuntimeBridges.Delete(b2)
-	req := &Request{Model: tuiRuntimeAutoTestModel, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "check"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: tuiRuntimeAutoTestModel, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "check"}}}}}}
 	owner, outer := "owner", "same-outer"
 	run, _, err := b1.startInteractiveWithPrompt(context.Background(), req, tuiRuntimeAutoTestModel, "", owner, outer, "test", "", false)
 	if err != nil {
@@ -115,7 +115,7 @@ func TestClaudeTUIRuntimeNativeLeaseRejectedResumeDoesNotDirtyOtherRuntimeCheckp
 		t.Fatal(err)
 	}
 	defer tuiRuntimeReleaseInteractiveNativeLease(lease)
-	req := &Request{Model: tuiRuntimeAutoTestModel, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "continue"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{Model: tuiRuntimeAutoTestModel, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "continue"}}}}}}
 	saved, ok := b.interactiveSession(owner, outer)
 	if !ok || saved.Dirty {
 		t.Fatalf("clean checkpoint precondition violated: %+v", saved)
@@ -135,7 +135,7 @@ func TestClaudeTUIRuntimeNativeLeaseBlocksRetryAfterClaimWithoutConsumingIt(t *t
 	t.Setenv("MAGPIE_CLAUDE_AUTO_RECOVER_RETRY", "1")
 	tuiRuntimeAutoRegister(t, b, owner, outer, "Write", `{"file_path":"note.txt"}`)
 	body := tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"wrote"`)
-	req, err := parseAnthropic(body)
+	req, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}

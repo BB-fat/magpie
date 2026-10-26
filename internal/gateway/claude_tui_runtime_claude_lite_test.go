@@ -89,10 +89,10 @@ func tuiRuntimeScSaveClean(t *testing.T, b *tuiRuntimeSubscriptionBridge, sessio
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "先读一下配置"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "配置已读"}}},
 	}
-	baseReq := &Request{Model: "claude-opus-5-5", Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Messages: base}}
 	keys := tuiRuntimeConversationKeys(tuiRuntimeScOwner, base)
 	if err := b.saveInteractiveSession(tuiRuntimeScOwner, tuiRuntimeScOuter, tuiRuntimeInteractiveSessionEntry{
-		SessionID: session, Model: "claude-opus-5-5", ThreadKey: firstWords(baseReq),
+		SessionID: session, Model: "claude-opus-5-5", ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]),
 		ContextKey: tuiRuntimeTurnKey(tuiRuntimeScOwner, baseReq, nil), Dirty: dirty,
 	}); err != nil {
@@ -367,7 +367,7 @@ func TestClaudeTUIRuntimeLiteOtherThreadOnTheConversationIdRunsStateless(t *test
 	_, runs := tuiRuntimeScWrapper(t)
 	rt, b := tuiRuntimeScRuntime(t)
 	tuiRuntimeScSaveClean(t, b, "inner-saved", false)
-	b.anchorOuterThread(tuiRuntimeScOwner, tuiRuntimeScOuter, &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "先读一下配置"}}}}})
+	b.anchorOuterThread(tuiRuntimeScOwner, tuiRuntimeScOuter, &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "先读一下配置"}}}}}})
 	before, _, _ := b.loadInteractiveSession(tuiRuntimeScOwner, tuiRuntimeScOuter)
 	code, out := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, `{"model":"claude-opus-5-5","max_tokens":64,"messages":[
 		{"role":"user","content":"Explore the repository and list its packages"},{"role":"assistant","content":"Looking"},{"role":"user","content":"go on"}]}`)
@@ -455,9 +455,9 @@ func TestClaudeTUIRuntimeLiteSignedStatelessSessionHasNoConversation(t *testing.
 }
 
 func TestClaudeTUIRuntimeLiteVisibleToolHandoffRejectsWrongOrPartialResults(t *testing.T) {
-	request := func(t *testing.T, history string) *Request {
+	request := func(t *testing.T, history string) *tuiRuntimeRequest {
 		t.Helper()
-		req, err := parseAnthropic([]byte(`{"model":"claude-opus-5-5","max_tokens":32,"messages":` + history + `}`))
+		req, err := tuiRuntimeParseRequest([]byte(`{"model":"claude-opus-5-5","max_tokens":32,"messages":` + history + `}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -491,7 +491,7 @@ func TestClaudeTUIRuntimeLiteRepeatOfDeliveredToolResultsIsAnsweredStateless(t *
 	rt, b := tuiRuntimeScRuntime(t)
 	tuiRuntimeScSaveClean(t, b, "inner-saved", false)
 	body := `{"model":"claude-opus-5-5","max_tokens":64,"messages":[{"role":"user","content":"run"},{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"echo","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"finished"}]}]}`
-	req, err := parseAnthropic([]byte(body))
+	req, err := tuiRuntimeParseRequest([]byte(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +511,7 @@ func TestClaudeTUIRuntimeLiteRepeatOfDeliveredToolResultsIsAnsweredStateless(t *
 
 func TestClaudeTUIRuntimeLiteAlreadyDeliveredToolResultsNotRebuiltInSameProcess(t *testing.T) {
 	b := &tuiRuntimeSubscriptionBridge{}
-	req, err := parseAnthropic([]byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"run"},{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"echo","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"finished"}]}]}`))
+	req, err := tuiRuntimeParseRequest([]byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"run"},{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"echo","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"finished"}]}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +616,7 @@ func TestClaudeTUIRuntimeLiteParkedBranchNeedsExactlyItsCalls(t *testing.T) {
 	t.Cleanup(func() { tuiRuntimeBridges.Delete(b) })
 	run := &tuiRuntimeSubscriptionRun{interactive: true, owner: tuiRuntimeScOwner, outerSession: tuiRuntimeScOuter, model: "claude-opus-5-5",
 		sessionID: "inner-x", closed: true, parkedAt: time.Now(), shown: []tuiRuntimeShownCall{{id: "call_1"}, {id: "call_2"}}}
-	req, err := parseAnthropic([]byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"go"},{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"echo","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"x"}]}]}`))
+	req, err := tuiRuntimeParseRequest([]byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"go"},{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"echo","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"x"}]}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}

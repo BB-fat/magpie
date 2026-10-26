@@ -118,7 +118,7 @@ func tuiRuntimeTcServe(t *testing.T, rt *tuiRuntime, b *tuiRuntimeSubscriptionBr
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body)))
-	code, msg := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{rec, req, &Usage{}}, req, "Claude Code", "claude-opus-5-5", owner, outer, body, func(c context.Context, r *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	code, msg := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{rec, req, &Usage{}}, req, "Claude Code", "claude-opus-5-5", owner, outer, body, func(c context.Context, r *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		return b.startInteractiveRequest(c, r, "claude-opus-5-5", "", owner, outer)
 	})
 	return code, msg, rec.Body.String()
@@ -319,7 +319,7 @@ func TestClaudeTUIRuntimeTerminalCleanupWaitCancelledKeepsOwner(t *testing.T) {
 	go func() {
 		body, _ := io.ReadAll(req.Body)
 		req2 := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))).WithContext(ctx)
-		code, _ := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{rec, req2, &Usage{}}, req2, "Claude Code", "claude-opus-5-5", owner, outer, body, func(c context.Context, r *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+		code, _ := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{rec, req2, &Usage{}}, req2, "Claude Code", "claude-opus-5-5", owner, outer, body, func(c context.Context, r *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 			return b.startInteractiveRequest(c, r, "claude-opus-5-5", "", owner, outer)
 		})
 		done <- code

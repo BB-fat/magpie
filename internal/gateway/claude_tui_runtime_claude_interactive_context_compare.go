@@ -29,7 +29,7 @@ func tuiRuntimeInteractiveCanonicalJSON(raw json.RawMessage) json.RawMessage {
 
 // These are the instructions and definitions actually supplied to the native
 // run. Billing metadata is already omitted when rendering those instructions.
-func tuiRuntimeInteractiveEquivalentContextKey(req *Request) string {
+func tuiRuntimeInteractiveEquivalentContextKey(req *tuiRuntimeRequest) string {
 	normalized := *req
 	normalized.System = tuiRuntimeWithoutBillingHeader(req.System)
 	if req.Format != nil {
@@ -45,7 +45,7 @@ func tuiRuntimeInteractiveEquivalentContextKey(req *Request) string {
 	return tuiRuntimeTurnKey("", &normalized, nil)
 }
 
-func (r *tuiRuntimeSubscriptionRun) interactiveEquivalentContext(req *Request) bool {
+func (r *tuiRuntimeSubscriptionRun) interactiveEquivalentContext(req *tuiRuntimeRequest) bool {
 	r.mu.Lock()
 	snapshot := r.interactiveContextSnapshot
 	r.mu.Unlock()

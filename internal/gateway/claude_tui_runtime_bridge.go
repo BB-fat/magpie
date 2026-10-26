@@ -17,7 +17,7 @@ type tuiRuntime struct {
 type tuiRuntimeResponder interface {
 	Header() http.Header
 	Fail(status int, msg string) (int, string)
-	Relay(req *Request, events <-chan Event, abort func(), ended func(said, stop string, ok bool)) (int, string)
+	Relay(req *tuiRuntimeRequest, events <-chan Event, abort func(), ended func(said, stop string, ok bool)) (int, string)
 }
 
 // Responder is how the gateway answers a TUI request's client.
@@ -33,7 +33,7 @@ type tuiRuntimeOutput interface {
 
 type tuiRuntimeGatewayResponder struct{ tuiRuntimeOutput }
 
-func (g tuiRuntimeGatewayResponder) Relay(req *Request, events <-chan Event, abort func(), ended func(said, stop string, ok bool)) (int, string) {
+func (g tuiRuntimeGatewayResponder) Relay(req *tuiRuntimeRequest, events <-chan Event, abort func(), ended func(said, stop string, ok bool)) (int, string) {
 	return g.tuiRuntimeOutput.Relay(events, req.Stream, abort, ended)
 }
 

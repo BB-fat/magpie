@@ -48,10 +48,10 @@ func tuiRuntimeArSave(t *testing.T, b *tuiRuntimeSubscriptionBridge, owner, oute
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "先读一下配置"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "配置已读"}}},
 	}
-	req := &Request{Model: tuiRuntimeAutoTestModel, Messages: msgs}
+	req := &tuiRuntimeRequest{Request: Request{Model: tuiRuntimeAutoTestModel, Messages: msgs}}
 	keys := tuiRuntimeConversationKeys(owner, msgs)
 	if err := b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: session, Model: tuiRuntimeAutoTestModel, ThreadKey: firstWords(req),
+		SessionID: session, Model: tuiRuntimeAutoTestModel, ThreadKey: firstWords(&req.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(msgs[1]),
 		ContextKey: tuiRuntimeTurnKey(owner, req, nil), Dirty: dirty,
 	}); err != nil {
@@ -63,7 +63,7 @@ func tuiRuntimeArServe(t *testing.T, rt *tuiRuntime, b *tuiRuntimeSubscriptionBr
 	t.Helper()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body)))
-	code, msg := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{w, r, &Usage{}}, r, "Claude Code", tuiRuntimeAutoTestModel, owner, outer, body, func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	code, msg := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{w, r, &Usage{}}, r, "Claude Code", tuiRuntimeAutoTestModel, owner, outer, body, func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		return b.startInteractiveRequest(ctx, req, tuiRuntimeAutoTestModel, "", owner, outer)
 	})
 	return code, msg, w.Body.String()
@@ -206,14 +206,14 @@ func TestClaudeTUIRuntimeInteractiveAutoRecoveryParallelClaimsAreAtomicAndSingle
 	partial := `{"model":"claude-opus-5-5","messages":[{"role":"user","content":"先读一下配置"},` +
 		`{"role":"assistant","content":[{"type":"tool_use","id":"id-1","name":"Write","input":{"file_path":"note.txt"}},{"type":"tool_use","id":"id-2","name":"Bash","input":{"command":"echo ok"}}]},` +
 		`{"role":"user","content":[{"type":"tool_result","tool_use_id":"id-1","content":"wrote"}`
-	request, err := parseAnthropic([]byte(partial + `]}]}`))
+	request, err := tuiRuntimeParseRequest([]byte(partial + `]}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := b.toolJournal.claimOrphanRecovery(owner, outer, request); err == nil {
 		t.Fatal("partial parallel result was accepted")
 	}
-	complete, err := parseAnthropic([]byte(partial + `,{"type":"tool_result","tool_use_id":"id-2","content":"ok"}]}]}`))
+	complete, err := tuiRuntimeParseRequest([]byte(partial + `,{"type":"tool_result","tool_use_id":"id-2","content":"ok"}]}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestClaudeTUIRuntimeInteractiveAutoRecoveryCrashAfterClaimAllowsOneVerified
 	tuiRuntimeAutoRegister(t, b, owner, outer, "Write", `{"file_path":"note.txt"}`)
 	t.Setenv("MAGPIE_CLAUDE_AUTO_RECOVER_RETRY", "1")
 	body := tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"wrote"`)
-	req, err := parseAnthropic(body)
+	req, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,14 +267,14 @@ func TestClaudeTUIRuntimeInteractiveAutoRecoveryReadOnlyRetryRefusesChangedResul
 	b, _, owner, outer, _ := tuiRuntimeAutoRecoveryFixture(t)
 	tuiRuntimeAutoRegister(t, b, owner, outer, "Write", `{"file_path":"note.txt"}`)
 	t.Setenv("MAGPIE_CLAUDE_AUTO_RECOVER_RETRY", "1")
-	correct, err := parseAnthropic(tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"wrote"`))
+	correct, err := tuiRuntimeParseRequest(tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"wrote"`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := b.toolJournal.claimOrphanRecovery(owner, outer, correct); err != nil {
 		t.Fatal(err)
 	}
-	forged, err := parseAnthropic(tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"forged"`))
+	forged, err := tuiRuntimeParseRequest(tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"forged"`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestClaudeTUIRuntimeInteractiveAutoRecoveryCrossInstanceClaimsSingleWinner(
 	}
 	b, _, owner, outer, _ := tuiRuntimeAutoRecoveryFixture(t)
 	tuiRuntimeAutoRegister(t, b, owner, outer, "Write", `{"file_path":"note.txt"}`)
-	req, err := parseAnthropic(tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"wrote"`))
+	req, err := tuiRuntimeParseRequest(tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"wrote"`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,14 +359,14 @@ func TestClaudeTUIRuntimeInteractiveAutoRecoveryRefusesChangedPreviouslyVerified
 	if err := b.toolJournal.verifyResults(run, []Part{{Kind: ToolResult, CallID: "tool-A", Text: "wrote"}}); err != nil {
 		t.Fatal(err)
 	}
-	wrong, err := parseAnthropic(tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"forged"`))
+	wrong, err := tuiRuntimeParseRequest(tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"forged"`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := b.toolJournal.claimOrphanRecovery(owner, outer, wrong); err == nil {
 		t.Fatal("accepted changed result from already-verified client")
 	}
-	correct, err := parseAnthropic(tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"wrote"`))
+	correct, err := tuiRuntimeParseRequest(tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"wrote"`))
 	if err != nil {
 		t.Fatal(err)
 	}

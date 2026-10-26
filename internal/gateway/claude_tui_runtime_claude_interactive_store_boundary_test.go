@@ -48,7 +48,7 @@ func TestClaudeTUIRuntimeInteractiveRestoreRejectsStoreChangedAfterPreflight(t *
 					t.Fatal(err)
 				}
 			}
-			_, _, status := b.restoreInteractiveSession("owner", "outer", &Request{})
+			_, _, status := b.restoreInteractiveSession("owner", "outer", &tuiRuntimeRequest{Request: Request{}})
 			if string(status) != "state_invalid" {
 				t.Fatalf("changed store classified as %s; must distinguish damage from a missing conversation", status)
 			}
@@ -118,7 +118,7 @@ func TestClaudeTUIRuntimeInteractiveResumeRequiresPersistedDirtyMarker(t *testin
 					t.Fatal(err)
 				}
 			}
-			req := &Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "continue"}}}}}
+			req := &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "continue"}}}}}}
 			run, _, err := b.startInteractiveWithPrompt(context.Background(), req, "claude-opus-5-5", "", "boundary-owner", "boundary-"+kind, "continue", "native", false)
 			if run != nil {
 				<-run.interactiveDone
@@ -150,7 +150,7 @@ func TestClaudeTUIRuntimeInteractiveLateStoreFailureReturnsConflict(t *testing.T
 	rt := &tuiRuntime{bridge: b}
 	body := []byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"continue"}]}`)
 	started := 0
-	start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		started++
 		if err := os.WriteFile(tuiRuntimeInteractiveSessionStatePath(), []byte(`{"version":`), 0o600); err != nil {
 			t.Fatal(err)

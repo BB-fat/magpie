@@ -78,7 +78,7 @@ func TestClaudeTUIRuntimeInteractiveFirstTurnDirtyAnchorRecoversToolFreeAndCommi
 	defer tuiRuntimeBridges.Delete(b)
 	owner, outer := "owner", "first-turn-outer"
 	body := tuiRuntimeAutoRecoveryBody("Write", `{"file_path":"note.txt"}`, `"wrote"`)
-	request, err := parseAnthropic(body)
+	request, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestClaudeTUIRuntimeInteractiveFirstTurnDirtyAnchorRecoversToolFreeAndCommi
 	r := &tuiRuntimeSubscriptionRun{
 		bridge: b, interactive: true, owner: owner, outerSession: outer,
 		token: "true-native-callback", model: tuiRuntimeAutoTestModel,
-		sessionID: "real-native-init-session", threadKey: firstWords(request),
+		sessionID: "real-native-init-session", threadKey: firstWords(&request.Request),
 		firstTurnAnchorKey:    tuiRuntimeToolEvidenceHash(owner + "\x00" + tuiRuntimeHistoryKey(first)),
 		interactiveContextKey: "initial-context", seenMCPCallIDs: map[string]bool{},
 	}

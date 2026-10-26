@@ -60,7 +60,7 @@ func TestClaudeTUIRuntimeObservedSevenPartRecoveryAllMiddleOrders(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		req, err := parseAnthropic(wire)
+		req, err := tuiRuntimeParseRequest(wire)
 		if err != nil {
 			t.Fatal(err)
 		}

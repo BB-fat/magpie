@@ -17,7 +17,7 @@ func TestClaudeTUIRuntimeInteractiveMergedOrphanRetryCannotBecomeNewTurn(t *test
 		t.Run(scenario, func(t *testing.T) {
 			s := tuiRuntimeNewTestServer()
 			defer tuiRuntimeBridges.Delete(s.subscription)
-			req, err := parseAnthropic(body)
+			req, err := tuiRuntimeParseRequest(body)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -25,7 +25,7 @@ func TestClaudeTUIRuntimeInteractiveMergedOrphanRetryCannotBecomeNewTurn(t *test
 				t.Fatalf("ambiguous mixed retry treated as current user turn: %d", current)
 			}
 			started := 0
-			start := func(context.Context, *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+			start := func(context.Context, *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 				started++
 				return nil, nil, errors.New("ambiguous history must not start a process")
 			}

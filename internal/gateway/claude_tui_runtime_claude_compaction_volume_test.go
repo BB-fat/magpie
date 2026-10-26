@@ -21,7 +21,7 @@ func TestClaudeTUIRuntimeCompactionLargeHistoricalTranscriptPreservesStructureWi
 	bigText := strings.Repeat(chunk, repetitions)
 	imageData := strings.Repeat("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=", 5000)
 	oldArgs := json.RawMessage(`{"command":"SYNTHETIC_TOOL_MUST_NOT_RUN", "path":"/test/only"}`)
-	req := &Request{
+	req := &tuiRuntimeRequest{Request: Request{
 		Model: "claude-opus-5-5", System: tuiRuntimeCompactSystemTest,
 		Tools: []Tool{{Name: "Bash"}},
 		Messages: []Message{
@@ -32,7 +32,7 @@ func TestClaudeTUIRuntimeCompactionLargeHistoricalTranscriptPreservesStructureWi
 				{Kind: Text, Text: "Your task is to create a detailed summary of the conversation so far."},
 			}},
 		},
-	}
+	}}
 	summary := tuiRuntimeClaudeDesktopCompactionRequest(req)
 	if len(summary.Tools) != 0 || len(summary.Messages) != 1 || summary.Messages[0].Parts[0].Kind != Text {
 		t.Fatal("compaction was not stripped down to a single tool-free summary request")

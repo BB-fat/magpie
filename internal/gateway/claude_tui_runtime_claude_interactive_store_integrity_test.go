@@ -36,7 +36,7 @@ func TestClaudeTUIRuntimeInteractiveInvalidCheckpointStoreFailsBeforeNewNativeRu
 			rt := &tuiRuntime{bridge: b}
 			body := []byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"continue old task"}]}`)
 			started := 0
-			start := func(context.Context, *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+			start := func(context.Context, *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 				started++
 				return nil, nil, errors.New("would start a new native session")
 			}

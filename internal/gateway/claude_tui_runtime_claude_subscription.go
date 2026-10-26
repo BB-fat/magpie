@@ -579,7 +579,7 @@ func tuiRuntimeSafeguardBody(raw json.RawMessage) string {
 // A CLI unable to acknowledge the update is discarded by the caller; its old
 // context must never be used for another turn. The client's approval still
 // decides whether the tool runs, including a server verdict that is unavailable.
-func (r *tuiRuntimeSubscriptionRun) setSafeguards(req *Request) error {
+func (r *tuiRuntimeSubscriptionRun) setSafeguards(req *tuiRuntimeRequest) error {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
 	if bytes.Equal(r.safeguards, req.Safeguards) && (len(req.Safeguards) == 0 || r.safeguardBeta == req.SafeguardBeta) {
@@ -649,7 +649,7 @@ func (r *tuiRuntimeSubscriptionRun) claimResume() bool {
 
 // resume hands a conversation's next turn to the run that had its last
 // one, when one is waiting: the user's messages since, and nothing else.
-func (b *tuiRuntimeSubscriptionBridge) resume(req *Request, owner string) (*tuiRuntimeSubscriptionRun, <-chan Event) {
+func (b *tuiRuntimeSubscriptionBridge) resume(req *tuiRuntimeRequest, owner string) (*tuiRuntimeSubscriptionRun, <-chan Event) {
 	key, since := tuiRuntimeNextTurn(req, owner)
 	if key == "" {
 		return nil, nil
@@ -726,7 +726,7 @@ func (b *tuiRuntimeSubscriptionBridge) resume(req *Request, owner string) (*tuiR
 // result (Pi Team Bright's team_sync). They go to the run as the rest of
 // what was said since, where a run started anew would be told the whole
 // conversation in one message, a prefix the cache has never seen.
-func tuiRuntimeNextTurn(req *Request, owner string) (string, []Message) {
+func tuiRuntimeNextTurn(req *tuiRuntimeRequest, owner string) (string, []Message) {
 	msgs := req.Messages
 	if len(msgs) == 0 || msgs[len(msgs)-1].Role == "assistant" {
 		return "", nil
@@ -776,7 +776,7 @@ type tuiRuntimeTurnWords struct {
 }
 
 // newLooseTurn is msgs, which end with a reply, as looseTurn keeps them.
-func tuiRuntimeNewLooseTurn(owner string, req *Request, msgs []Message) *tuiRuntimeLooseTurn {
+func tuiRuntimeNewLooseTurn(owner string, req *tuiRuntimeRequest, msgs []Message) *tuiRuntimeLooseTurn {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -847,7 +847,7 @@ func tuiRuntimeCutFrom(was, s string) bool {
 // (looseTurn), when there is just one (b.mu held). Two that could be it
 // are two conversations alike as far as their words go, and neither is
 // taken: a run handed another's would answer from what the other was told.
-func (b *tuiRuntimeSubscriptionBridge) rewritten(req *Request, owner string) (*tuiRuntimeSubscriptionRun, *tuiRuntimeSavedSession) {
+func (b *tuiRuntimeSubscriptionBridge) rewritten(req *tuiRuntimeRequest, owner string) (*tuiRuntimeSubscriptionRun, *tuiRuntimeSavedSession) {
 	key, since := tuiRuntimeNextTurn(req, owner)
 	if key == "" {
 		return nil, nil
@@ -963,7 +963,7 @@ func (r *tuiRuntimeSubscriptionRun) readOnlyToolSignaled() bool {
 // ended is told how a turn's reply went. A run whose reply was whole and
 // asked for nothing more waits for the conversation's next turn; one that
 // failed, was cut short or went unheard is let go, as is a one-off ask.
-func (r *tuiRuntimeSubscriptionRun) ended(req *Request, said, stop string, ok bool) {
+func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop string, ok bool) {
 	// the turn's reply is over: nothing after it (its tool calls' answers
 	// going on) is taken back to before it (letGo)
 	r.mu.Lock()
@@ -1152,7 +1152,7 @@ func (b *tuiRuntimeSubscriptionBridge) shelve(run *tuiRuntimeSubscriptionRun) {
 // unshelve takes the saved session a request's conversation goes on
 // from, if there is one: its next turn, asked of the account, model and
 // settings it had.
-func (b *tuiRuntimeSubscriptionBridge) unshelve(req *Request, owner string) *tuiRuntimeSavedSession {
+func (b *tuiRuntimeSubscriptionBridge) unshelve(req *tuiRuntimeRequest, owner string) *tuiRuntimeSavedSession {
 	key, since := tuiRuntimeNextTurn(req, owner)
 	if key == "" {
 		return nil
@@ -1550,7 +1550,7 @@ func (r *tuiRuntimeSubscriptionRun) park() {
 // turned thinking off, which its Claude Code was started with): a
 // run is told another level as its turn starts (setEffort), where one
 // started anew would write the whole conversation to the cache again (#502).
-func tuiRuntimeTurnKey(owner string, req *Request, msgs []Message) string {
+func tuiRuntimeTurnKey(owner string, req *tuiRuntimeRequest, msgs []Message) string {
 	h := sha256.New()
 	tools, _ := json.Marshal(req.Tools)
 	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, req.System, tools, req.WebSearch, req.Format.schema())
@@ -2353,7 +2353,7 @@ func (r *tuiRuntimeSubscriptionRun) readOutput(rd io.Reader) {
 // once.
 var tuiRuntimeUnstreamedQuiet = 300 * time.Millisecond
 
-func tuiRuntimeRenderClaudePrompt(req *Request) ([]map[string]any, error) {
+func tuiRuntimeRenderClaudePrompt(req *tuiRuntimeRequest) ([]map[string]any, error) {
 	var blocks []map[string]any
 	var text strings.Builder
 	if req.System != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:") {
@@ -2458,7 +2458,7 @@ func tuiRuntimeRenderParts(blocks []map[string]any, text *strings.Builder, parts
 // run's when one of them is a call it made; the rest it hasn't made yet.
 // An image sent beside the results, as a client whose tool messages hold
 // text only sends a tool's (Chat), goes with the result before it.
-func (b *tuiRuntimeSubscriptionBridge) findRun(req *Request) (*tuiRuntimeSubscriptionRun, []Part) {
+func (b *tuiRuntimeSubscriptionBridge) findRun(req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, []Part) {
 	run, fresh, _ := b.match(req)
 	return run, fresh
 }
@@ -2479,7 +2479,7 @@ const (
 // byRemap) or why none was found. The results are named by Claude Code's
 // ids for the calls, as the run waits on them, when the client named them
 // by its own (remap).
-func (b *tuiRuntimeSubscriptionBridge) match(req *Request) (*tuiRuntimeSubscriptionRun, []Part, string) {
+func (b *tuiRuntimeSubscriptionBridge) match(req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, []Part, string) {
 	i := len(req.Messages)
 	for i > 0 && req.Messages[i-1].Role != "assistant" {
 		i--
@@ -3232,8 +3232,8 @@ func (r *tuiRuntimeSubscriptionRun) declaredLocked(offered string) string {
 // the account/provider/Via branches that chose a configDir are gone because
 // the plugin's runtime is bound to the host's native Claude login.
 func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Request, name, model, owner, outerSession string, body []byte,
-	start func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error)) (int, string) {
-	req, err := parseAnthropic(body)
+	start func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error)) (int, string) {
+	req, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		return out.Fail(400, err.Error())
 	}
@@ -3480,8 +3480,8 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 				how == tuiRuntimeByExactID && outerSession != "" && run.outerSession == outerSession &&
 				run.owner == owner && run.model == model &&
 				checkpointExists && saved.Dirty && (saved.Model == "" || saved.Model == model) &&
-				saved.ThreadKey == firstWords(req) && parked && sameSafeguards && len(results) > 0 &&
-				rt.bridge.outerThread(owner, outerSession) == firstWords(req) {
+				saved.ThreadKey == firstWords(&req.Request) && parked && sameSafeguards && len(results) > 0 &&
+				rt.bridge.outerThread(owner, outerSession) == firstWords(&req.Request) {
 				// The current tool result has already passed exact live MCP ID,
 				// owner, model, tools and settings checks above. We cannot safely
 				// inject it into a native Claude turn that was told a different
@@ -3522,7 +3522,7 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 	// text, and its model went on to write its own calls as text.
 	var more []tuiRuntimeBridgeTool
 	if run != nil && !run.offers(req.Tools) {
-		more = bridgeTools(req)
+		more = bridgeTools(&req.Request)
 	}
 	var events <-chan Event
 	if run != nil {

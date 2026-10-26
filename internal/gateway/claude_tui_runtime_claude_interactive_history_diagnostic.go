@@ -40,7 +40,7 @@ func tuiRuntimeHistoryPartShape(m Message) string {
 
 // Bound the suffix summary and emit only structural counts. This explains why
 // an explicit recovery turn was not recognized, without recording its text.
-func tuiRuntimeInteractiveRecoveryDiagnostic(req *Request) string {
+func tuiRuntimeInteractiveRecoveryDiagnostic(req *tuiRuntimeRequest) string {
 	var rows []string
 	for i := max(0, len(req.Messages)-6); i < len(req.Messages); i++ {
 		m := req.Messages[i]
@@ -72,7 +72,7 @@ func tuiRuntimeInteractiveRecoveryDiagnostic(req *Request) string {
 // Diagnostic only: a transport_502 match describes a known text format,
 // never authenticated provenance or permission to discard/replay a turn.
 // Reuse the admission classifiers; do not broaden their acceptance rules.
-func tuiRuntimeInteractiveRecoveryAdmissionDiagnostic(req *Request) string {
+func tuiRuntimeInteractiveRecoveryAdmissionDiagnostic(req *tuiRuntimeRequest) string {
 	clean, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return "optin_block=invalid_system_shape"
@@ -133,7 +133,7 @@ func tuiRuntimeInteractiveRecoveryAdmissionDiagnostic(req *Request) string {
 // whole historical transcript: the actual verifier has already done that,
 // and a second pass on a 500k context can allocate tens of MiB during a
 // 502 retry storm on a 1 GiB VPS. Diagnostic work never authorizes a run.
-func tuiRuntimeInteractiveRestoreRejectionDiagnostic(saved tuiRuntimeInteractiveSessionEntry, req *Request) string {
+func tuiRuntimeInteractiveRestoreRejectionDiagnostic(saved tuiRuntimeInteractiveSessionEntry, req *tuiRuntimeRequest) string {
 	if req == nil {
 		return "history=missing"
 	}

@@ -37,8 +37,8 @@ var tuiRuntimeBootstrapImagePart = Part{Kind: Image, MediaType: "image/png", Dat
 // history that includes old tool traffic, then a current user request that
 // carries text plus an inline image. The old code rejected it in
 // validateTextUser with the exact 502 the user screenshotted.
-func tuiRuntimeBootstrapImageRequest() *Request {
-	return &Request{
+func tuiRuntimeBootstrapImageRequest() *tuiRuntimeRequest {
+	return &tuiRuntimeRequest{Request: Request{
 		Model: "claude-opus-5-5", System: "CURRENT_SYSTEM", Tools: []Tool{{Name: "current_tool"}},
 		Messages: []Message{
 			{Role: "user", Parts: []Part{{Kind: Text, Text: "OLD_USER_TEXT"}}},
@@ -53,7 +53,7 @@ func tuiRuntimeBootstrapImageRequest() *Request {
 				tuiRuntimeBootstrapImagePart,
 			}},
 		},
-	}
+	}}
 }
 
 // RED->GREEN renderer contract: the bootstrap prompt names the private image
@@ -345,7 +345,7 @@ printf '{"type":"result","session_id":"%s","stop_reason":"end_turn"}\n' "$sid"
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
 	owner, outer, model := "owner", "desktop-side-image", "claude-opus-5-5"
-	mainReq := &Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "main thread"}}}}}
+	mainReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "main thread"}}}}}}
 	main, mainEvents, err := b.startInteractiveRequest(context.Background(), mainReq, model, "", owner, outer)
 	if err != nil {
 		t.Fatal(err)
@@ -442,21 +442,21 @@ printf '%s\n' '{"type":"result","session_id":"inner-ro-img","stop_reason":"end_t
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original request"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}, {Kind: ToolCall, ID: "failed-call", Name: "write_file"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-ro-img", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-ro-img", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
 	// Merged opt-in row: stale tool_result + current image + sentinel.
-	req := &Request{Model: model, Messages: []Message{
+	req := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{
 		base[0], base[1],
 		{Role: "user", Parts: []Part{
 			{Kind: ToolResult, CallID: "failed-call", Text: "write completed"},
 			tuiRuntimeBootstrapImagePart,
 			{Kind: Text, Text: "/magpie-recover"},
 		}},
-	}}
+	}}}
 	if tuiRuntimeInteractiveReadOnlyOptInIndex(req) < 0 {
 		t.Fatal("merged opt-in row with an image was not recognized as a recovery turn")
 	}
@@ -537,14 +537,14 @@ printf '%s\n' '{"type":"result","session_id":"inner-ro-img","stop_reason":"end_t
 // The bootstrap text prefix/layout is unchanged: same import header, same
 // external-instructions block, same budget trim marker.
 func TestClaudeTUIRuntimeInteractiveHistoricalBootstrapImageKeepsPrefixAndBudget(t *testing.T) {
-	textOnly := &Request{
+	textOnly := &tuiRuntimeRequest{Request: Request{
 		Model: "claude-opus-5-5", System: "SYS",
 		Messages: []Message{
 			{Role: "user", Parts: []Part{{Kind: Text, Text: "OLD"}}},
 			{Role: "assistant", Parts: []Part{{Kind: Text, Text: "ANSWER"}}},
 			{Role: "user", Parts: []Part{{Kind: Text, Text: "NEW"}}},
 		},
-	}
+	}}
 	before, err := tuiRuntimeRenderInteractiveHistoricalBootstrap(textOnly)
 	if err != nil {
 		t.Fatal(err)

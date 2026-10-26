@@ -18,7 +18,7 @@ type tuiRuntimeInteractiveContextDiagnosticSnapshot struct {
 	equivalentKey                                     string
 }
 
-func tuiRuntimeInteractiveContextDiagnosticFromRequest(req *Request) tuiRuntimeInteractiveContextDiagnosticSnapshot {
+func tuiRuntimeInteractiveContextDiagnosticFromRequest(req *tuiRuntimeRequest) tuiRuntimeInteractiveContextDiagnosticSnapshot {
 	if req == nil {
 		return tuiRuntimeInteractiveContextDiagnosticSnapshot{}
 	}
@@ -42,7 +42,7 @@ func tuiRuntimeInteractiveContextDiagnosticFromRequest(req *Request) tuiRuntimeI
 	}
 }
 
-func (r *tuiRuntimeSubscriptionRun) interactiveContextMismatchDiagnostic(req *Request) string {
+func (r *tuiRuntimeSubscriptionRun) interactiveContextMismatchDiagnostic(req *tuiRuntimeRequest) string {
 	if r == nil || req == nil {
 		return "snapshot=unavailable"
 	}

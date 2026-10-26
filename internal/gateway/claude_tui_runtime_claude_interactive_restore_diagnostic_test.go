@@ -26,7 +26,7 @@ func TestClaudeTUIRuntimeInteractiveRestoreRejectionDiagnosticIsActionablePrivat
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &Request{Messages: tc.msgs}
+			req := &tuiRuntimeRequest{Request: Request{Messages: tc.msgs}}
 			got := tuiRuntimeInteractiveRestoreRejectionDiagnostic(saved, req)
 			if !strings.Contains(got, tc.want) {
 				t.Fatalf("missing reason %q: %s", tc.want, got)
@@ -48,7 +48,7 @@ func tuiRuntimeBenchmarkInteractiveRestoreRejectionDiagnosticLargeHistory(b *tes
 	last := Message{Role: "assistant", Parts: []Part{{Kind: Text, Text: "committed"}}}
 	old := []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: strings.Repeat("multi turn archive 中文 ABCDEF\n", 65000)}}}, last}
 	saved := tuiRuntimeInteractiveSessionEntry{ConvKey: tuiRuntimeConversationKeys(owner, old)[0], ReplyKey: tuiRuntimeAssistantReplyKey(last)}
-	req := &Request{Messages: append(append([]Message{}, old...), Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old-tool", Text: "already executed"}}})}
+	req := &tuiRuntimeRequest{Request: Request{Messages: append(append([]Message{}, old...), Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old-tool", Text: "already executed"}}})}}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

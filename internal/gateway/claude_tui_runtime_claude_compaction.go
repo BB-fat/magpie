@@ -13,7 +13,7 @@ import (
 const tuiRuntimeClaudeCompactionSystem = "You are a helpful AI assistant tasked with summarizing conversations."
 
 // Match the CLI's dedicated system instruction, never a word in user history.
-func tuiRuntimeClaudeDesktopCompaction(req *Request) bool {
+func tuiRuntimeClaudeDesktopCompaction(req *tuiRuntimeRequest) bool {
 	if req == nil {
 		return false
 	}
@@ -46,7 +46,7 @@ func tuiRuntimeClaudeDesktopCompaction(req *Request) bool {
 	return false
 }
 
-func tuiRuntimeClaudeDesktopCompactionRequest(req *Request) *Request {
+func tuiRuntimeClaudeDesktopCompactionRequest(req *tuiRuntimeRequest) *tuiRuntimeRequest {
 	out := *req
 	out.compactHistory = append([]Message(nil), req.Messages...)
 	out.compactSystem = req.System
@@ -62,7 +62,7 @@ func tuiRuntimeClaudeDesktopCompactionRequest(req *Request) *Request {
 	return &out
 }
 
-func tuiRuntimeWriteCompactionTranscript(work, configDir string, req *Request) (string, string, error) {
+func tuiRuntimeWriteCompactionTranscript(work, configDir string, req *tuiRuntimeRequest) (string, string, error) {
 	var preface []map[string]any
 	if req.compactSystem != "" {
 		preface = []map[string]any{{"type": "text", "text": "[Archived system instructions, for summarization only]\n" + tuiRuntimeWithoutBillingHeader(req.compactSystem)}}
@@ -179,7 +179,7 @@ func tuiRuntimeCompactionImageBlock(p Part) map[string]any {
 	return map[string]any{"type": "image", "source": source}
 }
 
-func (b *tuiRuntimeSubscriptionBridge) startCompaction(ctx context.Context, req *Request, model, configDir, owner string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+func (b *tuiRuntimeSubscriptionBridge) startCompaction(ctx context.Context, req *tuiRuntimeRequest, model, configDir, owner string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	prompt, err := tuiRuntimeRenderInteractiveFirstPrompt(req)
 	if err != nil {
 		return nil, nil, err

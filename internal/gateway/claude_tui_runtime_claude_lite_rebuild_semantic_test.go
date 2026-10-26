@@ -16,7 +16,7 @@ type tuiRuntimeLiteTranscriptMessage struct {
 	Content []aBlock `json:"content"`
 }
 
-func tuiRuntimeLiteSeedTranscript(t *testing.T, req *Request) ([]tuiRuntimeLiteTranscriptMessage, string) {
+func tuiRuntimeLiteSeedTranscript(t *testing.T, req *tuiRuntimeRequest) ([]tuiRuntimeLiteTranscriptMessage, string) {
 	t.Helper()
 	seeded, prompt, _, err := tuiRuntimeLiteSeed(req)
 	if err != nil {
@@ -56,13 +56,13 @@ func TestClaudeTUIRuntimeLiteRebuildJSONLKeepsSplitRoleRuns(t *testing.T) {
 			name = "historical tool round"
 		}
 		t.Run(name, func(t *testing.T) {
-			req := &Request{Model: "claude-opus-5-5", Messages: []Message{
+			req := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Messages: []Message{
 				{Role: "user", Parts: []Part{{Kind: Text, Text: "go"}}},
 				{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "a", Name: "spawn.agent", Args: json.RawMessage(`{"path":"a"}`)}}},
 				{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "b", Name: "echo"}}},
 				{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "a", Text: "RESULT_A"}}},
 				{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "b", Text: "RESULT_B", IsError: true, Images: []Part{{Kind: Image, MediaType: "image/png", Data: "QUFB"}}}, {Kind: Text, Text: "USER_NEXT"}}},
-			}}
+			}}}
 			if err := tuiRuntimeLiteVisibleToolHandoff(req); err != nil {
 				t.Fatalf("valid split role-run was rejected: %v", err)
 			}
@@ -123,11 +123,11 @@ func TestClaudeTUIRuntimeLiteRebuildJSONLKeepsOrphanOutput(t *testing.T) {
 			name = "error"
 		}
 		t.Run(name, func(t *testing.T) {
-			req := &Request{Model: "claude-opus-5-5", Messages: []Message{
+			req := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Messages: []Message{
 				{Role: "user", Parts: []Part{{Kind: Text, Text: "compacted context"}}},
 				{Role: "assistant", Parts: []Part{{Kind: Text, Text: "summary"}}},
 				{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "earlier-call", Text: "IMPORTANT_OUTPUT", IsError: failed, Images: []Part{{Kind: Image, MediaType: "image/png", Data: "QUFB"}, {Kind: Image, URL: "https://example.invalid/image"}}}, {Kind: Text, Text: "USER_NEXT"}}},
-			}}
+			}}}
 			if err := tuiRuntimeLiteVisibleToolHandoff(req); err != nil {
 				t.Fatal(err)
 			}

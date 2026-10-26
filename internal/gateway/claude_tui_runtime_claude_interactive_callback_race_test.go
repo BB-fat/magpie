@@ -12,11 +12,11 @@ import (
 func TestClaudeTUIRuntimeInteractiveShownToolResultPrecedesSlowCallback(t *testing.T) {
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
-	req := &Request{Model: "claude-opus-5-5", Messages: []Message{
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Messages: []Message{
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "call echo"}}},
 		{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "shown-call", Name: "echo", Args: json.RawMessage(`{"value":"HELLO"}`)}}},
 		{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "shown-call", Text: "HELLO"}}},
-	}}
+	}}}
 	run := &tuiRuntimeSubscriptionRun{bridge: b, token: "slow-callback", interactive: true, owner: "owner", model: req.Model,
 		pending: map[string]chan tuiRuntimeMcpToolResult{}, tools: map[string]bool{"echo": true},
 		shown: []tuiRuntimeShownCall{{id: "shown-call", name: "echo", args: `{"value":"HELLO"}`}}, parkedAt: time.Now()}
@@ -65,7 +65,7 @@ func TestClaudeTUIRuntimeInteractiveShownMatchRejectsUnownedAndStaleResults(t *t
 			defer tuiRuntimeBridges.Delete(b)
 			run := &tuiRuntimeSubscriptionRun{interactive: true, model: "model", told: "heard", parkedAt: time.Now(), shown: []tuiRuntimeShownCall{{id: "one"}, {id: "two"}}}
 			b.runs["test"] = run
-			req := &Request{Model: "model"}
+			req := &tuiRuntimeRequest{Request: Request{Model: "model"}}
 			results := []Part{{Kind: ToolResult, CallID: "one"}, {Kind: ToolResult, CallID: "two"}}
 			before := map[string]bool{"heard": true}
 			switch name {
@@ -102,11 +102,11 @@ func TestClaudeTUIRuntimeInteractiveShownMatchRejectsUnownedAndStaleResults(t *t
 func TestClaudeTUIRuntimeInteractiveMatchedContinuationRequiresAllNativeShownCalls(t *testing.T) {
 	for _, kind := range []string{"partial", "forged sibling", "complete remapped"} {
 		t.Run(kind, func(t *testing.T) {
-			req := &Request{Messages: []Message{
+			req := &tuiRuntimeRequest{Request: Request{Messages: []Message{
 				{Role: "user", Parts: []Part{{Kind: Text, Text: "call echo"}}},
 				{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "client-one", Name: "echo"}}},
 				{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "client-one", Text: "FIRST"}}},
-			}}
+			}}}
 			run := &tuiRuntimeSubscriptionRun{shown: []tuiRuntimeShownCall{{id: "native-one"}, {id: "native-two"}}}
 			results := []Part{{Kind: ToolResult, CallID: "native-one", Text: "FIRST"}}
 			if kind != "partial" {

@@ -33,7 +33,7 @@ printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":tr
 			body := fmt.Sprintf(`{"model":"claude-opus-5-5","max_tokens":256,"stream":%t,"system":"%s","messages":[{"role":"user","content":"Synthetic archived message"}]}`, stream, tuiRuntimeCompactSystemTest)
 			rt := tuiRuntimeNewRuntime([]byte("synthetic-only"))
 			defer tuiRuntimeBridges.Delete(rt.bridge)
-			start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+			start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 				return rt.bridge.startInteractiveRequest(ctx, req, req.Model, "", "test-owner", "")
 			}
 			w := httptest.NewRecorder()

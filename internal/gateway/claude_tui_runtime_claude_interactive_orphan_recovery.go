@@ -31,7 +31,7 @@ func tuiRuntimeAutoOrphanRecoveryEnabled() bool {
 // an orphan tool handoff over a rewritten (compacted) dirty checkpoint. It
 // returns true only when the request now carries a recognised sentinel as its
 // last user turn; callers re-derive the index after sanitising.
-func (b *tuiRuntimeSubscriptionBridge) beginOrphanReadOnlyRecovery(owner, outerSession, model string, req *Request) bool {
+func (b *tuiRuntimeSubscriptionBridge) beginOrphanReadOnlyRecovery(owner, outerSession, model string, req *tuiRuntimeRequest) bool {
 	// Reasons are fixed enums only: never log identities, keys, history,
 	// model names, tool parameters or raw storage errors.
 	reject := func(reason string) bool {

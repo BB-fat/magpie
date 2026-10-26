@@ -52,8 +52,8 @@ func (a tuiRuntimeAnthropicResponder) Fail(status int, msg string) (int, string)
 	return writeError(a.w, protoAnthropic, status, msg), msg
 }
 
-func (a tuiRuntimeAnthropicResponder) Relay(req *Request, events <-chan Event, abort func(), ended func(said, stop string, ok bool)) (int, string) {
-	return relay(a.w, a.r, protoAnthropic, "Claude Code", req, events, a.usage, abort, nil, ended)
+func (a tuiRuntimeAnthropicResponder) Relay(req *tuiRuntimeRequest, events <-chan Event, abort func(), ended func(said, stop string, ok bool)) (int, string) {
+	return relay(a.w, a.r, protoAnthropic, "Claude Code", &req.Request, events, a.usage, abort, nil, ended)
 }
 
 func (rt *tuiRuntime) serveMessages(w http.ResponseWriter, r *http.Request, model, outerSession string, body []byte, usage *Usage) (int, string) {
@@ -63,7 +63,7 @@ func (rt *tuiRuntime) serveMessages(w http.ResponseWriter, r *http.Request, mode
 // serveMessagesUpstream is the handler as upstream wrote it, before
 // serveLite's request-is-the-truth policy.
 func (rt *tuiRuntime) serveMessagesUpstream(w http.ResponseWriter, r *http.Request, model, outerSession string, body []byte, usage *Usage) (int, string) {
-	start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		return rt.bridge.startInteractiveRequest(ctx, req, model, "", tuiRuntimeTestOwner, outerSession)
 	}
 	return rt.serveMessagesInner(tuiRuntimeAnthropicResponder{w, r, usage}, r, "Claude Code", model, tuiRuntimeTestOwner, outerSession, body, start)

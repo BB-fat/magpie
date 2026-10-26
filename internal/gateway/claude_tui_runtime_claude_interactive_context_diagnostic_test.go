@@ -7,14 +7,14 @@ import (
 )
 
 func TestClaudeTUIRuntimeInteractiveContextMismatchDiagnosticClassifiesWithoutLeaking(t *testing.T) {
-	base := &Request{System: "SECRET_BASE_PROMPT", Model: "claude-opus-5-5", Effort: "high",
+	base := &tuiRuntimeRequest{Request: Request{System: "SECRET_BASE_PROMPT", Model: "claude-opus-5-5", Effort: "high",
 		ToolChoice: "auto", Tools: []Tool{
 			{Name: "private-a", Description: "SECRET_DESCRIPTION_A", Schema: json.RawMessage(`{"type":"object"}`)},
 			{Name: "private-b", Description: "SECRET_DESCRIPTION_B", Schema: json.RawMessage(`{"type":"string"}`)},
-		}}
+		}}}
 	old := tuiRuntimeInteractiveContextDiagnosticFromRequest(base)
 	run := &tuiRuntimeSubscriptionRun{interactiveContextSnapshot: &old}
-	check := func(req *Request, want ...string) {
+	check := func(req *tuiRuntimeRequest, want ...string) {
 		t.Helper()
 		got := run.interactiveContextMismatchDiagnostic(req)
 		for _, s := range want {

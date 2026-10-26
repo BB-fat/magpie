@@ -64,7 +64,7 @@ func tuiRuntimeOlServe(t *testing.T, rt *tuiRuntime, b *tuiRuntimeSubscriptionBr
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body)))
-	code, msg := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{rec, req, &Usage{}}, req, "Claude Code", tuiRuntimeOlModel, owner, outer, body, func(c context.Context, r *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	code, msg := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{rec, req, &Usage{}}, req, "Claude Code", tuiRuntimeOlModel, owner, outer, body, func(c context.Context, r *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		return b.startInteractiveRequest(c, r, tuiRuntimeOlModel, "", owner, outer)
 	})
 	return code, msg, rec.Body.String()
@@ -76,10 +76,10 @@ func tuiRuntimeOlSave(t *testing.T, b *tuiRuntimeSubscriptionBridge, owner, oute
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "先读一下配置"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "配置已读"}}},
 	}
-	baseReq := &Request{Model: tuiRuntimeOlModel, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: tuiRuntimeOlModel, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: session, Model: tuiRuntimeOlModel, ThreadKey: firstWords(baseReq),
+		SessionID: session, Model: tuiRuntimeOlModel, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]),
 		ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: dirty,
 	})
@@ -289,7 +289,7 @@ func TestClaudeTUIRuntimeOuterLiveInFlightThenRetryAfterFinish(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-5-5","max_tokens":64,"tools":[{"name":"write_file","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"把结果写进 notes.txt"}]}`)
 
 	var starts atomic.Int64
-	start := func(c context.Context, r *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(c context.Context, r *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		run, ev, err := b.startInteractiveRequest(c, r, tuiRuntimeOlModel, "", owner, outer)
 		if err == nil && run != nil {
 			starts.Add(1)
@@ -403,7 +403,7 @@ func TestClaudeTUIRuntimeOuterLiveHelperNotBlocked(t *testing.T) {
 	helper := []byte(`{"model":"claude-haiku-4-5","max_tokens":64,"messages":[{"role":"user","content":"快速查个小事"}]}`)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(helper)))
-	code, msg := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{rec, req, &Usage{}}, req, "Claude Code", "claude-haiku-4-5", owner, outer, helper, func(c context.Context, r *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	code, msg := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{rec, req, &Usage{}}, req, "Claude Code", "claude-haiku-4-5", owner, outer, helper, func(c context.Context, r *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		return b.startInteractiveRequest(c, r, "claude-haiku-4-5", "", owner, outer)
 	})
 	if code != 200 {
@@ -576,7 +576,7 @@ func TestClaudeTUIRuntimeOuterLiveCoversRecoveryAndOrdinaryStarts(t *testing.T) 
 	owner2, outer2 := "owner-ol8b", "outer-ol8b"
 	tuiRuntimeOlSave(t, b2, owner2, outer2, "inner-ol8b", true)
 	var starts atomic.Int64
-	start2 := func(c context.Context, r *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start2 := func(c context.Context, r *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		run, ev, err := b2.startInteractiveRequest(c, r, tuiRuntimeOlModel, "", owner2, outer2)
 		if err == nil && run != nil {
 			starts.Add(1)

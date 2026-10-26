@@ -16,7 +16,7 @@ func TestClaudeTUIRuntimeCompactionHistoricalToolResultStartsReadOnly(t *testing
 	body := `{"model":"claude-opus-5-5","max_tokens":100,"system":"` + tuiRuntimeCompactSystemTest + `","tools":[{"name":"Bash","input_schema":{"type":"object"}}],"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"old","name":"Bash","input":{"command":"NEVER_EXECUTE"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"old","content":"KEEP_RESULT"},{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}]}`
 	rt := tuiRuntimeNewRuntime([]byte("test"))
 	called := false
-	start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		called = true
 		if len(req.Tools) != 0 || tuiRuntimeInteractiveToolContinuation(req) || req.WebSearch {
 			t.Fatal("compaction exposed executable history")
@@ -37,7 +37,7 @@ func TestClaudeTUIRuntimeOrdinarySummaryDoesNotBypassOrphanGuard(t *testing.T) {
 	body := `{"model":"claude-opus-5-5","max_tokens":100,"system":"Summarize the results","messages":[{"role":"assistant","content":[{"type":"tool_use","id":"old","name":"Bash","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"old","content":"result"},{"type":"text","text":"compact this"}]}]}`
 	rt := tuiRuntimeNewRuntime([]byte("test"))
 	called := false
-	start := func(context.Context, *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(context.Context, *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		called = true
 		return nil, nil, errors.New("unexpected")
 	}
@@ -50,7 +50,7 @@ func TestClaudeTUIRuntimeOrdinarySummaryDoesNotBypassOrphanGuard(t *testing.T) {
 }
 
 func TestClaudeTUIRuntimeCompactionReactiveCLIPrompt(t *testing.T) {
-	req := &Request{System: "x-anthropic-billing-header: cc_version=2.1.295; cch=test;You are Claude Code.", Tools: []Tool{{Name: "Bash"}}, Messages: []Message{{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old", Text: "result"}, {Kind: Text, Text: "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\nThis conversation is being compacted. Your reply replaces everything above: the next context window opens with what you write inside <summary></summary> tags, and you carry on from there.\nREMINDER: Do NOT call any tools. Respond with plain text only — return a summary. Tool calls will be rejected and you will fail the task."}}}}}
+	req := &tuiRuntimeRequest{Request: Request{System: "x-anthropic-billing-header: cc_version=2.1.295; cch=test;You are Claude Code.", Tools: []Tool{{Name: "Bash"}}, Messages: []Message{{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old", Text: "result"}, {Kind: Text, Text: "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\nThis conversation is being compacted. Your reply replaces everything above: the next context window opens with what you write inside <summary></summary> tags, and you carry on from there.\nREMINDER: Do NOT call any tools. Respond with plain text only — return a summary. Tool calls will be rejected and you will fail the task."}}}}}}
 	if !tuiRuntimeClaudeDesktopCompaction(req) {
 		t.Fatal("real reactive CLI compaction not recognized")
 	}
@@ -66,7 +66,7 @@ func TestClaudeTUIRuntimeCompactionReactiveCLIPrompt(t *testing.T) {
 
 func TestClaudeTUIRuntimeCompactionNativeTranscriptPreservesStructuredContent(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	req := &Request{System: tuiRuntimeCompactSystemTest, Model: "claude-opus-5-5", Messages: []Message{{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "old-call", Name: "Bash", Args: json.RawMessage(`{"command":"NEVER_EXECUTE"}`)}}}, {Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old-call", Text: "KEEP_RESULT"}, {Kind: Image, MediaType: "image/png", Data: "BINARY_NOT_TEXT"}, {Kind: Text, Text: "CURRENT_SUMMARY_DIRECTIVE"}}}}}
+	req := &tuiRuntimeRequest{Request: Request{System: tuiRuntimeCompactSystemTest, Model: "claude-opus-5-5", Messages: []Message{{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "old-call", Name: "Bash", Args: json.RawMessage(`{"command":"NEVER_EXECUTE"}`)}}}, {Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old-call", Text: "KEEP_RESULT"}, {Kind: Image, MediaType: "image/png", Data: "BINARY_NOT_TEXT"}, {Kind: Text, Text: "CURRENT_SUMMARY_DIRECTIVE"}}}}}}
 	side := tuiRuntimeClaudeDesktopCompactionRequest(req)
 	id, path, err := tuiRuntimeWriteCompactionTranscript(t.TempDir(), "", side)
 	if err != nil {

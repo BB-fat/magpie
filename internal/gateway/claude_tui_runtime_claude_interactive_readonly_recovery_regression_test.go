@@ -41,10 +41,10 @@ printf '%s\n' '{"type":"result","session_id":"inner-d1","stop_reason":"end_turn"
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original request"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-d1", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-d1", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
 	body := tuiRuntimeMergedOrphanBody()
@@ -52,7 +52,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-d1","stop_reason":"end_turn"
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body)))
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
-	start := func(c context.Context, r *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(c context.Context, r *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		return b.startInteractiveRequest(c, r, model, "", owner, outer)
 	}
 	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
@@ -87,13 +87,13 @@ sleep 1
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original request"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-d2", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-d2", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
-	req, err := parseAnthropic(tuiRuntimeMergedOrphanBody())
+	req, err := tuiRuntimeParseRequest(tuiRuntimeMergedOrphanBody())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,10 +163,10 @@ printf '%s\n' '{"type":"result","session_id":"inner-d3","stop_reason":"end_turn"
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original request"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-d3", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-d3", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
 	body := []byte(`{"model":"claude-opus-5-5","tools":[{"type":"web_search_20250305"}],"messages":[` +
@@ -178,7 +178,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-d3","stop_reason":"end_turn"
 	w := httptest.NewRecorder()
 	var started *tuiRuntimeSubscriptionRun
 	var startedEvents <-chan Event
-	start := func(c context.Context, r *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(c context.Context, r *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		run, ev, err := b.startInteractiveRequest(c, r, model, "", owner, outer)
 		if err == nil {
 			started = run
@@ -207,7 +207,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-d3","stop_reason":"end_turn"
 // treats the whole trailing user run — including older recovery text — as
 // the current request instead of only the sentinel.
 func TestClaudeTUIRuntimeD4PureTextOptInFallbackLosesSentinelOnly(t *testing.T) {
-	req, err := parseAnthropic([]byte(`{"model":"m","messages":[` +
+	req, err := tuiRuntimeParseRequest([]byte(`{"model":"m","messages":[` +
 		`{"role":"user","content":"original request"},` +
 		`{"role":"assistant","content":"answer"},` +
 		`{"role":"user","content":"继续之前没做完的操作：把文件写进去"},` +
@@ -260,15 +260,15 @@ printf '%s\n' '{"type":"result","session_id":"inner-d1c","stop_reason":"end_turn
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original request"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-d1c", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-d1c", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
 	body := tuiRuntimeMergedOrphanBody()
 	w := httptest.NewRecorder()
-	start := func(c context.Context, r *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(c context.Context, r *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		return b.startInteractiveRequest(c, r, model, "", owner, outer)
 	}
 	code, _ := rt.serveMessagesInner(tuiRuntimeAnthropicResponder{w, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))), &Usage{}}, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))), "Claude Code", model, owner, outer, body, start)

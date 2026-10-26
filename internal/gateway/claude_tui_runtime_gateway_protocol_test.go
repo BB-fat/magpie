@@ -8,11 +8,11 @@ import (
 
 func TestClaudeTUIRuntimeGatewayProtocolPreservesSealedThinking(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"assistant","content":[{"type":"redacted_thinking","data":"opaque-signed-history"},{"type":"text","text":"previous answer"}]},{"role":"user","content":"continue"}]}`)
-	request, err := parseAnthropic(body)
+	request, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded := buildAnthropic(request, request.Model)
+	encoded := buildAnthropic(&request.Request, request.Model)
 	if !bytes.Contains(encoded, []byte(`"redacted_thinking"`)) || !bytes.Contains(encoded, []byte(`"opaque-signed-history"`)) {
 		t.Fatalf("sealed thinking disappeared from the request: %s", encoded)
 	}
@@ -20,7 +20,7 @@ func TestClaudeTUIRuntimeGatewayProtocolPreservesSealedThinking(t *testing.T) {
 
 func TestClaudeTUIRuntimeGatewayProtocolPreservesDeferredTools(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-5","max_tokens":64,"tools":[{"name":"read_file","description":"Read a file","defer_loading":true,"input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],"messages":[{"role":"user","content":"read the file"}]}`)
-	request, err := parseAnthropic(body)
+	request, err := tuiRuntimeParseRequest(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestClaudeTUIRuntimeGatewayProtocolPreservesDeferredTools(t *testing.T) {
 }
 
 func TestClaudeTUIRuntimeGatewayProtocolPreservesSealedTranscript(t *testing.T) {
-	request, err := parseAnthropic([]byte(`{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"assistant","content":[{"type":"redacted_thinking","data":"opaque-signed-history"},{"type":"text","text":"previous answer"}]},{"role":"user","content":"continue"}]}`))
+	request, err := tuiRuntimeParseRequest([]byte(`{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"assistant","content":[{"type":"redacted_thinking","data":"opaque-signed-history"},{"type":"text","text":"previous answer"}]},{"role":"user","content":"continue"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}

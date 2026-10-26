@@ -30,7 +30,7 @@ func tuiRuntimeMergedOrphanBody() []byte {
 }
 
 func TestClaudeTUIRuntimeInteractiveOptInRecoveryIndexRecognizesMergedSentinel(t *testing.T) {
-	req, err := parseAnthropic(tuiRuntimeMergedOrphanBody())
+	req, err := tuiRuntimeParseRequest(tuiRuntimeMergedOrphanBody())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestClaudeTUIRuntimeInteractiveOptInRecoveryIndexRejectsWrongPositions(t *t
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			req, err := parseAnthropic([]byte(body))
+			req, err := tuiRuntimeParseRequest([]byte(body))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -80,7 +80,7 @@ func TestClaudeTUIRuntimeInteractiveMergedRetryWithoutSentinelStaysRejected(t *t
 	s := tuiRuntimeNewTestServer()
 	defer tuiRuntimeBridges.Delete(s.subscription)
 	started := 0
-	start := func(context.Context, *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(context.Context, *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		started++
 		return nil, nil, errors.New("must not start")
 	}
@@ -104,15 +104,15 @@ func TestClaudeTUIRuntimeInteractiveReadOnlyStartRechecksDirtyAndModel(t *testin
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original request"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 
 	// Not dirty: the opt-in request must not reach the recovery branch.
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil),
 	})
-	req, _ := parseAnthropic(tuiRuntimeMergedOrphanBody())
+	req, _ := tuiRuntimeParseRequest(tuiRuntimeMergedOrphanBody())
 	if _, _, err := b.startInteractiveRequest(context.Background(), req, model, "", owner, outer); err == nil ||
 		!strings.Contains(err.Error(), "refusing full history replay") && !strings.Contains(err.Error(), "checkpoint") {
 		t.Fatalf("non-dirty checkpoint took the opt-in path: %v", err)
@@ -169,15 +169,15 @@ printf '%s\n' '{"type":"result","session_id":"inner-ro","stop_reason":"end_turn"
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original request"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	baseReq := &Request{Model: model, Tools: []Tool{{Name: "write_file"}}, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Tools: []Tool{{Name: "write_file"}}, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-ro", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-ro", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
 
 	// Request carries client tools + a tool result + opt-in sentinel.
-	req, err := parseAnthropic([]byte(`{"model":"claude-opus-5-5","tools":[{"name":"write_file","description":"w","input_schema":{"type":"object"}}],"messages":[` +
+	req, err := tuiRuntimeParseRequest([]byte(`{"model":"claude-opus-5-5","tools":[{"name":"write_file","description":"w","input_schema":{"type":"object"}}],"messages":[` +
 		`{"role":"user","content":"original request"},` +
 		`{"role":"assistant","content":[{"type":"tool_use","id":"failed-call","name":"write_file","input":{"path":"p"}}]},` +
 		`{"role":"user","content":[` +
@@ -264,7 +264,7 @@ sleep 5
 		t.Fatal(err)
 	}
 	tuiRuntimeSetWrapper(t, wrapper2)
-	req2, err := parseAnthropic([]byte(`{"model":"claude-opus-5-5","messages":[` +
+	req2, err := tuiRuntimeParseRequest([]byte(`{"model":"claude-opus-5-5","messages":[` +
 		`{"role":"user","content":"original request"},` +
 		`{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"write_file","input":{}}]},` +
 		`{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":"x"},{"type":"text","text":"/magpie-recover"}]}]}`))
@@ -322,10 +322,10 @@ sleep 3
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original request"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-cc", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-cc", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
 	body := tuiRuntimeMergedOrphanBody()
@@ -337,7 +337,7 @@ sleep 3
 		go func() {
 			defer wg.Done()
 			w := httptest.NewRecorder()
-			start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+			start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 				atomic.AddInt32(&started, 1)
 				return b.startInteractiveRequest(ctx, req, model, "", owner, outer)
 			}
@@ -376,13 +376,13 @@ printf '%s\n' '{"type":"result","session_id":"inner-sig","stop_reason":"end_turn
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original request"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-sig", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-sig", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
-	req, err := parseAnthropic(tuiRuntimeMergedOrphanBody())
+	req, err := tuiRuntimeParseRequest(tuiRuntimeMergedOrphanBody())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,14 +442,14 @@ printf '%s\n' '{"type":"result","session_id":"inner-green","stop_reason":"end_tu
 		{Role: "user", Parts: []Part{{Kind: Text, Text: "original request"}}},
 		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "answer"}}},
 	}
-	baseReq := &Request{Model: model, Messages: base}
+	baseReq := &tuiRuntimeRequest{Request: Request{Model: model, Messages: base}}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner-green", Model: model, ThreadKey: firstWords(baseReq),
+		SessionID: "inner-green", Model: model, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
 	})
 	var started int
-	start := func(ctx context.Context, req *Request) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 		started++
 		return b.startInteractiveRequest(ctx, req, model, "", owner, outer)
 	}

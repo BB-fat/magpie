@@ -281,7 +281,7 @@ func (j *tuiRuntimeInteractiveToolJournal) verifyResults(run *tuiRuntimeSubscrip
 // the assistant tool_use away is fail-closed on this cross-process path.
 // The claim is committed before a recovery process may start, so retrying
 // the same orphaned tool_result never starts another turn.
-func (j *tuiRuntimeInteractiveToolJournal) claimOrphanRecovery(owner, outer string, req *Request) error {
+func (j *tuiRuntimeInteractiveToolJournal) claimOrphanRecovery(owner, outer string, req *tuiRuntimeRequest) error {
 	if j == nil || owner == "" || outer == "" || req == nil {
 		return errors.New("durable recovery unavailable")
 	}

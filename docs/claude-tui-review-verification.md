@@ -1,5 +1,35 @@
 # Claude TUI: gateway reuse and review verification
 
+## Request-state isolation follow-up (2026-10-26)
+
+The six TUI-only request fields now belong to `tuiRuntimeRequest`, which
+embeds the shared `Request` by value. The public gateway IR file is restored
+byte-for-byte to the PR base. TUI transformations still copy both protocol
+values and runtime state before changing either; JSON encoding remains the
+shared request's encoding, without the private state. The new boundary
+regression failed before the change, naming all six fields on the shared
+request. Copy independence and encoding have separate regressions.
+
+TUI's 2,393-byte script allowance now lives in its own test file rather
+than rewriting upstream budget constants and their historical comments.
+Effective app/core script limits are unchanged. No UI asset, wrapper source,
+dependency, sync workflow, or upstream branch is changed by this follow-up.
+
+| Follow-up check | Result |
+| --- | --- |
+| Shared-request boundary, value-copy and encoding regressions, plus the GUI script budget | Passed. The boundary test failed on the previous code, naming all six TUI fields. |
+| Complete TUI gateway tests with `-race -count=1` | Passed: 299 top-level tests, 6 conditional skips, 94.844s. |
+| Boundary, copy, encoding and native compaction tests with `-race -count=20` | Passed: four tests repeated 20 times, 1.125s. |
+| Linux nogui and Windows vet/build | Passed. |
+| Full repository `go test -tags nogui -p 2 ./... -count=1 -timeout=25m` | 71 packages passed, including gateway; provider has the previously reproduced `filememo.Forget` synctest panic. Not a full-suite pass. |
+| Public IR versus PR base `40892e79` | No diff; existing fork customizations predating this PR are preserved. |
+
+An object-only merge preview against upstream release `v0.1.1610`
+(`9809a8ac9a489152f521112136f9de5695da4b57`) now conflicts only in
+`internal/update/update.go`, which already conflicted without the TUI PR.
+The TUI-induced `internal/gui/core_budget_test.go` conflict is gone. This
+preview neither updates branches nor establishes a merged build/runtime pass.
+
 ## Gateway reuse (PR #6, 2026-10-26)
 
 The Go runtime and its regression tests now live in `internal/gateway`.
