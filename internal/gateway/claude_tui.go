@@ -242,18 +242,10 @@ func (s *Server) serveClaudeTUI(w http.ResponseWriter, r *http.Request, from pro
 		return fail(http.StatusBadRequest, "client cache marks (X-Magpie-Cache-Marks: client) are not taken by the Claude TUI; send the request without them, or set the account to standard")
 	}
 	user := p.Account.User
-	var dir string
-	var err error
 	ctx := p.Via(r.Context())
-	if p.Account.AgentsOwn() {
-		// never Claude Code's own home: the account's saved sign-in, in
-		// a folder of magpie's
-		dir, err = provider.ClaudeSavedDir(user)
-	} else {
-		dir, _, err = p.Account.Token(ctx)
-	}
+	dir, err := tuiAccountDir(ctx, p)
 	if err != nil {
-		return fail(http.StatusBadGateway, "the account "+user+" has no sign-in of magpie's to run the Claude TUI in ("+err.Error()+"): sign it in through magpie (magpie accounts add claude), or set it to standard")
+		return fail(http.StatusBadGateway, "the account "+user+" can't run on the Claude TUI: "+err.Error()+". Sign it in through magpie (magpie accounts add claude), or set it to standard")
 	}
 	req, err := parse(from, body)
 	if err != nil {
@@ -267,6 +259,17 @@ func (s *Server) serveClaudeTUI(w http.ResponseWriter, r *http.Request, from pro
 	owner := p.ID + "\x00" + user
 	out := &tuiResponder{w: w, r: r, from: from, req: req, usage: usage, owner: owner}
 	return s.tui.Serve(r.WithContext(ctx), out, model, claudetui.Owner(p.ID, user, claudebridge.MCPServerName()), sessionOf(r.Header), dir, anthropic)
+}
+
+// tuiAccountDir is the config folder a TUI run on p's account runs in: its
+// saved sign-in's, a folder of magpie's, never Claude Code's own home.
+// Tests give their own.
+var tuiAccountDir = func(ctx context.Context, p provider.Provider) (string, error) {
+	if p.Account.AgentsOwn() {
+		return "", errors.New("it is the account Claude Code itself is signed in to, in your home, whose sign-in the Claude TUI doesn't share")
+	}
+	dir, _, err := p.Account.Token(ctx)
+	return dir, err
 }
 
 // tuiMessages is req as a Messages request, as the bridge reads one. The

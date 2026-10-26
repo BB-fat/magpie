@@ -89,21 +89,9 @@ type ClaudeLimit struct {
 	ResetsAt int64
 }
 
-var config = &Config{
-	MCPServer:        "magpie",
-	NoteLimits:       func(string, []ClaudeLimit) {},
-	NoteSignInFailed: func(string, string, string) {},
-	MovedOff:         func(string) bool { return false },
-	LoginVersion:     func(string) string { return "" },
-	CallbackBase:     func() string { return "http://127.0.0.1" },
-	AddCallback:      func(string) {},
-	DropCallback:     func(string) {},
-	Room:             func(context.Context, string) (func(bool), error) { return func(bool) {}, nil },
-	Leave:            func() {},
-	Env: func(_ context.Context, env []string, configDir string) ([]string, error) {
-		return inClaudeDir(env, configDir), nil
-	},
-}
+var config *Config
+
+func init() { ResetForTest() }
 
 // Init installs cfg's set fields over the defaults. The gateway calls it
 // once, before it serves.

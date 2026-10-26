@@ -59,7 +59,7 @@ func SetAccountClaudeMode(id, ref, mode string) error {
 			return fmt.Errorf("the Claude TUI runs on Linux only, not %s", ClaudeTUIGOOS)
 		}
 		if claudeOwnOnly(r) {
-			return fmt.Errorf("%s is Claude Code's own sign-in, which the Claude TUI doesn't run: sign it in through magpie (magpie accounts add claude), which gives it a folder of its own, then set it to tui", r)
+			return fmt.Errorf("%s is the account Claude Code itself is signed in to, in your home, which the Claude TUI doesn't run there or copy elsewhere: sign Claude Code in to another account, or add this one through magpie's own sign-in (magpie accounts add claude), then set it to tui", r)
 		}
 	}
 	m := map[string]string{}
@@ -81,26 +81,16 @@ func SetAccountClaudeMode(id, ref, mode string) error {
 	return Save(*p)
 }
 
-// ClaudeSavedDir is the folder of its own magpie runs the saved Claude
-// account user in, its sign-in put there from magpie's saved one: never
-// Claude Code's own home.
-func ClaudeSavedDir(user string) (string, error) { return claudeSavedDir(user) }
-
-// claudeOwnOnly says user is known only as Claude Code's own sign-in, with
-// no saved sign-in magpie runs in a folder of its own.
+// claudeOwnOnly says user is Claude Code's own sign-in, in the user's
+// home: run in a folder of magpie's, it would share that home's refresh
+// token, and each refresh would take the other's away.
 func claudeOwnOnly(user string) bool {
-	saved, own := false, false
 	for _, l := range Logins("claude") {
-		if accountKey(l.User) != accountKey(user) {
-			continue
-		}
-		if l.Own {
-			own = true
-		} else {
-			saved = true
+		if accountKey(l.User) == accountKey(user) && l.Active {
+			return true
 		}
 	}
-	return own && !saved
+	return false
 }
 
 // normalAccountClaudeModes is m as it is kept: keys in lower case, only

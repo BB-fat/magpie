@@ -1114,6 +1114,20 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		}
 		writeJSON(rw, providersState())
 	})
+	// how the gateway runs a Claude account from its next start: standard,
+	// or the Claude TUI
+	mux.HandleFunc("POST /api/providers/claude-mode", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ ID, Account, Mode string }
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := provider.SetAccountClaudeMode(in.ID, in.Account, in.Mode); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, providersState())
+	})
 	// a picture for a provider, picked in the editor: kept by content before
 	// the provider is saved, which then points at it. The page sends it as
 	// base64 in JSON — the app's web view hands a scheme handler no body for
@@ -1197,9 +1211,6 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// Limit, for accountconcurrency: the account's or key's own
 			// limit, 0 for none, null for the provider's (#892)
 			Limit *int `json:"limit"`
-			// Mode, for claude-mode: how the gateway runs a Claude account
-			// from its next start, standard or tui
-			Mode string `json:"mode"`
 			// PriceRate is what it charges against the official price
 			// (#819): a number, null or 0 for none; left out, it is kept
 			PriceRate    json.RawMessage `json:"priceRate"`
@@ -1814,11 +1825,6 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			}
 		case "accountconcurrency":
 			if err := provider.SetAccountConcurrency(in.ID, req.Account, req.Limit); err != nil {
-				fail(rw, err)
-				return
-			}
-		case "claude-mode":
-			if err := provider.SetAccountClaudeMode(in.ID, req.Account, req.Mode); err != nil {
 				fail(rw, err)
 				return
 			}
