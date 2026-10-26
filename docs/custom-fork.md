@@ -47,9 +47,10 @@ Example for a 1GB box: `MAGPIE_CLAUDE_IDLE_MAX=1` and/or
 ## Claude TUI safeguards (large `EXTRA_BODY`)
 
 TUI runs pass auto-mode `safeguards` via `CLAUDE_CODE_EXTRA_BODY_FILE` and
-`<run-tmp>/extra-body.json`, not inline `CLAUDE_CODE_EXTRA_BODY` on process
-exec, so payloads above Linux's per-string env limit (~128 KiB) still reach
-Claude Code. See [Claude TUI bridge](subsystems/claude-tui-bridge.md).
+`<run-tmp>/extra-body.json` on the Bun wrapper (short path only), not inline
+`CLAUDE_CODE_EXTRA_BODY` on the Go→Bun exec hop. Node launcher Claude uses a
+preload; native ELF Claude gets inline `CLAUDE_CODE_EXTRA_BODY` up to 120 KiB.
+See [Claude TUI bridge](subsystems/claude-tui-bridge.md).
 
 ## Claude TUI accounts (Linux)
 
