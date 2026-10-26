@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,9 +31,180 @@ func TestRealClaudeTUI(t *testing.T) {
 	for _, server := range []string{"magpie", "corp-tools"} {
 		t.Run(server, func(t *testing.T) { realRun(t, server) })
 	}
+	t.Run("cancel", realCancel)
+	t.Run("restart", realRestart)
+	t.Run("gateway killed", realGatewayKilled)
+	t.Run("memory", realMemory)
 }
 
-func realRun(t *testing.T, server string) {
+// A turn whose processes grow past claudeTuiMaxRSSMiB is ended with an
+// error saying so, and nothing of it is left running.
+func realMemory(t *testing.T) {
+	up, profile, bridge := realSetup(t, "magpie")
+	old := rssEvery
+	rssEvery = 200 * time.Millisecond
+	t.Cleanup(func() { rssEvery = old })
+	Init(&Config{MaxRSS: 1 << 20}) // the real tree holds far more than 1 MiB
+	b := bridge()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	go func() { <-up.slow }()
+	out, code, msg := realServe(t, b, ctx, profile, "", `{"model":"`+realModel+`","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"take your time"}]}`)
+	if code == 200 && !strings.Contains(msg, "claudeTuiMaxRSSMiB") {
+		t.Fatalf("a run past its memory answered %d %q %q", code, msg, out.text())
+	}
+	if !strings.Contains(msg, "claudeTuiMaxRSSMiB") {
+		t.Fatalf("the run ended with %d %q, not its memory", code, msg)
+	}
+	waitGone(t, b, profile)
+}
+
+// A client that goes away mid-reply ends its run: the wrapper, its tmux
+// and Claude Code, with nothing of them left running.
+func realCancel(t *testing.T) {
+	up, profile, bridge := realSetup(t, "magpie")
+	b := bridge()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		realServe(t, b, ctx, profile, "", `{"model":"`+realModel+`","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"take your time"}]}`)
+	}()
+	select {
+	case <-up.slow:
+	case <-time.After(2 * time.Minute):
+		t.Fatal("Claude Code never asked the stand-in")
+	}
+	if left := underProfile(profile); len(left) == 0 {
+		t.Fatal("no process runs with the profile: the check below tests nothing")
+	}
+	cancel()
+	<-done
+	waitGone(t, b, profile)
+}
+
+// A conversation goes on after the gateway is started again: its next
+// turn is answered from its checkpoint, or rebuilt from the request.
+func realRestart(t *testing.T) {
+	up, profile, bridge := realSetup(t, "magpie")
+	b := bridge()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	first := `{"model":"` + realModel + `","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"say hello"}]}`
+	if out, code, msg := realServe(t, b, ctx, profile, "conv-restart", first); code != 200 || out.text() != "PONG" {
+		t.Fatalf("first turn: %d %s %q", code, msg, out.text())
+	}
+	waitGone(t, b, profile)
+	b = bridge() // the gateway started again
+	next := `{"model":"` + realModel + `","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"say hello"},{"role":"assistant","content":"PONG"},{"role":"user","content":"and again"}]}`
+	before := up.asked()
+	out, code, msg := realServe(t, b, ctx, profile, "conv-restart", next)
+	if code != 200 || out.text() != "PONG" {
+		t.Fatalf("after a restart: %d %s %q", code, msg, out.text())
+	}
+	if !strings.Contains(up.lastAsked(), "say hello") || up.asked() == before {
+		t.Fatalf("the turn after a restart was asked without its history: %s", up.lastAsked())
+	}
+	waitGone(t, b, profile)
+}
+
+// The gateway killed outright: its wrapper is told to end (its parent's
+// death signal) and takes its tmux and Claude Code with it; the next
+// gateway's sweep removes the tmux socket left.
+func realGatewayKilled(t *testing.T) {
+	up, profile, _ := realSetup(t, "magpie")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRealClaudeTUIChild$")
+	cmd.Env = append(os.Environ(), "MAGPIE_TUI_CHILD_PROFILE="+profile, "MAGPIE_TUI_CHILD_UP="+up.URL, "XDG_CONFIG_HOME="+os.Getenv("XDG_CONFIG_HOME"))
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-up.slow:
+	case <-time.After(2 * time.Minute):
+		_ = cmd.Process.Kill()
+		t.Fatal("the child gateway's Claude Code never asked the stand-in")
+	}
+	if len(underProfile(profile)) == 0 {
+		t.Fatal("no process runs with the profile: the check below tests nothing")
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	deadline := time.Now().Add(30 * time.Second)
+	for len(underProfile(profile)) > 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("processes outlived the killed gateway: %v", underProfile(profile))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	SweepTmux()
+	if left, _ := filepath.Glob(filepath.Join(os.TempDir(), fmt.Sprintf("magpie-claude-tui-%d", os.Getuid()), fmt.Sprintf("%d-*.sock", cmd.Process.Pid))); len(left) != 0 {
+		t.Fatalf("the killed gateway's tmux sockets are left: %v", left)
+	}
+}
+
+// TestRealClaudeTUIChild is the gateway realGatewayKilled kills: it starts
+// a turn the stand-in answers slowly, and waits to be killed.
+func TestRealClaudeTUIChild(t *testing.T) {
+	profile := os.Getenv("MAGPIE_TUI_CHILD_PROFILE")
+	if profile == "" {
+		t.Skip("run by realGatewayKilled")
+	}
+	b := New()
+	cb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b.ServeMCP(w, r, strings.TrimPrefix(r.URL.Path, "/_magpie/claude-mcp/"))
+	}))
+	defer cb.Close()
+	bundle, err := InstallWrapper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmux, _ := exec.LookPath("tmux")
+	Init(&Config{
+		ClaudePath: func() (string, error) { return os.Getenv("MAGPIE_TUI_CLAUDE"), nil },
+		Tmux:       tmux, Wrapper: []string{os.Getenv("MAGPIE_TUI_BUN"), bundle},
+		HelperArgv: []string{os.Getenv("MAGPIE_TUI_MAGPIE"), "claude-mcp-helper"}, CallbackBase: func() string { return cb.URL },
+	})
+	realServe(t, b, context.Background(), profile, "", `{"model":"`+realModel+`","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"take your time"}]}`)
+	select {}
+}
+
+// underProfile is the processes running with profile as their Claude
+// config folder.
+func underProfile(profile string) []int {
+	var out []int
+	entries, _ := os.ReadDir("/proc")
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + e.Name() + "/environ")
+		if err == nil && strings.Contains(string(b), "CLAUDE_CONFIG_DIR="+profile+"\x00") {
+			out = append(out, pid)
+		}
+	}
+	return out
+}
+
+// waitGone waits for b's runs to end and every process under profile with
+// them, and for their tmux sockets to go.
+func waitGone(t *testing.T, b *Bridge, profile string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for b.Busy() || len(underProfile(profile)) > 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the run outlived its reply: busy %v, processes %v", b.Busy(), underProfile(profile))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if left, _ := filepath.Glob(filepath.Join(os.TempDir(), fmt.Sprintf("magpie-claude-tui-%d", os.Getuid()), fmt.Sprintf("%d-*.sock", os.Getpid()))); len(left) != 0 {
+		t.Fatalf("tmux sockets left: %v", left)
+	}
+}
+
+// realSetup readies the real programs for server's runs: the stand-in for
+// Anthropic, a profile pointed at it, and the callback the helper calls.
+func realSetup(t *testing.T, server string) (*standIn, string, func() *Bridge) {
 	bun, claude, magpie := os.Getenv("MAGPIE_TUI_BUN"), os.Getenv("MAGPIE_TUI_CLAUDE"), os.Getenv("MAGPIE_TUI_MAGPIE")
 	tmux, err := exec.LookPath("tmux")
 	if bun == "" || claude == "" || magpie == "" || err != nil {
@@ -46,13 +218,34 @@ func realRun(t *testing.T, server string) {
 	if err := os.WriteFile(filepath.Join(profile, "settings.json"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	b := New()
+	// a gateway's bridge; a new one stands for the gateway started again
+	var mu sync.Mutex
+	var b *Bridge
 	cb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !b.ServeMCP(w, r, strings.TrimPrefix(r.URL.Path, "/_magpie/claude-mcp/")) {
+		mu.Lock()
+		cur := b
+		mu.Unlock()
+		if cur == nil || !cur.ServeMCP(w, r, strings.TrimPrefix(r.URL.Path, "/_magpie/claude-mcp/")) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer cb.Close()
+	t.Cleanup(cb.Close)
+	bridge := func() *Bridge {
+		mu.Lock()
+		defer mu.Unlock()
+		if b != nil {
+			b.Shutdown()
+		}
+		b = New()
+		nb := b
+		t.Cleanup(func() {
+			nb.Shutdown()
+			for deadline := time.Now().Add(30 * time.Second); nb.Busy() && time.Now().Before(deadline); {
+				time.Sleep(50 * time.Millisecond)
+			}
+		})
+		return b
+	}
 	bundle, err := InstallWrapper()
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +261,23 @@ func realRun(t *testing.T, server string) {
 		CallbackBase: func() string { return cb.URL },
 	})
 	t.Setenv("MAGPIE_CLAUDE_MCP_NAME", server) // the helper reads the same name
+	return up, profile, bridge
+}
+
+const realModel = "claude-sonnet-5-5"
+const realTools = `[{"name":"echo","description":"Echo text back.","input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]`
+
+func realServe(t *testing.T, b *Bridge, ctx context.Context, profile, outer, body string) (*recorder, int, string) {
+	t.Helper()
+	out := &recorder{}
+	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body)).WithContext(ctx)
+	code, msg := b.Serve(r, out, realModel, Owner("claude", "real@example.com", config.MCPServer), outer, profile, []byte(body))
+	return out, code, msg
+}
+
+func realRun(t *testing.T, server string) {
+	up, profile, bridge := realSetup(t, server)
+	b := bridge()
 	owner := Owner("claude", "real@example.com", server)
 	model := "claude-sonnet-5-5"
 	tools := `[{"name":"echo","description":"Echo text back.","input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]`
@@ -103,15 +313,21 @@ func realRun(t *testing.T, server string) {
 	}
 	// the run ends with its turn: its tmux server and every process under
 	// the wrapper go, and the room's place with them
-	deadline := time.Now().Add(30 * time.Second)
-	for b.Busy() {
-		if time.Now().After(deadline) {
-			t.Fatal("the run's processes outlived its reply")
-		}
-		time.Sleep(100 * time.Millisecond)
+	waitGone(t, b, profile)
+	// the very same results again are answered as before, with no new run
+	asked := up.asked()
+	out3 := &recorder{}
+	r3 := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(second)).WithContext(ctx)
+	if code, msg := b.Serve(r3, out3, model, owner, "conv-1", profile, []byte(second)); code != 200 || !strings.Contains(out3.text(), "DONE: ECHOED") {
+		t.Fatalf("the same results again: %d %s %q", code, msg, out3.text())
 	}
-	if left, _ := filepath.Glob(filepath.Join(os.TempDir(), fmt.Sprintf("magpie-claude-tui-%d", os.Getuid()), fmt.Sprintf("%d-*.sock", os.Getpid()))); len(left) != 0 {
-		t.Fatalf("tmux sockets left: %v", left)
+	if up.asked() != asked {
+		t.Fatal("the same results again asked Anthropic again")
+	}
+	// results for a call the visible reply didn't make are refused
+	wrong := strings.ReplaceAll(second, `"tool_use_id":`+jsonString(call.id), `"tool_use_id":"toolu_other"`)
+	if code, _ := b.Serve(httptest.NewRequest("POST", "/v1/messages", strings.NewReader(wrong)), &recorder{}, model, owner, "conv-1", profile, []byte(wrong)); code != 409 {
+		t.Fatalf("a result for another call: %d, want 409", code)
 	}
 	// nothing of magpie's went in the user's settings
 	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".claude", "settings.json")); err == nil {
@@ -123,12 +339,29 @@ type standIn struct {
 	*httptest.Server
 	mu    sync.Mutex
 	tools []string
+	n     int
+	last  string
+	// slow is told once a turn asked to take its time has come
+	slow     chan struct{}
+	slowOnce sync.Once
+}
+
+func (s *standIn) asked() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.n
+}
+
+func (s *standIn) lastAsked() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.last
 }
 
 // newAnthropicStandIn answers Claude Code as Anthropic's Messages API
 // would: a call of the echo tool when asked to, then "DONE: <result>".
 func newAnthropicStandIn(t *testing.T) *standIn {
-	s := &standIn{}
+	s := &standIn{slow: make(chan struct{})}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/count_tokens") {
 			fmt.Fprint(w, `{"input_tokens":10}`)
@@ -165,6 +398,20 @@ func newAnthropicStandIn(t *testing.T) *standIn {
 			all.Write(m.Content)
 		}
 		last := all.String()
+		if echo != "" || len(req.Tools) == 0 && strings.Contains(last, "say hello") || strings.Contains(last, "take your time") {
+			s.mu.Lock()
+			s.n++
+			s.last = last
+			s.mu.Unlock()
+		}
+		if strings.Contains(last, "take your time") {
+			s.slowOnce.Do(func() { close(s.slow) })
+			select {
+			case <-r.Context().Done():
+			case <-time.After(5 * time.Minute):
+			}
+			return
+		}
 		var blocks []map[string]any
 		stop := "end_turn"
 		switch {

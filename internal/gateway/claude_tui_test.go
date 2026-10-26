@@ -54,6 +54,18 @@ func tuiAccount(t *testing.T, wrapper string) provider.Provider {
 	return provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: "tui@example.com"}}
 }
 
+// tuiServer is a gateway whose TUI runs have all ended, their processes
+// reaped, before the test's other cleanups put the bridge back.
+func tuiTestServer(t *testing.T) *Server {
+	t.Helper()
+	s := New()
+	t.Cleanup(func() {
+		s.tui.Shutdown()
+		waitFor(t, "the TUI runs end", func() bool { return !s.tui.Busy() })
+	})
+	return s
+}
+
 // tuiWrapper writes a stand-in for the PTY wrapper that answers each turn
 // with lines (stream-json rows, as the wrapper writes them), and keeps
 // its arguments and environment in args and env beside it.
@@ -78,7 +90,7 @@ const tuiTextRows = `{"type":"assistant","uuid":"a1","session_id":"s1","message"
 // client's own shape.
 func TestClaudeTUIAnswersEveryAPI(t *testing.T) {
 	p := tuiAccount(t, tuiWrapper(t, strings.Split(tuiTextRows, "\n")...))
-	s := New()
+	s := tuiTestServer(t)
 	for _, c := range []struct {
 		from provider.Protocol
 		body string
@@ -122,8 +134,7 @@ func TestClaudeTUIToolNamesComeBackAsDeclared(t *testing.T) {
 		`{"type":"assistant","uuid":"t1","session_id":"s1","message":{"id":"m1","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"toolu_1","name":"` + offered + `","input":{"task":"x"}}]}}`,
 	}
 	p := tuiAccount(t, tuiWrapper(t, rows...))
-	s := New()
-	defer s.tui.Shutdown()
+	s := tuiTestServer(t)
 	body := `{"model":"claude-sonnet-5","tools":[{"type":"function","function":{"name":"` + declared + `","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"go"}]}`
 	rec := httptest.NewRecorder()
 	code, msg := s.serveClaudeSubscription(rec, httptest.NewRequest("POST", "/", strings.NewReader(body)), provider.Chat, p, "claude-sonnet-5", []byte(body), &Usage{})
@@ -150,7 +161,7 @@ func TestClaudeTUIToolNamesComeBackAsDeclared(t *testing.T) {
 func TestClaudeTUIFailureIsNotTheStandardBridge(t *testing.T) {
 	p := tuiAccount(t, filepath.Join(t.TempDir(), "no-wrapper"))
 	fakeClaude(t) // the standard bridge's Claude Code, which must not answer
-	s := New()
+	s := tuiTestServer(t)
 	body := `{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
 	rec := httptest.NewRecorder()
 	code, _ := s.serveClaudeSubscription(rec, httptest.NewRequest("POST", "/", strings.NewReader(body)), provider.Anthropic, p, "claude-sonnet-5", []byte(body), &Usage{})
@@ -175,7 +186,7 @@ func (e testErr) Error() string { return string(e) }
 func TestClaudeTUIOnlyTheAccountsSet(t *testing.T) {
 	tuiAccount(t, tuiWrapper(t, strings.Split(tuiTextRows, "\n")...))
 	fakeClaude(t)
-	s := New()
+	s := tuiTestServer(t)
 	defer s.subscription.abortAll()
 	p := provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: "standard@example.com"}}
 	body := `{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
@@ -190,7 +201,7 @@ func TestClaudeTUIOnlyTheAccountsSet(t *testing.T) {
 // not dropped unsaid.
 func TestClaudeTUIRefusesClientCacheMarks(t *testing.T) {
 	p := tuiAccount(t, tuiWrapper(t, strings.Split(tuiTextRows, "\n")...))
-	s := New()
+	s := tuiTestServer(t)
 	body := `{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}]}`
 	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
 	r.Header.Set("X-Magpie-Cache-Marks", "client")
@@ -215,7 +226,7 @@ func TestClaudeTUIRunTakesARoomPlace(t *testing.T) {
 	}
 	p := tuiAccount(t, wrapper)
 	before := claudeRoomLive()
-	s := New()
+	s := tuiTestServer(t)
 	body := `{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -243,7 +254,7 @@ func claudeRoomLive() int {
 func TestClaudeTUIKeepsTheTokenOffTheCommandLine(t *testing.T) {
 	wrapper := tuiWrapper(t, strings.Split(tuiTextRows, "\n")...)
 	p := tuiAccount(t, wrapper)
-	s := New()
+	s := tuiTestServer(t)
 	body := `{"model":"claude-sonnet-5","max_tokens":64,"tools":[{"name":"echo","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"hi"}]}`
 	rec := httptest.NewRecorder()
 	if code, msg := s.serveClaudeSubscription(rec, httptest.NewRequest("POST", "/", strings.NewReader(body)), provider.Anthropic, p, "claude-sonnet-5", []byte(body), &Usage{}); code != 200 {

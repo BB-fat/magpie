@@ -235,6 +235,8 @@ type providerJSON struct {
 	AccountClaudeModes map[string]string `json:"accountClaudeModes,omitempty"`
 	ClaudeTUINow       map[string]bool   `json:"claudeTuiNow,omitempty"`
 	ClaudeTUILive      bool              `json:"claudeTuiLive,omitempty"`
+	// ClaudeTUIHere: this machine runs the Claude TUI (Linux)
+	ClaudeTUIHere bool `json:"claudeTuiHere,omitempty"`
 	// how many may wait for each key or account, and for how many seconds
 	// (0: no bound)
 	QueueLimit int `json:"queueLimit,omitempty"`
@@ -613,6 +615,7 @@ func providerInfoWith(p provider.Provider, agents []agentUse, desktop map[string
 	}
 	if p.Account != nil && p.Account.Agent == "claude" {
 		out.AccountClaudeModes = p.AccountClaudeModes
+		out.ClaudeTUIHere = provider.ClaudeTUIGOOS == "linux"
 		if live, ok := gateway.ReadTUILive(); ok {
 			out.ClaudeTUILive = true
 			for _, r := range p.AccountRefs() {

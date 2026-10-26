@@ -107,8 +107,8 @@ func TestRunPastItsMemoryIsEnded(t *testing.T) {
 		readRSS = func(*procTree) (int64, bool) { return c.rss, c.ok }
 		r := &subscriptionRun{model: "m", pending: map[string]chan mcpToolResult{}, tools: map[string]bool{}}
 		events := r.attach()
-		done := make(chan struct{})
-		go r.watchRSS(&procTree{pid: 1}, done, time.Millisecond)
+		done, watched := make(chan struct{}), make(chan struct{})
+		go func() { r.watchRSS(&procTree{pid: 1}, done, time.Millisecond); close(watched) }()
 		var got []Event
 		timeout := time.After(200 * time.Millisecond)
 	read:
@@ -124,6 +124,7 @@ func TestRunPastItsMemoryIsEnded(t *testing.T) {
 			}
 		}
 		close(done)
+		<-watched // read no more before the next reading is put in
 		r.mu.Lock()
 		closed := r.closed
 		r.mu.Unlock()
