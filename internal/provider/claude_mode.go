@@ -58,7 +58,7 @@ func SetAccountClaudeMode(id, ref, mode string) error {
 		if ClaudeTUIGOOS != "linux" {
 			return fmt.Errorf("the Claude TUI runs on Linux only, not %s", ClaudeTUIGOOS)
 		}
-		if claudeOwnOnly(r) {
+		if claudeOwnOnly(p, r) {
 			return fmt.Errorf("%s is the account Claude Code itself is signed in to, in your home, which the Claude TUI doesn't run there or copy elsewhere: sign Claude Code in to another account, or add this one through magpie's own sign-in (magpie accounts add claude), then set it to tui", r)
 		}
 	}
@@ -81,13 +81,14 @@ func SetAccountClaudeMode(id, ref, mode string) error {
 	return Save(*p)
 }
 
-// claudeOwnOnly says user is Claude Code's own sign-in, in the user's
-// home: run in a folder of magpie's, it would share that home's refresh
-// token, and each refresh would take the other's away.
-func claudeOwnOnly(user string) bool {
-	for _, l := range Logins("claude") {
-		if accountKey(l.User) == accountKey(user) && l.Active {
-			return true
+// claudeOwnOnly says p's account user is Claude Code's own sign-in, run
+// in the user's home (Account.AgentsOwn), as the gateway would run it: in
+// a folder of magpie's, it would share that home's refresh token, and each
+// refresh would take the other's away.
+func claudeOwnOnly(p *Provider, user string) bool {
+	for _, q := range append([]Provider{*p}, p.AlsoOn()...) {
+		if q.Account != nil && accountKey(q.Account.User) == accountKey(user) {
+			return q.Account.AgentsOwn()
 		}
 	}
 	return false
