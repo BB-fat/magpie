@@ -201,6 +201,12 @@ func RunMCP(args []string) error {
 				response["result"] = result
 			}
 			respond(response)
+			if req.Method == "tools/list" {
+				// The Claude TUI bridge's wrapper sends the first prompt
+				// only once Claude Code has its tools: a prompt sent before
+				// runs with none, and the model writes its calls out as text.
+				_ = os.WriteFile(toolsPath+".listed", []byte("1\n"), 0o600)
+			}
 		}(req)
 	}
 	return in.Err()

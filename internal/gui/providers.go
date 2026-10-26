@@ -228,6 +228,13 @@ type providerJSON struct {
 	// each key's or account's own limit over it (#892), by its name in
 	// lower case or its key id; 0 there is none
 	AccountConcurrency map[string]int `json:"accountConcurrency,omitempty"`
+	// a Claude subscription's accounts set to the Claude TUI, by name in
+	// lower case ("tui"), and those the gateway serving runs on it now: a
+	// change takes effect once it restarts. ClaudeTUILive is false with
+	// no gateway serving.
+	AccountClaudeModes map[string]string `json:"accountClaudeModes,omitempty"`
+	ClaudeTUINow       map[string]bool   `json:"claudeTuiNow,omitempty"`
+	ClaudeTUILive      bool              `json:"claudeTuiLive,omitempty"`
 	// how many may wait for each key or account, and for how many seconds
 	// (0: no bound)
 	QueueLimit int `json:"queueLimit,omitempty"`
@@ -603,6 +610,20 @@ func providerInfoWith(p provider.Provider, agents []agentUse, desktop map[string
 		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), PriceRate: p.PriceRate,
 		AccountConcurrency: p.AccountConcurrency, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM,
 		Outputs: provider.OutputsOf(p.ID), Compacts: provider.CompactsOf(p.ID),
+	}
+	if p.Account != nil && p.Account.Agent == "claude" {
+		out.AccountClaudeModes = p.AccountClaudeModes
+		if live, ok := gateway.ReadTUILive(); ok {
+			out.ClaudeTUILive = true
+			for _, r := range p.AccountRefs() {
+				if live.Runs(p.ID, r) {
+					if out.ClaudeTUINow == nil {
+						out.ClaudeTUINow = map[string]bool{}
+					}
+					out.ClaudeTUINow[strings.ToLower(r)] = true
+				}
+			}
+		}
 	}
 	if p.Account != nil {
 		for _, r := range p.AccountRefs() {
@@ -1176,6 +1197,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// Limit, for accountconcurrency: the account's or key's own
 			// limit, 0 for none, null for the provider's (#892)
 			Limit *int `json:"limit"`
+			// Mode, for claude-mode: how the gateway runs a Claude account
+			// from its next start, standard or tui
+			Mode string `json:"mode"`
 			// PriceRate is what it charges against the official price
 			// (#819): a number, null or 0 for none; left out, it is kept
 			PriceRate    json.RawMessage `json:"priceRate"`
@@ -1577,7 +1601,8 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if old != nil {
 					in.AccountCaps, in.AccountWindowCaps = old.AccountCaps, old.AccountWindowCaps
 					in.AccountConcurrency = old.AccountConcurrency
-					in.AccountNames = old.AccountNames // with accountname
+					in.AccountClaudeModes = old.AccountClaudeModes // with claude-mode
+					in.AccountNames = old.AccountNames             // with accountname
 				}
 				// a Zhipu key's team likewise: {} clears it
 				if in.ZhipuTeam == nil && old != nil {
@@ -1789,6 +1814,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			}
 		case "accountconcurrency":
 			if err := provider.SetAccountConcurrency(in.ID, req.Account, req.Limit); err != nil {
+				fail(rw, err)
+				return
+			}
+		case "claude-mode":
+			if err := provider.SetAccountClaudeMode(in.ID, req.Account, req.Mode); err != nil {
 				fail(rw, err)
 				return
 			}

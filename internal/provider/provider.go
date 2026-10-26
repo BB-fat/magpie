@@ -163,6 +163,10 @@ type Provider struct {
 	// by its KeyID; 0 there is no limit for it. One not in it takes the
 	// provider's (see LaneLimit).
 	AccountConcurrency map[string]int `json:"accountConcurrency,omitempty"`
+	// AccountClaudeModes is, for a Claude subscription's account by its
+	// name in lower case, how the gateway runs it: ClaudeTUI, or
+	// ClaudeStandard when it is not in it (ClaudeModeOf).
+	AccountClaudeModes map[string]string `json:"accountClaudeModes,omitempty"`
 	// QueueLimit is how many requests may wait for a slot of each key or
 	// account at once (#892); one more is turned away as the queue being
 	// full. 0 is no bound.
@@ -631,6 +635,7 @@ func (p Provider) clone() Provider {
 		p.AccountWindowCaps = m
 	}
 	p.AccountConcurrency = maps.Clone(p.AccountConcurrency)
+	p.AccountClaudeModes = maps.Clone(p.AccountClaudeModes)
 	p.Contexts = maps.Clone(p.Contexts)
 	if p.AccountModels != nil {
 		m := make(map[string][]string, len(p.AccountModels))
@@ -709,6 +714,7 @@ func withPicks(a, pk Provider) Provider {
 	a.AccountNames = pk.AccountNames
 	a.MaxConcurrency, a.PinUpstream = pk.MaxConcurrency, pk.PinUpstream
 	a.AccountConcurrency, a.QueueLimit, a.QueueWait = pk.AccountConcurrency, pk.QueueLimit, pk.QueueWait
+	a.AccountClaudeModes = pk.AccountClaudeModes
 	a.MaxRPM = pk.MaxRPM
 	// the extra body fields written for it, which a ChatGPT account's
 	// requests take (WithExtraBody, magpie-releases#18)
@@ -830,7 +836,7 @@ func Save(p Provider) error {
 		if p.ID == "kiro" {
 			key = p.Key
 		}
-		p = Provider{ID: p.ID, Key: key, Models: p.Models, NoModels: p.NoModels, PickedFrom: p.PickedFrom, Delisted: p.Delisted, Unlisted: p.Unlisted, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, QuotaRest: p.QuotaRest, QuotaResetAt: p.QuotaResetAt, RestCap: p.RestCap, PinUpstream: p.PinUpstream, NativeCompaction: p.NativeCompaction, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
+		p = Provider{ID: p.ID, Key: key, Models: p.Models, NoModels: p.NoModels, PickedFrom: p.PickedFrom, Delisted: p.Delisted, Unlisted: p.Unlisted, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, AccountClaudeModes: p.AccountClaudeModes, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, QuotaRest: p.QuotaRest, QuotaResetAt: p.QuotaResetAt, RestCap: p.RestCap, PinUpstream: p.PinUpstream, NativeCompaction: p.NativeCompaction, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
 	} else {
 		p.AccountProxies = keyProxies(p) // a provider of keys proxies each key apart
 		if subscriptionID(p.ID) && !stored(p.ID) {
@@ -1326,6 +1332,7 @@ func normalize(p Provider) Provider {
 		p.MaxConcurrency = new(int)
 	}
 	p.AccountConcurrency = normalAccountConcurrency(p.AccountConcurrency)
+	p.AccountClaudeModes = normalAccountClaudeModes(p.AccountClaudeModes)
 	p.QueueLimit, p.QueueWait = min(max(p.QueueLimit, 0), MaxQueueLimit), min(max(p.QueueWait, 0), MaxQueueWait)
 	p.MaxRPM = min(max(p.MaxRPM, 0), MaxRPMLimit)
 	p.QuotaRest = min(max(p.QuotaRest, 0), MaxQuotaRest)

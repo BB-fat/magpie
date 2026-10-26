@@ -2957,31 +2957,9 @@ func bridgeName(name string) string {
 // change, or one ending as a changed name ends, is told apart by a hash of
 // it, the same in every run, so a resumed session and a conversation's
 // history name the tool as before; declaredName maps it back.
-func bridgeToolName(name string) string {
-	if bridgeToolNameOK(name) && !bridgeToolNameHashed.MatchString(name) {
-		return name
-	}
-	sum := sha256.Sum256([]byte(name))
-	short := bridgeToolNameBad.ReplaceAllString(name, "_")
-	if max := claudebridge.MaxHashedToolStemLen(); len(short) > max {
-		short = short[:max]
-	}
-	return short + "_" + hex.EncodeToString(sum[:6])
-}
+func bridgeToolName(name string) string { return claudebridge.ToolName(name) }
 
-func bridgeToolNameOK(name string) bool {
-	max := claudebridge.MaxOfferedToolNameLen()
-	if len(name) < 1 || len(name) > max {
-		return false
-	}
-	return bridgeToolNameChars.MatchString(name)
-}
-
-var (
-	bridgeToolNameChars  = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-	bridgeToolNameBad    = regexp.MustCompile(`[^A-Za-z0-9_-]`)
-	bridgeToolNameHashed = regexp.MustCompile(`_[0-9a-f]{12}$`)
-)
+func bridgeToolNameOK(name string) bool { return claudebridge.ToolNameOK(name) }
 
 // bridgeNames is the caller's name of each of tools by the name the MCP
 // helper offers it under, for those that differ (bridgeToolName).
@@ -4335,6 +4313,10 @@ func (b *subscriptionBridge) whyCallsLost(req *Request) string {
 
 func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request, from provider.Protocol, p provider.Provider, model string, body []byte, usage *Usage) (int, string) {
 	defer s.bridgeTurn()()
+	// an account set to the Claude TUI when the gateway started
+	if p.Account != nil && ClaudeTUILive(p.ID, p.Account.User) {
+		return s.serveClaudeTUI(w, r, from, p, model, body, usage)
+	}
 	owner := p.ID
 	if p.Account != nil {
 		owner += "\x00" + p.Account.User
