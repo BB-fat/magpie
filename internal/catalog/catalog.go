@@ -38,6 +38,11 @@ type Model struct {
 	// APIs, when the vendor says, are the APIs the model is served on
 	// ("chat", "responses", "anthropic"); empty is not known.
 	APIs []string `json:",omitempty"`
+	// Endpoints, in magpie's own models for an agent, are the gateway
+	// paths a request for it is relayed on as it is
+	// (provider.NativeEndpoints, /v1/models' native_endpoints); none for a
+	// group or a model translated anyway.
+	Endpoints []string `json:"-"`
 	// Images is set on a model that takes images as input.
 	Images bool `json:",omitempty"`
 	// ImageInput is the source's explicit answer; nil means it did not say.
@@ -1290,6 +1295,24 @@ func listedBy(providers []string, id string, providerOverrides bool) ([]string, 
 		}
 	}
 	return nil, false
+}
+
+// variantSuffix is a word a proxy puts after a model's id to name the
+// level or speed it serves the model at: CLIProxyAPI's Antigravity
+// channel lists gemini-3.8-flash-high, claude-opus-5-5-high,
+// claude-opus-4-6-thinking and gpt-oss-120b-medium, and its xAI channel
+// grok-3-mini-fast. Its "(high)" form is found's.
+var variantSuffix = regexp.MustCompile(`(?i)-(minimal|low|medium|high|xhigh|max|thinking|fast)$`)
+
+// Unsuffixed is id with a proxy's level or speed word taken off
+// (variantSuffix), and whether it had one. It is for borrowing levels a
+// model has no word on alone: the vendor's own list, which may name a
+// model so, goes first.
+func Unsuffixed(id string) (string, bool) {
+	if loc := variantSuffix.FindStringIndex(id); loc != nil && loc[0] > 0 {
+		return id[:loc[0]], true
+	}
+	return "", false
 }
 
 // KinEfforts are the reasoning levels of a model none of the providers

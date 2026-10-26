@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
@@ -50,10 +51,14 @@ type Provider struct {
 	Name string `json:"name"`
 	// Was are ids the provider had before it was renamed (see Rename):
 	// a model still picked by one of them reaches it.
-	Was    []string `json:"was,omitempty"`
-	Icon   string   `json:"icon,omitempty"`
-	Preset string   `json:"preset,omitempty"` // preset this was created from, if any
-	Key    string   `json:"key"`              // API key, as typed by the user
+	Was []string `json:"was,omitempty"`
+	// Gave are ids it had that another provider took after it (a rename
+	// onto one, a provider added under one), each with when: the calls
+	// recorded under such an id before then were this one's (Renames).
+	Gave   []Gave `json:"gave,omitempty"`
+	Icon   string `json:"icon,omitempty"`
+	Preset string `json:"preset,omitempty"` // preset this was created from, if any
+	Key    string `json:"key"`              // API key, as typed by the user
 
 	// AccessKeyID and SecretAccessKey are a Volcengine account's access
 	// key (TakesVolcAccessKey), what Ark tells its Coding or Agent Plan's
@@ -190,6 +195,12 @@ type Provider struct {
 	// still stands over it. RestCapOff (-1): no rest at all after a
 	// failure that says nothing of why, a rate limit's as the gateway's own.
 	RestCap int `json:"restCap,omitempty"`
+	// LimitRestOff keeps its keys and accounts asked when the vendor says
+	// they are out of quota or answers 429 (zoecats on Discord: a local
+	// aggregator says "quota exhausted" for a moment while it switches
+	// upstreams, and a rest of half an hour held every request back until
+	// magpie restarted). Off by default: such a refusal rests it as ever.
+	LimitRestOff bool `json:"limitRestOff,omitempty"`
 
 	// PriceRate is what the provider charges against the official price
 	// (ITea312, #819): a relay that bills 0.8× or 1.5× of it. It scales the
@@ -600,6 +611,7 @@ func All() []Provider {
 // clone is p with its settings unshared: slices, maps and pointers copied.
 func (p Provider) clone() Provider {
 	p.Was = slices.Clone(p.Was)
+	p.Gave = slices.Clone(p.Gave)
 	p.Keys = slices.Clone(p.Keys)
 	p.Fallback = slices.Clone(p.Fallback)
 	p.Models = slices.Clone(p.Models)
@@ -648,17 +660,7 @@ var AllBuilt atomic.Int64
 func allProviders() []Provider {
 	AllBuilt.Add(1)
 	f := load()
-	stored := f.Providers
-	picks := map[string]Provider{}
-	var out []Provider
-	for _, p := range stored {
-		p = normalize(p)
-		if !hasEndpoint(p) {
-			picks[p.ID] = p
-			continue
-		}
-		out = append(out, p)
-	}
+	out, picks := ownOf(f)
 	for _, a := range Accounts() {
 		if _, taken := find(out, a.ID); taken || picks[a.ID].Hidden {
 			continue
@@ -673,6 +675,21 @@ func allProviders() []Provider {
 		out = append(out, a)
 	}
 	return ordered(out, f.Order)
+}
+
+// ownOf is f's providers of the user's own, and the model picks it keeps
+// for the signed-in accounts by id.
+func ownOf(f file) (own []Provider, picks map[string]Provider) {
+	picks = map[string]Provider{}
+	for _, p := range f.Providers {
+		p = normalize(p)
+		if !hasEndpoint(p) {
+			picks[p.ID] = p
+			continue
+		}
+		own = append(own, p)
+	}
+	return own, picks
 }
 
 // withPicks is the signed-in account a with what the user set on its
@@ -855,6 +872,9 @@ func Save(p Provider) error {
 		if p.Was == nil {
 			p.Was = was.Was
 		}
+		if p.Gave == nil {
+			p.Gave = was.Gave
+		}
 		if sameStored(*was, p) {
 			// Save pressed on an editor left as it was: providers.json
 			// would be written byte for byte as it is, and its write
@@ -864,6 +884,9 @@ func Save(p Provider) error {
 		}
 		f.Providers[i] = p
 	} else {
+		// a new provider under an id another had: what was recorded under
+		// it until now stays that one's
+		giveID(f.Providers, -1, p.ID, time.Now())
 		f.Providers = append(f.Providers, p)
 	}
 	if err := store(f); err != nil {

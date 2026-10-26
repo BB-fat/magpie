@@ -242,6 +242,9 @@ func magpieModels(agent string) []catalog.Model {
 		// lists offer them: Fast in the Codex CLI magpie writes
 		// magpie-models.json for (#1530)
 		provider.CodexTiers(&m, e, members)
+		// the gateway paths it goes on untranslated, as /v1/models says
+		// them: what an agent plugin's connect is told (cleary5779)
+		m.Endpoints = provider.NativeEndpoints(e)
 		// Codex's /fast on a ChatGPT account's own GPT model, which
 		// OpenCode has no command for and takes as variants (#2379); a
 		// group is sent fast as the group says, as a fast pick is
