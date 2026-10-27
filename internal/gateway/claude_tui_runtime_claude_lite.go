@@ -54,6 +54,35 @@ const tuiRuntimeLiteResultsReceived = "Tool results received."
 // conversation of its own (the plugin found no stable conversation id).
 const tuiRuntimeStatelessSession = "stateless"
 
+// autoModeRefusal answers Claude Code's auto mode classifier on a TUI
+// account. Auto mode asks the API to review each action (safeguards) and
+// reads the verdict from safeguard_results; the native Claude Code a TUI
+// run is keeps that verdict to itself (its transcript has none), so the
+// client finds none and classifies every action locally instead: its whole
+// transcript in one request, which the PTY can only type as one prompt
+// block, written to the cache again each time (au-exit 10-27: 31 of them,
+// ~300k tokens each, 9.4M in half an hour). Refused, Claude Code asks the
+// user about the action, or stops the turn after several in a row: never
+// an action let through unreviewed.
+const tuiRuntimeAutoModeRefusal = "Claude Code's auto mode can't review actions on an account in TUI mode: its classifier is refused here. Switch the account to standard (magpie claude-code mode <account> standard) or leave auto mode."
+
+// autoModeClassifier reports whether req is Claude Code's auto mode
+// classifier (its "<transcript>" request): no tools, only the user's
+// messages, the first beginning the transcript. A segmented transcript
+// gives each block a user message of its own.
+func tuiRuntimeAutoModeClassifier(req *tuiRuntimeRequest) bool {
+	if len(req.Tools) > 0 || len(req.Messages) == 0 {
+		return false
+	}
+	for _, m := range req.Messages {
+		if m.Role != "user" {
+			return false
+		}
+	}
+	first := req.Messages[0].Parts
+	return len(first) > 0 && first[0].Kind == Text && strings.HasPrefix(first[0].Text, "<transcript>\n")
+}
+
 // configDir is the Claude config folder the account runs in ("" for
 // Claude Code's own, as the plugin's runtime ran).
 func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model, owner, outerSession, configDir string, body []byte) (int, string) {
@@ -62,6 +91,12 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 		return out.Fail(http.StatusBadRequest, err.Error())
 	}
 	req.Model = model
+	// Auto mode's own classifier: refused before any native run starts.
+	if tuiRuntimeAutoModeClassifier(req) {
+		log.Printf("Claude interactive refused auto mode's local classifier request: a TUI account can't review auto mode's actions")
+		out.Header().Set("x-should-retry", "false")
+		return out.Fail(http.StatusBadRequest, tuiRuntimeAutoModeRefusal)
+	}
 	if len(req.Safeguards) > 0 {
 		req.SafeguardBeta = "dangerous-tool-use-2026-09-03"
 		for _, beta := range strings.Split(r.Header.Get("anthropic-beta"), ",") {
