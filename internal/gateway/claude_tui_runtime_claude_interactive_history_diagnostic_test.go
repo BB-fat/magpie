@@ -74,9 +74,9 @@ func TestClaudeTUIRuntimeInteractiveChangedHistoryExplains409WithoutReplay(t *te
 		t.Fatal(err)
 	}
 	r := &tuiRuntimeSubscriptionRun{bridge: s.subscription, token: "test-history", interactive: true, owner: "owner", model: req.Model,
-		pending:               map[string]chan tuiRuntimeMcpToolResult{"call-one": make(chan tuiRuntimeMcpToolResult)},
-		shown:                 []tuiRuntimeShownCall{{id: "call-one", name: "echo"}},
-		interactiveContextKey: tuiRuntimeTurnKey("owner", req, nil),
+		pending:                    map[string]chan tuiRuntimeMcpToolResult{"call-one": make(chan tuiRuntimeMcpToolResult)},
+		shown:                      []tuiRuntimeShownCall{{id: "call-one", name: "echo"}},
+		interactiveContextSnapshot: tuiRuntimeTestContextSnapshot(req),
 	}
 	r.heard([]Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "original prompt"}}}})
 	s.subscription.runs[r.token] = r
@@ -123,16 +123,16 @@ func TestClaudeTUIRuntimeInteractiveMatchedHistoryDriftOptInStartsOnlyReadOnlyRe
 	}
 	if err := b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-existing", Model: req.Model, ThreadKey: firstWords(&req.Request),
-		ConvKey: "known-persistent-conversation", ContextKey: tuiRuntimeTurnKey(owner, req, nil), Dirty: true,
+		ConvKey: "known-persistent-conversation", InstructionKey: tuiRuntimeInstructionKey(req), Dirty: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	run := &tuiRuntimeSubscriptionRun{bridge: b, token: "live-run", interactive: true, owner: owner, outerSession: outer,
 		model: req.Model, parkedAt: time.Now(),
-		pending:               map[string]chan tuiRuntimeMcpToolResult{"call-one": make(chan tuiRuntimeMcpToolResult)},
-		shown:                 []tuiRuntimeShownCall{{id: "call-one", name: "echo"}},
-		tools:                 map[string]bool{"echo": true},
-		interactiveContextKey: tuiRuntimeTurnKey(owner, req, nil),
+		pending:                    map[string]chan tuiRuntimeMcpToolResult{"call-one": make(chan tuiRuntimeMcpToolResult)},
+		shown:                      []tuiRuntimeShownCall{{id: "call-one", name: "echo"}},
+		tools:                      map[string]bool{"echo": true},
+		interactiveContextSnapshot: tuiRuntimeTestContextSnapshot(req),
 	}
 	run.heard([]Message{
 		req.Messages[0],

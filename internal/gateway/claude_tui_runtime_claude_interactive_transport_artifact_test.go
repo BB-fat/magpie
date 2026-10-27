@@ -22,7 +22,7 @@ func TestClaudeTUIRuntimeRestoreSkipsKnownFailedDesktopCompanionWithoutToolRepla
 			}
 			keys := tuiRuntimeConversationKeys(owner, base)
 			if err := b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-				SessionID: "inner", ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: "ctx",
+				SessionID: "inner", ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: "ctx",
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -83,7 +83,7 @@ func TestClaudeTUIRuntimeRestoreReplyAnchorAfterLargeCompactionAndRepeated502s(t
 	}
 	keys := tuiRuntimeConversationKeys(owner, original)
 	if err := b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "native-original", ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(finalReply), ContextKey: "ctx",
+		SessionID: "native-original", ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(finalReply), InstructionKey: "ctx",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestClaudeTUIRuntimeRestoreDesktopCompanionRequiresCheckpointAndToolFreeTai
 	}
 	owner, outer := "owner", "companion-gate"
 	if err := b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "native", ConvKey: tuiRuntimeConversationKeys(owner, base)[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: "ctx", Dirty: true,
+		SessionID: "native", ConvKey: tuiRuntimeConversationKeys(owner, base)[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: "ctx", Dirty: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestClaudeTUIRuntimeRestore120TurnsCompactionsAndTransportFailures(t *testi
 			t.Fatal("checkpoint must end with complete assistant reply")
 		}
 		if err := b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-			SessionID: "same-native-session", Model: "claude-opus-5-5", ConvKey: keys[len(keys)-1], ReplyKey: tuiRuntimeAssistantReplyKey(last), ContextKey: "ctx",
+			SessionID: "same-native-session", Model: "claude-opus-5-5", ConvKey: keys[len(keys)-1], ReplyKey: tuiRuntimeAssistantReplyKey(last), InstructionKey: "ctx",
 		}); err != nil {
 			t.Fatal(err)
 		}

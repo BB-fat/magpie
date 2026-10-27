@@ -10,7 +10,7 @@ func TestClaudeTUIRuntimeInteractiveSessionStateWritten(t *testing.T) {
 	tmp := t.TempDir()
 	tuiRuntimeTestInit(t, &tuiRuntimeConfig{StateDir: tmp})
 	b := tuiRuntimeNewSubscriptionBridge()
-	e := tuiRuntimeInteractiveSessionEntry{SessionID: "s1", ConvKey: "k", ContextKey: "c", ThreadKey: "t", Model: "m"}
+	e := tuiRuntimeInteractiveSessionEntry{SessionID: "s1", ConvKey: "k", InstructionKey: "c", ThreadKey: "t", Model: "m"}
 	b.saveInteractiveSession("owner", "outer", e)
 	p := filepath.Join(tmp, "claude-interactive-sessions.json")
 	b2, err := os.ReadFile(p)

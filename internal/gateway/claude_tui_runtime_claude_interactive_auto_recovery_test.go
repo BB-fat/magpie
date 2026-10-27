@@ -53,7 +53,7 @@ func tuiRuntimeArSave(t *testing.T, b *tuiRuntimeSubscriptionBridge, owner, oute
 	if err := b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: session, Model: tuiRuntimeAutoTestModel, ThreadKey: firstWords(&req.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(msgs[1]),
-		ContextKey: tuiRuntimeTurnKey(owner, req, nil), Dirty: dirty,
+		InstructionKey: tuiRuntimeInstructionKey(req), Dirty: dirty,
 	}); err != nil {
 		t.Fatal(err)
 	}

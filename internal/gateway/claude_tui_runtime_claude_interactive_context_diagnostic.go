@@ -9,13 +9,14 @@ import (
 
 // Only fixed boolean categories are ever logged. Keep the raw system prompt,
 // tool descriptions/schemas and hashes out of diagnostics. This snapshot is
-// immutable once the native run begins; equivalentKey also compares harmless
-// representation changes without weakening ownership or tool-result checks.
+// immutable once published. Canonical field fingerprints compare harmless
+// representation changes without a catch-all configuration key.
 type tuiRuntimeInteractiveContextDiagnosticSnapshot struct {
 	system, tools, unorderedTools, toolChoice, schema [32]byte
 	thinkOff, webSearch, effortSet                    bool
 	effort                                            [32]byte
-	equivalentKey                                     string
+	model, instructions                               string
+	canonicalTools, canonicalSchema                   [32]byte
 }
 
 func tuiRuntimeInteractiveContextDiagnosticFromRequest(req *tuiRuntimeRequest) tuiRuntimeInteractiveContextDiagnosticSnapshot {
@@ -30,15 +31,18 @@ func tuiRuntimeInteractiveContextDiagnosticFromRequest(req *tuiRuntimeRequest) t
 	}
 	sort.Strings(perTool)
 	unordered, _ := json.Marshal(perTool)
+	canonicalTools, _ := json.Marshal(tuiRuntimeInteractiveCanonicalTools(req.Tools))
 	return tuiRuntimeInteractiveContextDiagnosticSnapshot{
-		equivalentKey:  tuiRuntimeInteractiveEquivalentContextKey(req),
-		effort:         sha256.Sum256([]byte(req.Effort)),
-		system:         sha256.Sum256([]byte(req.System)),
-		tools:          sha256.Sum256(tools),
-		unorderedTools: sha256.Sum256(unordered),
-		toolChoice:     sha256.Sum256([]byte(req.ToolChoice)),
-		schema:         sha256.Sum256(req.Format.schema()),
-		thinkOff:       req.ThinkOff, webSearch: req.WebSearch, effortSet: req.Effort != "",
+		model: req.Model, instructions: tuiRuntimeInstructionKey(req),
+		canonicalTools:  sha256.Sum256(canonicalTools),
+		canonicalSchema: sha256.Sum256(tuiRuntimeInteractiveCanonicalJSON(req.Format.schema())),
+		effort:          sha256.Sum256([]byte(req.Effort)),
+		system:          sha256.Sum256([]byte(req.System)),
+		tools:           sha256.Sum256(tools),
+		unorderedTools:  sha256.Sum256(unordered),
+		toolChoice:      sha256.Sum256([]byte(req.ToolChoice)),
+		schema:          sha256.Sum256(req.Format.schema()),
+		thinkOff:        req.ThinkOff, webSearch: req.WebSearch, effortSet: req.Effort != "",
 	}
 }
 

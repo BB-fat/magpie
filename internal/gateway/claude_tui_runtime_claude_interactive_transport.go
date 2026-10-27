@@ -939,8 +939,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveRequest(ctx context.Conte
 				return nil, nil, errors.New("Claude interactive persisted resume failed: outer thread changed")
 			}
 		}
-		contextChanged := saved.ContextKey != "" && saved.ContextKey != tuiRuntimeTurnKey(owner, req, nil)
-		return b.startInteractiveResumeTurn(ctx, req, model, configDir, owner, outerSession, saved, since, contextChanged)
+		return b.startInteractiveResumeTurn(ctx, req, model, configDir, owner, outerSession, saved, since)
 	default:
 		if status == tuiRuntimeInteractiveRestoreStateInvalid {
 			return nil, nil, tuiRuntimeErrInteractiveSessionStoreInvalid
@@ -952,29 +951,24 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveRequest(ctx context.Conte
 }
 
 func tuiRuntimeRenderInteractiveExternalInstructions(req *tuiRuntimeRequest) string {
-	if req.System == "" && req.ToolChoice != "required" && !strings.HasPrefix(req.ToolChoice, "name:") {
+	system := tuiRuntimeWithoutBillingHeader(req.System)
+	if system == "" {
 		return "There are no current external system instructions.\n"
 	}
-	var text strings.Builder
-	text.WriteString("<external_system_instructions>\n")
-	text.WriteString(tuiRuntimeWithoutBillingHeader(req.System))
-	switch {
-	case req.ToolChoice == "required":
-		text.WriteString("\nYou must call at least one available tool before answering.")
-	case strings.HasPrefix(req.ToolChoice, "name:"):
-		fmt.Fprintf(&text, "\nYou must call the %s tool.", strings.TrimPrefix(req.ToolChoice, "name:"))
-	}
-	text.WriteString("\n</external_system_instructions>\n")
-	return text.String()
+	return "<external_system_instructions>\n" + system + "\n</external_system_instructions>\n"
 }
 
-func tuiRuntimeRenderInteractiveContextRefresh(req *tuiRuntimeRequest) string {
-	var text strings.Builder
-	text.WriteString("<external_context_refresh>\n")
-	text.WriteString("The outer client context changed since the previous turn. The current MCP tool set, response constraints, model settings, and external instructions supersede the previous outer-client context. Continue the existing conversation without replaying prior history.\n")
-	text.WriteString(tuiRuntimeRenderInteractiveExternalInstructions(req))
-	text.WriteString("</external_context_refresh>\n\n")
-	return text.String()
+// tool_choice binds one request only. It is rendered with that request, not
+// with the instructions a resumed session already holds, so it neither stays
+// in force on later turns nor changes the instruction key.
+func tuiRuntimeRenderInteractiveTurnConstraint(req *tuiRuntimeRequest) string {
+	switch {
+	case req.ToolChoice == "required":
+		return "<current_turn_constraint>\nYou must call at least one available tool before answering this request.\n</current_turn_constraint>\n\n"
+	case strings.HasPrefix(req.ToolChoice, "name:"):
+		return fmt.Sprintf("<current_turn_constraint>\nYou must call the %s tool before answering this request.\n</current_turn_constraint>\n\n", strings.TrimPrefix(req.ToolChoice, "name:"))
+	}
+	return ""
 }
 
 func tuiRuntimeInteractiveWrapperArgs(model, mcpConfig, effort, resumeID string, nativeSearch bool) []string {
@@ -1015,8 +1009,11 @@ func tuiRuntimeRenderInteractiveFirstPromptWithImages(req *tuiRuntimeRequest) (s
 	// A first user turn already has native user provenance. Preserve its bytes;
 	// keep external instructions in an explicit boundary of their own.
 	var blocks []map[string]any
-	if clean.System != "" || clean.ToolChoice == "required" || strings.HasPrefix(clean.ToolChoice, "name:") {
+	if clean.System != "" {
 		blocks = append(blocks, map[string]any{"type": "text", "text": tuiRuntimeRenderInteractiveExternalInstructions(clean) + "\n"})
+	}
+	if constraint := tuiRuntimeRenderInteractiveTurnConstraint(clean); constraint != "" {
+		blocks = append(blocks, map[string]any{"type": "text", "text": constraint})
 	}
 	blocks = append(blocks, tuiRuntimeRenderClaudeTurn(clean.Messages)...)
 	return tuiRuntimeFlattenInteractiveBlocksWithImages(blocks)
@@ -1221,7 +1218,7 @@ func tuiRuntimeRenderInteractiveHistoricalBootstrapWithImages(req *tuiRuntimeReq
 	if err != nil {
 		return "", nil, err
 	}
-	currentBlock := "</historical_conversation_import>\n\n<current_user_request>\n" +
+	currentBlock := "</historical_conversation_import>\n\n" + tuiRuntimeRenderInteractiveTurnConstraint(req) + "<current_user_request>\n" +
 		inner +
 		"\n</current_user_request>\nRespond to the current user request. Use current tools only when the current request requires them.\n"
 	// Only notices in the current user role run are current instructions.
@@ -1301,17 +1298,19 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveOneTurn(ctx context.Conte
 	return b.startInteractiveWithPromptImages(ctx, req, model, configDir, owner, outerSession, prompt, "", images, false)
 }
 
-func (b *tuiRuntimeSubscriptionBridge) startInteractiveResumeTurn(ctx context.Context, req *tuiRuntimeRequest, model, configDir, owner, outerSession string, saved tuiRuntimeInteractiveSessionEntry, since []Message, contextChanged bool) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+func (b *tuiRuntimeSubscriptionBridge) startInteractiveResumeTurn(ctx context.Context, req *tuiRuntimeRequest, model, configDir, owner, outerSession string, saved tuiRuntimeInteractiveSessionEntry, since []Message) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	if saved.SessionID == "" || outerSession == "" {
 		return nil, nil, errors.New("Claude interactive migration: persisted resume has no inner or outer session")
+	}
+	if saved.InstructionKey != tuiRuntimeInstructionKey(req) {
+		log.Printf("Claude interactive rebuilding native session: external instructions changed")
+		return b.startInteractiveRebuild(ctx, req, model, owner, outerSession, configDir)
 	}
 	prompt, images, err := tuiRuntimeRenderInteractiveTurnPromptWithImages(since)
 	if err != nil {
 		return nil, nil, err
 	}
-	if contextChanged {
-		prompt = tuiRuntimeRenderInteractiveContextRefresh(req) + prompt
-	}
+	prompt = tuiRuntimeRenderInteractiveTurnConstraint(req) + prompt
 	// The resumed session must be dirtied only after acquiring the native
 	// process lease in startInteractiveWithPromptImages. Otherwise a competing
 	// Runtime could overwrite a clean checkpoint before discovering that it
@@ -1537,7 +1536,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	}
 	run := &tuiRuntimeSubscriptionRun{bridge: b, token: token, model: model, cmd: cmd, tmp: tmp,
 		interactive: true, owner: owner, pending: map[string]chan tuiRuntimeMcpToolResult{},
-		tools: map[string]bool{}, effort: req.Effort, interactiveContextKey: tuiRuntimeTurnKey(owner, req, nil),
+		tools: map[string]bool{}, effort: req.Effort,
 		interactiveContextSnapshot: func() *tuiRuntimeInteractiveContextDiagnosticSnapshot {
 			s := tuiRuntimeInteractiveContextDiagnosticFromRequest(req)
 			return &s

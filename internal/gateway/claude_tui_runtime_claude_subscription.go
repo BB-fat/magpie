@@ -239,8 +239,7 @@ type tuiRuntimeSubscriptionRun struct {
 	interactive                bool
 	interactiveDone            chan struct{}
 	nativeLease                *os.File                                        // held by Runtime and inherited by wrapper; only plugin feature-gated
-	interactiveContextKey      string                                          // the settings/tools of this one PTY turn
-	interactiveContextSnapshot *tuiRuntimeInteractiveContextDiagnosticSnapshot // diagnostic-only immutable field digests
+	interactiveContextSnapshot *tuiRuntimeInteractiveContextDiagnosticSnapshot // immutable per-field compatibility and diagnostic digests
 	firstTurnAnchorKey         string                                          // first user message hash, only for opt-in first-turn durable recovery
 	interactiveUserNonce       string                                          // pending native post-tool user context
 	interactiveUserAcked       bool                                            // retained before temporary files are removed
@@ -1012,7 +1011,7 @@ func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop str
 			err := r.bridge.saveInteractiveSession(r.owner, outerSession, tuiRuntimeInteractiveSessionEntry{
 				SessionID: sessionID, Model: r.model, ThreadKey: threadKey,
 				ConvKey: conv, ReplyKey: tuiRuntimeAssistantReplyKey(reply),
-				ContextKey: tuiRuntimeTurnKey(r.owner, req, nil),
+				InstructionKey: tuiRuntimeInstructionKey(req),
 			})
 			if err == nil {
 				// The complete non-tool reply was delivered and the clean
@@ -3454,10 +3453,7 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 				log.Printf("Claude interactive matched tool continuation rejected: %v", err)
 				return out.Fail(http.StatusConflict, err.Error())
 			}
-			run.mu.Lock()
-			currentKey, currentEffort := run.interactiveContextKey, run.effort
-			run.mu.Unlock()
-			sameContext := (currentKey == tuiRuntimeTurnKey(owner, req, nil) && currentEffort == req.Effort) || run.interactiveEquivalentContext(req) ||
+			sameContext := run.interactiveEquivalentContext(req) ||
 				run.exactInteractiveToolGrowth(owner, req, how)
 			if !sameContext {
 				msg := "Claude interactive migration: settings or tool schema changed while a PTY tool was running"
@@ -3626,13 +3622,11 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 			// The native continuation has accepted the newly offered tools. Make
 			// that expanded set the run's current context so its next tool result
 			// is compared against what the helper now exposes.
-			contextKey := tuiRuntimeTurnKey(owner, req, nil)
 			contextSnapshot := tuiRuntimeInteractiveContextDiagnosticFromRequest(req)
 			run.mu.Lock()
 			for _, t := range req.Tools {
 				run.tools[t.Name] = true
 			}
-			run.interactiveContextKey = contextKey
 			run.interactiveContextSnapshot = &contextSnapshot
 			run.mu.Unlock()
 		}

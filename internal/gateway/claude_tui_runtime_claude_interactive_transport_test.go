@@ -152,11 +152,11 @@ func TestClaudeTUIRuntimeInteractiveExactIDContinuationCanOmitAssistantWireRow(t
 	waiter := make(chan tuiRuntimeMcpToolResult, 1)
 	run := &tuiRuntimeSubscriptionRun{
 		bridge: b, token: "tok", interactive: true, owner: "owner", model: req.Model,
-		pending:               map[string]chan tuiRuntimeMcpToolResult{"c1": waiter},
-		tools:                 map[string]bool{"echo_test": true},
-		shown:                 []tuiRuntimeShownCall{{id: "c1", name: "echo_test"}},
-		interactiveContextKey: tuiRuntimeTurnKey("owner", req, nil),
-		parkedAt:              time.Now(),
+		pending:                    map[string]chan tuiRuntimeMcpToolResult{"c1": waiter},
+		tools:                      map[string]bool{"echo_test": true},
+		shown:                      []tuiRuntimeShownCall{{id: "c1", name: "echo_test"}},
+		interactiveContextSnapshot: tuiRuntimeTestContextSnapshot(req),
+		parkedAt:                   time.Now(),
 	}
 	run.heard(req.Messages[:1])
 	b.runs[run.token] = run
@@ -506,7 +506,7 @@ func TestClaudeTUIRuntimeInteractiveTransportRejectsSafeguardChangeDuringMCP(t *
 		pending: map[string]chan tuiRuntimeMcpToolResult{"c1": waiter}, tools: map[string]bool{"echo_test": true},
 		shown:      []tuiRuntimeShownCall{{id: "c1", name: "echo_test"}},
 		safeguards: json.RawMessage(`[{"context":"A"}]`), safeguardBeta: beta,
-		interactiveContextKey: tuiRuntimeTurnKey("owner", parsed, nil),
+		interactiveContextSnapshot: tuiRuntimeTestContextSnapshot(parsed),
 	}
 	b.runs[run.token] = run
 	b.calls["c1"] = run
@@ -980,7 +980,7 @@ printf '%s\n' '{"type":"result","session_id":"sess-side-hist","stop_reason":"end
 	}
 	mainCheckpoint := tuiRuntimeInteractiveSessionEntry{
 		SessionID: "sess-main", Model: model, ThreadKey: firstWords(&mainReq.Request),
-		ConvKey: "main-conv", ReplyKey: "main-reply", ContextKey: "main-context",
+		ConvKey: "main-conv", ReplyKey: "main-reply", InstructionKey: "main-context",
 	}
 	b.saveInteractiveSession(owner, outer, mainCheckpoint)
 
@@ -1012,7 +1012,7 @@ printf '%s\n' '{"type":"result","session_id":"sess-side-hist","stop_reason":"end
 	run.ended(sideReq, text, stop, true)
 	after, ok := b.interactiveSession(owner, outer)
 	if !ok || after.SessionID != mainCheckpoint.SessionID || after.ConvKey != mainCheckpoint.ConvKey ||
-		after.ReplyKey != mainCheckpoint.ReplyKey || after.ContextKey != mainCheckpoint.ContextKey {
+		after.ReplyKey != mainCheckpoint.ReplyKey || after.InstructionKey != mainCheckpoint.InstructionKey {
 		t.Fatalf("historical helper changed main checkpoint: %#v", after)
 	}
 	logBytes, err := os.ReadFile(logPath)
@@ -1130,7 +1130,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-recovered","stop_reason":"en
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-dirty", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 
 	req := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{
@@ -1994,7 +1994,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-anchor","stop_reason":"end_t
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-anchor", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil),
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq),
 	})
 	// The same Runtime normally still remembers the original outer prefix.
 	// A compacted prefix must not be mistaken for a helper before checking
@@ -2051,7 +2051,7 @@ func TestClaudeTUIRuntimeInteractivePersistedResumeFailsClosedWhenDirtyOrModelCh
 	keys := tuiRuntimeConversationKeys(owner, base)
 	entry := tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil),
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq),
 	}
 	b.saveInteractiveSession(owner, outer, entry)
 	next := &tuiRuntimeRequest{Request: Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: "next"}}})}}
@@ -2071,11 +2071,11 @@ func TestClaudeTUIRuntimeInteractivePersistedResumeFailsClosedWhenDirtyOrModelCh
 	}
 }
 
-func TestClaudeTUIRuntimeInteractivePersistedContextChangeRefreshesWithoutHistoryReplay(t *testing.T) {
+func TestClaudeTUIRuntimeInteractivePersistedInstructionChangeRebuilds(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
-	wrapper := filepath.Join(dir, "context-refresh-bridge")
-	logPath := filepath.Join(dir, "context-refresh.log")
+	wrapper := filepath.Join(dir, "instruction-rebuild-bridge")
+	logPath := filepath.Join(dir, "instruction-rebuild.log")
 	script := `#!/bin/sh
 prompt=$(cat)
 printf 'args:%s\nprompt:%s\n' "$*" "$prompt" > "$INTERACTIVE_CONTEXT_LOG"
@@ -2098,7 +2098,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-context","stop_reason":"end_
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-context", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil),
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq),
 	})
 	changed := &tuiRuntimeRequest{Request: Request{
 		Model: model, System: "new system", ToolChoice: "required", Tools: []Tool{{Name: "new_tool"}},
@@ -2120,7 +2120,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-context","stop_reason":"end_
 		}
 	}
 	if text != "CTX_OK" || stop != "stop" {
-		t.Fatalf("context refresh resume = %q %q", text, stop)
+		t.Fatalf("instruction rebuild = %q %q", text, stop)
 	}
 	run.ended(changed, text, stop, true)
 	logBytes, err := os.ReadFile(logPath)
@@ -2128,14 +2128,14 @@ printf '%s\n' '{"type":"result","session_id":"inner-context","stop_reason":"end_
 		t.Fatal(err)
 	}
 	log := string(logBytes)
-	for _, want := range []string{"--resume inner-context", "<external_context_refresh>", "new system", "current request", "You must call at least one available tool"} {
+	for _, want := range []string{"new system", "current request", "You must call at least one available tool"} {
 		if !strings.Contains(log, want) {
-			t.Fatalf("context refresh missing %q:\n%s", want, log)
+			t.Fatalf("instruction rebuild missing %q:\n%s", want, log)
 		}
 	}
-	for _, old := range []string{"original hello", "SAVED_REPLY", "old system"} {
+	for _, old := range []string{"--resume inner-context", "<external_context_refresh>", "old system"} {
 		if strings.Contains(log, old) {
-			t.Fatalf("context refresh replayed stale context %q:\n%s", old, log)
+			t.Fatalf("instruction rebuild retained stale context %q:\n%s", old, log)
 		}
 	}
 }
@@ -2167,7 +2167,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-companion","stop_reason":"en
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-companion", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 	companionText := "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap."
 	req := &tuiRuntimeRequest{Request: Request{Model: model, Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: Text, Text: companionText}}})}}

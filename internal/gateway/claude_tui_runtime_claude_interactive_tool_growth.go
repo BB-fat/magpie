@@ -9,7 +9,7 @@ func (r *tuiRuntimeSubscriptionRun) exactInteractiveToolGrowth(owner string, req
 		return false
 	}
 	r.mu.Lock()
-	if !r.interactive || r.closed || r.readOnlyRecovery || r.interactiveContextKey == "" {
+	if !r.interactive || r.closed || r.readOnlyRecovery || r.owner != owner || r.interactiveContextSnapshot == nil {
 		r.mu.Unlock()
 		return false
 	}
@@ -19,11 +19,7 @@ func (r *tuiRuntimeSubscriptionRun) exactInteractiveToolGrowth(owner string, req
 			known[name] = true
 		}
 	}
-	originalKey, originalEffort := r.interactiveContextKey, r.effort
 	r.mu.Unlock()
-	if originalEffort != req.Effort {
-		return false
-	}
 	old, added, seen := make([]Tool, 0, len(req.Tools)), 0, make(map[string]bool, len(req.Tools))
 	for _, tool := range req.Tools {
 		if seen[tool.Name] {
@@ -41,5 +37,5 @@ func (r *tuiRuntimeSubscriptionRun) exactInteractiveToolGrowth(owner string, req
 	}
 	prior := *req
 	prior.Tools = old
-	return tuiRuntimeTurnKey(owner, &prior, nil) == originalKey || (r.owner == owner && r.interactiveEquivalentContext(&prior))
+	return r.interactiveEquivalentContext(&prior)
 }

@@ -47,7 +47,7 @@ func TestClaudeTUIInteractiveOversizedSafeguardsNeverLaunch(t *testing.T) {
 		// No wrapper or Claude configuration: rejection must precede dependency lookup.
 		_, _, err = b.startInteractiveWithPromptImages(context.Background(), req, "", "", "", "", "hello", "", nil, false)
 		check(err)
-		_, _, err = b.startInteractiveResumeTurn(context.Background(), req, "", "", "", "outer", tuiRuntimeInteractiveSessionEntry{SessionID: "inner"}, req.Messages, false)
+		_, _, err = b.startInteractiveResumeTurn(context.Background(), req, "", "", "", "outer", tuiRuntimeInteractiveSessionEntry{SessionID: "inner"}, req.Messages)
 		check(err)
 		run := &tuiRuntimeSubscriptionRun{interactive: true}
 		check(run.setSafeguards(req))

@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -27,30 +28,34 @@ func tuiRuntimeInteractiveCanonicalJSON(raw json.RawMessage) json.RawMessage {
 	return canonical
 }
 
-// These are the instructions and definitions actually supplied to the native
-// run. Billing metadata is already omitted when rendering those instructions.
-func tuiRuntimeInteractiveEquivalentContextKey(req *tuiRuntimeRequest) string {
-	normalized := *req
-	normalized.System = tuiRuntimeWithoutBillingHeader(req.System)
-	if req.Format != nil {
-		normalizedFormat := *req.Format
-		normalizedFormat.Schema = tuiRuntimeInteractiveCanonicalJSON(req.Format.schema())
-		normalized.Format = &normalizedFormat
+// Hash exactly the external instructions rendered into the native prompt.
+// tool_choice is a per-turn constraint and settings travel with each launch.
+func tuiRuntimeInstructionKey(req *tuiRuntimeRequest) string {
+	sum := sha256.Sum256([]byte(tuiRuntimeRenderInteractiveExternalInstructions(req)))
+	return hex.EncodeToString(sum[:])
+}
+
+func tuiRuntimeInteractiveCanonicalTools(tools []Tool) []Tool {
+	normalized := slices.Clone(tools)
+	for i := range normalized {
+		normalized[i].Schema = tuiRuntimeInteractiveCanonicalJSON(normalized[i].Schema)
 	}
-	normalized.Tools = slices.Clone(req.Tools)
-	for i := range normalized.Tools {
-		normalized.Tools[i].Schema = tuiRuntimeInteractiveCanonicalJSON(normalized.Tools[i].Schema)
-	}
-	slices.SortFunc(normalized.Tools, func(a, b Tool) int { return strings.Compare(a.Name, b.Name) })
-	return tuiRuntimeTurnKey("", &normalized, nil)
+	slices.SortFunc(normalized, func(a, b Tool) int { return strings.Compare(a.Name, b.Name) })
+	return normalized
 }
 
 func (r *tuiRuntimeSubscriptionRun) interactiveEquivalentContext(req *tuiRuntimeRequest) bool {
 	r.mu.Lock()
 	snapshot := r.interactiveContextSnapshot
 	r.mu.Unlock()
-	return snapshot != nil && snapshot.equivalentKey == tuiRuntimeInteractiveEquivalentContextKey(req) &&
-		snapshot.effort == sha256.Sum256([]byte(req.Effort))
+	if snapshot == nil {
+		return false
+	}
+	now := tuiRuntimeInteractiveContextDiagnosticFromRequest(req)
+	return snapshot.model == now.model && snapshot.instructions == now.instructions &&
+		snapshot.canonicalTools == now.canonicalTools && snapshot.canonicalSchema == now.canonicalSchema &&
+		snapshot.toolChoice == now.toolChoice && snapshot.thinkOff == now.thinkOff &&
+		snapshot.webSearch == now.webSearch && snapshot.effort == now.effort
 }
 
 func tuiRuntimeInteractiveSameSafeguards(a, b json.RawMessage) bool {

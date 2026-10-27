@@ -367,11 +367,10 @@ func tuiRuntimeLiteContinues(owner, model string, req *tuiRuntimeRequest, run *t
 		return false
 	}
 	run.mu.Lock()
-	sameContext := run.interactiveContextKey == tuiRuntimeTurnKey(owner, req, nil) && run.effort == req.Effort
 	sameSafeguards := tuiRuntimeInteractiveSameSafeguards(run.safeguards, req.Safeguards) &&
 		(len(req.Safeguards) == 0 || run.safeguardBeta == req.SafeguardBeta)
 	run.mu.Unlock()
-	return sameSafeguards && (sameContext || run.interactiveEquivalentContext(req) || run.exactInteractiveToolGrowth(owner, req, how))
+	return sameSafeguards && (run.interactiveEquivalentContext(req) || run.exactInteractiveToolGrowth(owner, req, how))
 }
 
 // liteCanonical keeps upstream's one-message, other-model helper routing.
@@ -430,10 +429,6 @@ func (b *tuiRuntimeSubscriptionBridge) takeLiteTurn(ctx context.Context, owner, 
 // and otherwise a session rebuilt from the request's history. Stateless
 // requests (outerSession "") never read or write a checkpoint.
 func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
-	shape, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
-	if err != nil {
-		return nil, nil, err
-	}
 	if outerSession != "" {
 		if id, prompt, images, ok := b.liteParkedBranch(owner, outerSession, model, configDir, req); ok {
 			log.Printf("Claude interactive resuming the conversation's own session with its tool results")
@@ -449,8 +444,7 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 		if savedOK && !saved.Dirty && (saved.Model == "" || saved.Model == model) {
 			if saved, since, status := b.restoreInteractiveSession(owner, outerSession, req); status == tuiRuntimeInteractiveRestoreExact || status == tuiRuntimeInteractiveRestoreReplyAnchor || status == tuiRuntimeInteractiveRestoreCompanion {
 				b.anchorOuterThread(owner, outerSession, req)
-				contextChanged := saved.ContextKey != "" && saved.ContextKey != tuiRuntimeTurnKey(owner, req, nil)
-				return b.startInteractiveResumeTurn(ctx, req, model, configDir, owner, outerSession, saved, since, contextChanged)
+				return b.startInteractiveResumeTurn(ctx, req, model, configDir, owner, outerSession, saved, since)
 			} else {
 				log.Printf("Claude interactive rebuilding native session from the request: checkpoint %s", status)
 			}
@@ -458,6 +452,16 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 			log.Printf("Claude interactive rebuilding native session from the request: checkpoint dirty=%t model_match=%t", saved.Dirty, saved.Model == "" || saved.Model == model)
 		}
 		b.anchorOuterThread(owner, outerSession, req)
+	}
+	return b.startInteractiveRebuild(ctx, req, model, owner, outerSession, configDir)
+}
+
+// Rebuild from the caller's current history, never from an old transcript
+// containing superseded external instructions.
+func (b *tuiRuntimeSubscriptionBridge) startInteractiveRebuild(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	shape, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
+	if err != nil {
+		return nil, nil, err
 	}
 	if len(shape.Messages) == 1 && tuiRuntimeValidateInteractiveFirstTurn(shape) == nil {
 		return b.startInteractiveOneTurn(ctx, req, model, configDir, owner, outerSession)
@@ -581,14 +585,13 @@ func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, mod
 	}
 	run.mu.Lock()
 	closed, sid, runModel := run.closed, run.sessionID, run.model
-	sameContext := run.interactiveContextKey == tuiRuntimeTurnKey(owner, req, nil)
 	calls := make([]string, 0, len(run.shown))
 	for _, c := range run.shown {
 		calls = append(calls, c.id)
 	}
 	run.mu.Unlock()
 	if !closed || sid == "" || runModel != model || len(calls) == 0 ||
-		!(sameContext || run.interactiveEquivalentContext(req)) || !run.follows(req.Messages) {
+		!run.interactiveEquivalentContext(req) || !run.follows(req.Messages) {
 		return "", "", nil, false
 	}
 	_, results, turn := tuiRuntimeLiteTail(req.Messages)
@@ -610,10 +613,14 @@ func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, mod
 	if err != nil {
 		return "", "", nil, false
 	}
-	prompt, images, err := tuiRuntimeLiteTurnPrompt(req, turn)
+	if !tuiRuntimeHasUserText(turn) {
+		turn = append(turn, Message{Role: "user", Parts: []Part{{Kind: Text, Text: tuiRuntimeLiteContinueText}}})
+	}
+	prompt, images, err := tuiRuntimeRenderInteractiveTurnPromptWithImages(turn)
 	if err != nil {
 		return "", "", nil, false
 	}
+	prompt = tuiRuntimeRenderInteractiveTurnConstraint(req) + prompt
 	id, err := tuiRuntimeLiteBranchTranscript(work, configDir, model, sid, calls, results)
 	if err != nil {
 		log.Printf("Claude interactive could not resume the conversation's own session with its tool results: %v", err)

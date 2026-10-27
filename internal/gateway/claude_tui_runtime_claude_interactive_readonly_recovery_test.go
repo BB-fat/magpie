@@ -110,7 +110,7 @@ func TestClaudeTUIRuntimeInteractiveReadOnlyStartRechecksDirtyAndModel(t *testin
 	// Not dirty: the opt-in request must not reach the recovery branch.
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil),
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq),
 	})
 	req, _ := tuiRuntimeParseRequest(tuiRuntimeMergedOrphanBody())
 	if _, _, err := b.startInteractiveRequest(context.Background(), req, model, "", owner, outer); err == nil ||
@@ -173,7 +173,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-ro","stop_reason":"end_turn"
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-ro", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 
 	// Request carries client tools + a tool result + opt-in sentinel.
@@ -326,7 +326,7 @@ sleep 3
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-cc", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 	body := tuiRuntimeMergedOrphanBody()
 	var started int32
@@ -380,7 +380,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-sig","stop_reason":"end_turn
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-sig", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 	req, err := tuiRuntimeParseRequest(tuiRuntimeMergedOrphanBody())
 	if err != nil {
@@ -446,7 +446,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-green","stop_reason":"end_tu
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-green", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 	var started int
 	start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {

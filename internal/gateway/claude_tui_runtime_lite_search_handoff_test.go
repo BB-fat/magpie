@@ -22,7 +22,6 @@ func TestClaudeTUIRuntimeLiteSearchHandoffKeepsLiveRun(t *testing.T) {
 		bridge: b, interactive: true, owner: tuiRuntimeScOwner, model: req.Model,
 		tools:                      map[string]bool{"echo": true, "web_search": true},
 		shown:                      []tuiRuntimeShownCall{{id: "call-1", name: "echo", args: string(json.RawMessage(`{}`))}},
-		interactiveContextKey:      tuiRuntimeTurnKey(tuiRuntimeScOwner, &initial, nil),
 		interactiveContextSnapshot: &snapshot,
 		// A concurrent continuation owns this run. The handler must reach
 		// the live-run claim guard, not start a replacement native process.

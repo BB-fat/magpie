@@ -121,3 +121,8 @@ func tuiRuntimeKeepFast(t *testing.T, gap, every, longest time.Duration) {
 	keepaliveGap, keepaliveEvery, keepaliveLongest = gap, every, longest
 	t.Cleanup(func() { keepaliveGap, keepaliveEvery, keepaliveLongest = oldGap, oldEvery, oldLongest })
 }
+
+func tuiRuntimeTestContextSnapshot(req *tuiRuntimeRequest) *tuiRuntimeInteractiveContextDiagnosticSnapshot {
+	s := tuiRuntimeInteractiveContextDiagnosticFromRequest(req)
+	return &s
+}

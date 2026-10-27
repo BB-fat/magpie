@@ -224,9 +224,9 @@ func tuiRuntimeInteractiveReadOnlyOptInIndex(req *tuiRuntimeRequest) int {
 // least one available tool" into the bootstrap prompt), no provider web
 // search, no synthetic search tool, no structured-output schema. Messages
 // and System are left untouched so the canonical checkpoint hash keeps the
-// wire-request content, and ContextKey/turnKey computed on the sanitized
-// copy honestly records the empty tool set so the next ordinary turn sees
-// a context change and re-advertises its real tools.
+// wire-request content and InstructionKey stays that of the request. The
+// next ordinary turn resumes this session with its real tools and its own
+// tool_choice constraint, both supplied per launch.
 func tuiRuntimeInteractiveSanitizeReadOnly(req *tuiRuntimeRequest) *tuiRuntimeRequest {
 	out := *req
 	out.Tools = nil

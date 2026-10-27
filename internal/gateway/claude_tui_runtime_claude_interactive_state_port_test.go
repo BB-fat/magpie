@@ -8,20 +8,19 @@ import (
 	"time"
 )
 
-// These tests pin the on-disk format used by the deployed interactive
-// bridge before its transport is migrated. None starts Claude or Magpie.
-func TestClaudeTUIRuntimeInteractiveCheckpointStoreCompatibleWithDeployedBridge(t *testing.T) {
+// Checkpoints persist instruction identity and survive a runtime restart.
+func TestClaudeTUIRuntimeInteractiveCheckpointStorePersistsInstructions(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	bridge := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(bridge)
 	owner, outer := "claude\x00user", "desktop-session-A"
 	original := tuiRuntimeInteractiveSessionEntry{
-		SessionID:  "inner-session-A",
-		Model:      "claude-opus-5-5",
-		ThreadKey:  "thread-A",
-		ConvKey:    "checkpoint-A",
-		ReplyKey:   "reply-A",
-		ContextKey: "context-A",
+		SessionID:      "inner-session-A",
+		Model:          "claude-opus-5-5",
+		ThreadKey:      "thread-A",
+		ConvKey:        "checkpoint-A",
+		ReplyKey:       "reply-A",
+		InstructionKey: "context-A",
 	}
 	bridge.saveInteractiveSession(owner, outer, original)
 	path := tuiRuntimeInteractiveSessionStatePath()
@@ -33,13 +32,13 @@ func TestClaudeTUIRuntimeInteractiveCheckpointStoreCompatibleWithDeployedBridge(
 		t.Fatalf("persisted state mode %o, want 600", info.Mode().Perm())
 	}
 	state := tuiRuntimeReadInteractiveSessionState()
-	if state.Version != 1 || len(state.Sessions) != 1 {
+	if state.Version != 2 || len(state.Sessions) != 1 {
 		t.Fatalf("unexpected saved state: %+v", state)
 	}
 	got, ok := bridge.interactiveSession(owner, outer)
 	if !ok || got.SessionID != original.SessionID || got.Model != original.Model ||
 		got.ThreadKey != original.ThreadKey || got.ReplyKey != original.ReplyKey ||
-		got.ContextKey != original.ContextKey || got.Dirty {
+		got.InstructionKey != original.InstructionKey || got.Dirty {
 		t.Fatalf("checkpoint lost fields: %+v, found=%t", got, ok)
 	}
 	if _, ok := bridge.interactiveSession(owner, "desktop-session-B"); ok {
@@ -75,7 +74,7 @@ func TestClaudeTUIRuntimeInteractiveCheckpointStoreRejectsInvalidVersionAndPrune
 	}
 	state := tuiRuntimeInteractiveSessionState{Version: tuiRuntimeInteractiveSessionStateVersion, Sessions: map[string]tuiRuntimeInteractiveSessionEntry{
 		"old": {SessionID: "old", UpdatedAt: time.Now().Add(-31 * 24 * time.Hour)},
-		"new": {SessionID: "new", ConvKey: "conv", ContextKey: "context", UpdatedAt: time.Now()},
+		"new": {SessionID: "new", ConvKey: "conv", InstructionKey: "context", UpdatedAt: time.Now()},
 	}}
 	if err := tuiRuntimeWriteInteractiveSessionState(state); err != nil {
 		t.Fatal(err)
@@ -136,7 +135,7 @@ func TestClaudeTUIRuntimeInteractiveCompletedCanonicalTurnWritesCheckpoint(t *te
 		t.Fatal("completed canonical PTY turn did not write a checkpoint")
 	}
 	if got.SessionID != "inner-main" || got.Model != req.Model || got.ThreadKey != firstWords(&req.Request) ||
-		got.ConvKey == "" || got.ReplyKey == "" || got.ContextKey != tuiRuntimeTurnKey("owner", req, nil) || got.Dirty {
+		got.ConvKey == "" || got.ReplyKey == "" || got.InstructionKey != tuiRuntimeInstructionKey(req) || got.Dirty {
 		t.Fatalf("incomplete checkpoint: %+v", got)
 	}
 	reply := Message{Role: "assistant", Parts: []Part{{Kind: Text, Text: "FINAL"}}}
@@ -178,7 +177,7 @@ func TestClaudeTUIRuntimeInteractiveRestoreDecisionExactReplyAnchorDirtyAndCompa
 	entry := tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner", Model: req0.Model, ThreadKey: firstWords(&req0.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]),
-		ContextKey: tuiRuntimeTurnKey(owner, req0, nil),
+		InstructionKey: tuiRuntimeInstructionKey(req0),
 	}
 	b.saveInteractiveSession(owner, outer, entry)
 
@@ -224,7 +223,7 @@ func TestClaudeTUIRuntimeInteractiveRestoreRejectsUnsafeSuffixesAndAmbiguousRepl
 	}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	entry := tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner", ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: "ctx",
+		SessionID: "inner", ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: "ctx",
 	}
 	b.saveInteractiveSession(owner, "tool", entry)
 	toolReq := &tuiRuntimeRequest{Request: Request{Messages: append(append([]Message{}, base...), Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "old", Text: "stale"}}})}}
@@ -258,7 +257,7 @@ func TestClaudeTUIRuntimeInteractiveRestoreSkipsOnlyFailedCompanionTransportArti
 	}
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "inner", ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: "ctx",
+		SessionID: "inner", ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: "ctx",
 	})
 	req := &tuiRuntimeRequest{Request: Request{Messages: append(append([]Message{}, base...),
 		Message{Role: "user", Parts: []Part{{Kind: Text, Text: "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap."}}},

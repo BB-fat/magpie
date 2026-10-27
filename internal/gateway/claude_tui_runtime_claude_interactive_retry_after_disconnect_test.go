@@ -23,7 +23,7 @@ func TestClaudeTUIRuntimeInteractiveAlreadyDeliveredToolResultsReconnect(t *test
 	run := &tuiRuntimeSubscriptionRun{bridge: b, token: "in-flight", model: req.Model, owner: owner, outerSession: outer, interactive: true, pending: map[string]chan tuiRuntimeMcpToolResult{}, tools: map[string]bool{"echo": true}, shown: []tuiRuntimeShownCall{{id: "first", name: "echo", args: `{"n":1}`}, {id: "second", name: "echo", args: `{"n":2}`}}, parkedAt: time.Now(), timer: time.AfterFunc(1*time.Minute, func() {})}
 	defer run.timer.Stop()
 	run.heard(req.Messages)
-	run.interactiveContextKey = tuiRuntimeTurnKey(owner, req, nil)
+	run.interactiveContextSnapshot = tuiRuntimeTestContextSnapshot(req)
 	b.mu.Lock()
 	b.runs[run.token] = run
 	b.mu.Unlock()

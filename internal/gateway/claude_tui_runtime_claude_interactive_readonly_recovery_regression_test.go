@@ -45,7 +45,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-d1","stop_reason":"end_turn"
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-d1", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 	body := tuiRuntimeMergedOrphanBody()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -91,7 +91,7 @@ sleep 1
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-d2", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 	req, err := tuiRuntimeParseRequest(tuiRuntimeMergedOrphanBody())
 	if err != nil {
@@ -167,7 +167,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-d3","stop_reason":"end_turn"
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-d3", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 	body := []byte(`{"model":"claude-opus-5-5","tools":[{"type":"web_search_20250305"}],"messages":[` +
 		`{"role":"user","content":"original request"},` +
@@ -264,7 +264,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-d1c","stop_reason":"end_turn
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-d1c", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 	body := tuiRuntimeMergedOrphanBody()
 	w := httptest.NewRecorder()
