@@ -5,9 +5,6 @@ export type ClaudeLaunchCommandOptions = {
   envArgs: string[];
   exitStatusPath: string;
   holdMs: number;
-  /** When set, launch Claude Code via node -r preload (avoids MAX_ARG_STRLEN on exec). */
-  extraBodyPreloadPath?: string;
-  claudeNodeLaunch?: { interpreter: string; entryScript: string };
 };
 
 export function interactiveMcpBackgroundEnvArgs(): string[] {
@@ -43,16 +40,14 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function claudeLaunchArgv(opts: ClaudeLaunchCommandOptions): string[] {
-  if (opts.extraBodyPreloadPath && opts.claudeNodeLaunch) {
-    const { interpreter, entryScript } = opts.claudeNodeLaunch;
-    return [interpreter, "-r", opts.extraBodyPreloadPath, entryScript, ...opts.claudeArgs];
-  }
-  return [opts.claudePath, ...opts.claudeArgs];
-}
-
 export function buildClaudeLaunchCommand(opts: ClaudeLaunchCommandOptions): string {
-  const envCommand = ["env", ...opts.unsetEnvArgs, ...opts.envArgs, ...claudeLaunchArgv(opts)]
+  const envCommand = [
+    "env",
+    ...opts.unsetEnvArgs,
+    ...opts.envArgs,
+    opts.claudePath,
+    ...opts.claudeArgs,
+  ]
     .map(shellQuote)
     .join(" ");
   const holdSeconds = Math.max(1, Math.ceil(opts.holdMs / 1000));

@@ -61,8 +61,10 @@ func TestClaudeTUIRuntimeInteractiveTransportRejectsUnsupportedRequests(t *testi
 	if err := tuiRuntimeValidateInteractiveFirstTurn(&withSafeguards); err != nil {
 		t.Fatalf("normal safeguards were rejected before PTY start: %v", err)
 	}
-	if tuiRuntimeInteractiveSafeguardBodyMax <= 128<<10 {
-		t.Fatal("sanity max should stay far above Linux MAX_ARG_STRLEN")
+	tooLarge := withSafeguards
+	tooLarge.Safeguards = json.RawMessage(`["` + strings.Repeat("x", tuiRuntimeInteractiveSafeguardBodyMax) + `"]`)
+	if err := tuiRuntimeValidateInteractiveFirstTurn(&tooLarge); err == nil {
+		t.Fatal("oversized safeguards were accepted into PTY process environment")
 	}
 }
 
@@ -428,115 +430,6 @@ printf '%s\n' '{"type":"result","session_id":"inner-think","stop_reason":"end_tu
 	}
 }
 
-func tuiRuntimeTestNodeLauncherClaude(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "entry.js"), []byte("export {};\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	bin := filepath.Join(dir, "claude")
-	if err := os.WriteFile(bin, []byte("#!/usr/bin/env node\nimport './entry.js';\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return bin
-}
-
-func TestClaudeTUIRuntimeClaudeNodeLauncher(t *testing.T) {
-	node := tuiRuntimeTestNodeLauncherClaude(t)
-	if !tuiRuntimeClaudeNodeLauncher(node) {
-		t.Fatal("node launcher script not detected")
-	}
-	native := filepath.Join(t.TempDir(), "claude-native")
-	if err := os.WriteFile(native, []byte{0x7f, 'E', 'L', 'F', 0}, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if tuiRuntimeClaudeNodeLauncher(native) {
-		t.Fatal("native ELF must not be treated as node launcher")
-	}
-}
-
-func TestClaudeTUIRuntimeInteractiveTransportRejectsOversizedSafeguardsOnNativeClaude(t *testing.T) {
-	native := filepath.Join(t.TempDir(), "claude-native")
-	if err := os.WriteFile(native, []byte{0x7f, 'E', 'L', 'F', 0}, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	tuiRuntimeWithConfig(t, &tuiRuntimeConfig{
-		ClaudePath: func() (string, error) { return native, nil },
-	})
-	largeContext := strings.Repeat("c", tuiRuntimeInteractiveSafeguardInlineMax+1)
-	sg := json.RawMessage(`[{"type":"dangerous_tool_use","classifier_context":` + jsonString(largeContext) + `}]`)
-	body := tuiRuntimeSafeguardBody(sg)
-	if err := tuiRuntimeValidateInteractiveSafeguardLaunch(native, len(body)); err == nil {
-		t.Fatal("expected oversized native safeguards to be rejected")
-	}
-}
-
-func TestClaudeTUIRuntimeInteractiveTransportLargeSafeguardsUseFileNotEnv(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
-	bodyPath := filepath.Join(dir, "extra-body.txt")
-	betaPath := filepath.Join(dir, "betas.txt")
-	wrapper := filepath.Join(dir, "safeguard-bridge")
-	tuiRuntimeWithConfig(t, &tuiRuntimeConfig{
-		ClaudePath: func() (string, error) { return tuiRuntimeTestNodeLauncherClaude(t), nil },
-	})
-	script := `#!/bin/sh
-if [ -n "$CLAUDE_CODE_EXTRA_BODY_FILE" ]; then
-  cat "$CLAUDE_CODE_EXTRA_BODY_FILE" > "$INTERACTIVE_SAFEGUARD_BODY"
-else
-  printf '%s' "$CLAUDE_CODE_EXTRA_BODY" > "$INTERACTIVE_SAFEGUARD_BODY"
-fi
-printf '%s' "$ANTHROPIC_BETAS" > "$INTERACTIVE_SAFEGUARD_BETA"
-cat >/dev/null
-printf '%s\n' '{"type":"assistant","uuid":"sg-large","session_id":"inner-sg-large","message":{"id":"m-sg-large","model":"claude-haiku-4-5","content":[{"type":"text","text":"SAFEGUARD_LARGE_OK"}]}}'
-printf '%s\n' '{"type":"result","session_id":"inner-sg-large","stop_reason":"end_turn"}'
-`
-	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	tuiRuntimeSetWrapper(t, wrapper)
-	t.Setenv("INTERACTIVE_SAFEGUARD_BODY", bodyPath)
-	t.Setenv("INTERACTIVE_SAFEGUARD_BETA", betaPath)
-	largeContext := strings.Repeat("c", 200<<10)
-	sg := json.RawMessage(`[{"type":"dangerous_tool_use","classifier_context":` + jsonString(largeContext) + `}]`)
-	beta := "dangerous-tool-use-2026-09-03"
-	req := &tuiRuntimeRequest{Request: Request{Model: "claude-haiku-4-5", Safeguards: sg, SafeguardBeta: beta, Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
-	b := tuiRuntimeNewSubscriptionBridge()
-	defer tuiRuntimeBridges.Delete(b)
-	run, events, err := b.startInteractiveOneTurn(context.Background(), req, req.Model, "", "owner-large-sg", "outer-sg-large")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer run.abort()
-	var text string
-	for ev := range events {
-		if ev.Kind == KText {
-			text += ev.Text
-		}
-		if ev.Kind == KError {
-			t.Fatalf("large safeguard PTY failed: %s", ev.Text)
-		}
-	}
-	if text != "SAFEGUARD_LARGE_OK" {
-		t.Fatalf("large safeguard reply = %q", text)
-	}
-	body, err := os.ReadFile(bodyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(body) != tuiRuntimeSafeguardBody(sg) {
-		t.Fatalf("extra body bytes = %d, want %d", len(body), len(tuiRuntimeSafeguardBody(sg)))
-	}
-	if len(body) <= 128<<10 {
-		t.Fatalf("expected safeguards well above MAX_ARG_STRLEN, got %d bytes", len(body))
-	}
-}
-
-func jsonString(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
-}
-
 func TestClaudeTUIRuntimeInteractiveTransportSafeguardsReachPTYEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
@@ -544,11 +437,7 @@ func TestClaudeTUIRuntimeInteractiveTransportSafeguardsReachPTYEnvironment(t *te
 	betaPath := filepath.Join(dir, "betas.txt")
 	wrapper := filepath.Join(dir, "safeguard-bridge")
 	script := `#!/bin/sh
-if [ -n "$CLAUDE_CODE_EXTRA_BODY_FILE" ]; then
-  cat "$CLAUDE_CODE_EXTRA_BODY_FILE" > "$INTERACTIVE_SAFEGUARD_BODY"
-else
-  printf '%s' "$CLAUDE_CODE_EXTRA_BODY" > "$INTERACTIVE_SAFEGUARD_BODY"
-fi
+printf '%s' "$CLAUDE_CODE_EXTRA_BODY" > "$INTERACTIVE_SAFEGUARD_BODY"
 printf '%s' "$ANTHROPIC_BETAS" > "$INTERACTIVE_SAFEGUARD_BETA"
 cat >/dev/null
 printf '%s\n' '{"type":"assistant","uuid":"sg-row","session_id":"inner-sg","message":{"id":"m-sg","model":"claude-haiku-4-5","content":[{"type":"text","text":"SAFEGUARD_OK"}]}}'

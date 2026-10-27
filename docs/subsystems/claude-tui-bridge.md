@@ -145,28 +145,19 @@ preserve signed assistant thinking and opaque Anthropic `redacted_thinking`
 blocks too (`tuiRuntimeAppendClaudeTranscript`). Messages clients can return
 those blocks unchanged to an Anthropic provider.
 
-## Safeguards and `EXTRA_BODY`
+## Safeguards size limit
 
-Auto-mode `safeguards` can be large (classifier context). Linux caps each
-process environment string at about 128 KiB (`MAX_ARG_STRLEN`), so the
-interactive transport does **not** put marshaled `CLAUDE_CODE_EXTRA_BODY`
-on the Bun wrapper's exec environment. It writes the JSON to
-`<run-tmp>/extra-body.json` and sets `CLAUDE_CODE_EXTRA_BODY_FILE` to that
-path (plus `ANTHROPIC_BETAS` when needed). The embedded wrapper then:
+Interactive runs pass safeguards through `CLAUDE_CODE_EXTRA_BODY` in the
+process environment. The serialized extra-body JSON is limited to 64 KiB,
+measured in bytes, not characters. Larger bodies are unsupported and rejected
+with the actual size and limit before starting the wrapper or Claude. The
+same guard covers first turns, history rebuilds, persisted resumes and live
+safeguards updates. Safeguards are never truncated or silently omitted.
 
-- **Node launcher Claude** (`#!/usr/bin/env node` script): launches with
-  `node -r` and a run-local preload that reads the file into
-  `process.env` inside the Claude process, so no exec hop passes a string
-  above `MAX_ARG_STRLEN` (any size up to the transport max).
-- **Native ELF Claude** (current AU installs): reads the file in the
-  wrapper and passes inline `CLAUDE_CODE_EXTRA_BODY` on the tmux child
-  only when the marshaled body is at most 120 KiB; larger payloads fail
-  with an explicit error before the PTY starts (native Claude does not
-  implement `CLAUDE_CODE_EXTRA_BODY_FILE`).
-
-Mid-turn updates still use `apply_flag_settings` over the control channel
-(stdin), not exec env. Client tools and JSON Schema already use run-local
-files the same way.
+There is no Node launcher, preload, file-to-environment workaround or outbound
+request rewriting layer. Settings-file and runtime environment injection can
+avoid the initial exec limit but still break Claude's child-process launches.
+Claude continues to construct and send its own upstream requests.
 
 ## The wrapper
 
