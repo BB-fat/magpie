@@ -239,6 +239,7 @@ choice controls both the launch flag and work-directory settings.
 Kept from the plugin (`claude_tui_runtime_claude_lite.go`): tool results
 go on in the live run that shows their calls, else in the parked session
 copied up to the calls (`liteParkedBranch`, its runs found by call id), else
+in a copy of the session of a run that went past their round (below), else
 from a cut point (below), else from the conversation's checkpoint
 (`restoreInteractiveSession`), else in a session rebuilt from the request's
 history (`tuiRuntimeLiteSeed`), with its tools. Tool results that don't
@@ -257,6 +258,33 @@ it (`letGoAbandonedRuns`): a run started for this same request whose client
 left, or a run parked on calls the request's history holds but does not
 answer. A run parked on calls of another branch is left for that branch's
 results.
+
+### A round the run went past
+
+A request can go on from a tool round of a run that has since made more
+calls: the client kept the round's calls and results, then something else
+came. Codex does this when the user steers mid-turn: it drops the call the
+run went on to make, and sends the round's results with what the user said.
+`noteLiteParked` keeps each round a conversation's run parked on, by its
+calls' ids, in `liteRounds`, for `tuiRuntimeClaudeCacheTTL` (an hour) from
+when it was made, whatever the run does after; a run keeps the keys of the
+histories it was told (`heard`, `toldKeys`, the latest 256). `liteEarlierRound`
+copies the run's session up to the round's calls, appends the results and
+`liteResultsReceived` (`tuiRuntimeLiteBranchTranscript`), and resumes the
+copy with what came after them (`liteContinueText` when nothing did). The
+run is left as it is: its own calls may still be answered.
+
+It does so only when the results answer every call of the round; the run
+was told this very history up to them (`wasTold`: the round's reply and
+its calls included, budget notices aside as `follows` allows); its owner,
+model and context (`interactiveEquivalentContext`) are the request's, in
+the request's mode (lean or not: a new turn after the setting changed is
+rebuilt); the run no longer waits on those calls (that is
+`liteParkedBranch`'s case); and the session's reply that made them made
+no other call (a held tool's included). Otherwise the turn goes on as
+before: a cut point, the checkpoint or a rebuild. On au-exit (10-28) a
+steer rebuilt a 44k conversation, writing 22k of it to the cache again; on
+a 280k one a rebuild writes nearly all of it.
 
 ### Cut points
 
@@ -297,7 +325,8 @@ A turn with images, or one going on from the checkpoint or a parked copy,
 is not held.
 
 Limits: points are made at complete replies only; a reply that called tools
-is found by call id in memory (`liteParkedBranch`) and not after a restart.
+is found by call id in memory (`liteParkedBranch`, and `liteEarlierRound`
+for an hour after its round) and not after a restart.
 Each fork is a copy of its transcript's rows; nothing removes interactive
 transcripts yet. With the opt-in durable tool journal
 (`MAGPIE_CLAUDE_DURABLE_TOOL_JOURNAL=1`), the native lease is still one per

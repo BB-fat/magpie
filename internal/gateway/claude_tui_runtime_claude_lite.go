@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -491,6 +492,13 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 			copied.resumedCopy, copied.workKey = true, work
 			return b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
 		}
+		if id, prompt, images, work, ok := b.liteEarlierRound(owner, model, configDir, req); ok {
+			log.Printf("Claude interactive forking the native session at the tool round the request goes on from")
+			b.anchorOuterThread(owner, outerSession, req)
+			copied := *req
+			copied.resumedCopy, copied.workKey = true, work
+			return b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
+		}
 		point, pointSince, havePoint := tuiRuntimeInteractivePoint{}, []Message(nil), false
 		if tuiRuntimeClaudeDesktopTurnCompanionSuffix(req) == nil {
 			point, pointSince, havePoint = tuiRuntimeFindInteractivePoint(owner, outerSession, model, req)
@@ -664,7 +672,8 @@ func tuiRuntimeLiteTurnPrompt(req *tuiRuntimeRequest, turn []Message) (string, m
 }
 
 // noteLiteParked keeps r, a run now waiting on its tool calls, under each
-// of their ids for liteParkedBranch.
+// of their ids for liteParkedBranch, and the round they make for
+// liteEarlierRound.
 func (b *tuiRuntimeSubscriptionBridge) noteLiteParked(r *tuiRuntimeSubscriptionRun) {
 	if b == nil || !r.interactive || r.outerSession == "" {
 		return
@@ -691,6 +700,100 @@ func (b *tuiRuntimeSubscriptionBridge) noteLiteParked(r *tuiRuntimeSubscriptionR
 	for _, id := range ids {
 		b.liteParked[id] = r
 	}
+	if b.liteRounds == nil {
+		b.liteRounds = make(map[string]tuiRuntimeLiteRound)
+	}
+	now := time.Now()
+	for k, old := range b.liteRounds {
+		if now.Sub(old.at) > tuiRuntimeClaudeCacheTTL {
+			delete(b.liteRounds, k)
+		}
+	}
+	for _, id := range ids {
+		b.liteRounds[id] = tuiRuntimeLiteRound{run: r, calls: ids, at: now}
+	}
+}
+
+// liteRound is a tool round a run parked on: the client's calls of its
+// reply, and when the run made them.
+type tuiRuntimeLiteRound struct {
+	run   *tuiRuntimeSubscriptionRun
+	calls []string
+	at    time.Time
+}
+
+// liteEarlierRound serves a request that goes on from a tool round a run
+// made and has since gone past: the client kept the round's calls and
+// results, then something else came, as when the user steers mid-turn and
+// the client drops the call the run went on to make. The run's session is
+// copied up to the round's calls, the results appended and the copy
+// resumed with what came after them, so Anthropic is asked a prefix it has
+// cached where a rebuild (liteSeed) writes the whole conversation again
+// (au-exit 10-28: a steer wrote 22k of a 44k conversation again). The run
+// is left as it is: its own calls may still be answered. It reports false
+// unless the results answer the round's calls, all of them, and the run
+// was told this very history up to them (the reply's calls included), with
+// the request's context and in its mode.
+func (b *tuiRuntimeSubscriptionBridge) liteEarlierRound(owner, model, configDir string, req *tuiRuntimeRequest) (string, string, map[string]Part, string, bool) {
+	k, results, turn := tuiRuntimeLiteTail(req.Messages)
+	answered := map[string]bool{}
+	for _, m := range results {
+		for _, p := range m.Parts {
+			answered[p.CallID] = true
+		}
+	}
+	if len(answered) == 0 {
+		return "", "", nil, "", false
+	}
+	var round tuiRuntimeLiteRound
+	b.mu.Lock()
+	for id := range answered {
+		if r, ok := b.liteRounds[id]; ok && time.Since(r.at) <= tuiRuntimeClaudeCacheTTL {
+			round = r
+			break
+		}
+	}
+	b.mu.Unlock()
+	run := round.run
+	if run == nil || len(round.calls) != len(answered) {
+		return "", "", nil, "", false
+	}
+	for _, id := range round.calls {
+		if !answered[id] {
+			return "", "", nil, "", false
+		}
+	}
+	run.mu.Lock()
+	sid, runModel, work, runOwner, snapshot := run.sessionID, run.model, run.workKey, run.owner, run.interactiveContextSnapshot
+	// still waiting on these very calls: liteParkedBranch takes or refuses them
+	waiting := false
+	for _, c := range run.shown {
+		waiting = waiting || answered[c.id]
+	}
+	run.mu.Unlock()
+	if waiting || sid == "" || runOwner != owner || runModel != model || work == "" ||
+		snapshot == nil || snapshot.lean != req.leanPrompt || !run.interactiveEquivalentContext(req) ||
+		!run.wasTold(append(slices.Clone(req.Messages[:k]), results...)) {
+		return "", "", nil, "", false
+	}
+	dir, err := tuiRuntimeInteractiveWorkDirForKey(work)
+	if err != nil {
+		return "", "", nil, "", false
+	}
+	if !tuiRuntimeHasUserText(turn) {
+		turn = append(turn, Message{Role: "user", Parts: []Part{{Kind: Text, Text: tuiRuntimeLiteContinueText}}})
+	}
+	prompt, images, err := tuiRuntimeRenderInteractiveTurnPromptWithImages(turn)
+	if err != nil {
+		return "", "", nil, "", false
+	}
+	prompt = tuiRuntimeRenderInteractiveTurnConstraint(req) + prompt
+	id, err := tuiRuntimeLiteBranchTranscript(dir, configDir, model, sid, round.calls, results, true)
+	if err != nil {
+		log.Printf("Claude interactive could not fork the native session at the tool round the request goes on from: %v", err)
+		return "", "", nil, "", false
+	}
+	return id, prompt, images, work, true
 }
 
 // liteParkedBranch serves the results of a run's tool calls that the live
@@ -760,7 +863,7 @@ func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, mod
 		return "", "", nil, "", false
 	}
 	prompt = tuiRuntimeRenderInteractiveTurnConstraint(req) + prompt
-	id, err := tuiRuntimeLiteBranchTranscript(dir, configDir, model, sid, calls, results)
+	id, err := tuiRuntimeLiteBranchTranscript(dir, configDir, model, sid, calls, results, false)
 	if err != nil {
 		log.Printf("Claude interactive could not resume the conversation's own session with its tool results: %v", err)
 		return "", "", nil, "", false
@@ -771,8 +874,10 @@ func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, mod
 // liteBranchTranscript copies session sid's rows up to the last of its
 // assistant rows calling calls, byte for byte but for the session id, then
 // appends results and liteResultsReceived. What the session wrote after the
-// calls (an interruption, as its run was let go) is left out.
-func tuiRuntimeLiteBranchTranscript(work, configDir, model, sid string, calls []string, results []Message) (string, error) {
+// calls (an interruption, as its run was let go, or the rounds it went on
+// to) is left out. With whole, the reply that row ends makes those calls and
+// no other, so the copy holds no call left unanswered.
+func tuiRuntimeLiteBranchTranscript(work, configDir, model, sid string, calls []string, results []Message, whole bool) (string, error) {
 	data, dir, err := tuiRuntimeReadTranscript(configDir, work, sid)
 	if err != nil {
 		return "", err
@@ -782,12 +887,14 @@ func tuiRuntimeLiteBranchTranscript(work, configDir, model, sid string, calls []
 		want[c] = true
 	}
 	lines := bytes.SplitAfter(data, []byte("\n"))
-	cut, parent, found := -1, "", map[string]bool{}
+	cut, parent, found, reply := -1, "", map[string]bool{}, ""
+	replyCalls := map[string]map[string]bool{} // each reply's calls, by its message id
 	for i, line := range lines {
 		var row struct {
 			Type    string
 			UUID    string
 			Message struct {
+				ID      string
 				Content []struct{ Type, ID string }
 			}
 		}
@@ -795,14 +902,23 @@ func tuiRuntimeLiteBranchTranscript(work, configDir, model, sid string, calls []
 			continue
 		}
 		for _, c := range row.Message.Content {
+			if c.Type == "tool_use" && row.Message.ID != "" {
+				if replyCalls[row.Message.ID] == nil {
+					replyCalls[row.Message.ID] = map[string]bool{}
+				}
+				replyCalls[row.Message.ID][c.ID] = true
+			}
 			if c.Type == "tool_use" && want[c.ID] {
 				found[c.ID] = true
-				cut, parent = i, row.UUID
+				cut, parent, reply = i, row.UUID, row.Message.ID
 			}
 		}
 	}
 	if cut < 0 || parent == "" || len(found) != len(want) {
 		return "", fmt.Errorf("session %s does not hold the calls", sid)
+	}
+	if whole && (reply == "" || !maps.Equal(replyCalls[reply], want)) {
+		return "", fmt.Errorf("session %s's reply makes other calls than the round's", sid)
 	}
 	id, f, err := tuiRuntimeCopyTranscript(dir, sid, lines[:cut+1])
 	if err != nil {

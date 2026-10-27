@@ -111,6 +111,12 @@ type tuiRuntimeSubscriptionBridge struct {
 	// when the live run does not take their results, its session is where
 	// they resume (liteParkedBranch).
 	liteParked map[string]*tuiRuntimeSubscriptionRun
+	// liteRounds is each tool round a conversation's run parked on, by its
+	// calls' ids, kept for Anthropic's cache hour from when the round was
+	// made, whatever the run did since: a request that goes on from that
+	// round after the run went past it is resumed in a copy of the run's
+	// session up to it (liteEarlierRound).
+	liteRounds map[string]tuiRuntimeLiteRound
 	// liteInFlight holds the replay key of each lite request being served,
 	// closed when it is done: the same request again waits for it
 	// (enterLiteTurn). Other requests of a conversation run beside it.
@@ -339,6 +345,11 @@ type tuiRuntimeSubscriptionRun struct {
 	// budget notice. Those counters change while an MCP tool is running,
 	// without any edit to the user's conversation or tool ownership.
 	toldWithoutBudgetNotices string
+	// toldKeys is every conversation the run was told (historyKey, and
+	// without budget notices), the latest tuiRuntimeToldKeysMost: the
+	// histories a copy of its session up to an earlier tool round holds
+	// (liteEarlierRound).
+	toldKeys []string
 	// Narrow PTY exception: an already-completed historical tool_result
 	// may have its output truncated by Desktop. The fingerprint preserves
 	// every other field, especially user/system text, invocation arguments,
@@ -1687,7 +1698,30 @@ func (r *tuiRuntimeSubscriptionRun) heard(msgs []Message) {
 	r.priorResultShapeDigest = resultShape
 	r.priorResultShapeCount = resultShapeCount
 	r.heardHistory = diagnostic
+	if r.interactive {
+		r.toldKeys = append(r.toldKeys, key)
+		if stable != key {
+			r.toldKeys = append(r.toldKeys, stable)
+		}
+		if n := len(r.toldKeys); n > tuiRuntimeToldKeysMost {
+			r.toldKeys = slices.Clone(r.toldKeys[n-tuiRuntimeToldKeysMost:])
+		}
+	}
 	r.mu.Unlock()
+}
+
+// toldKeysMost bounds the histories a run keeps the keys of: 128 requests
+// back at least, past which a copy of its session is not looked for.
+const tuiRuntimeToldKeysMost = 256
+
+// wasTold says the run was told msgs whole in one of its requests, its
+// budget notices aside as follows allows: its session holds that history.
+func (r *tuiRuntimeSubscriptionRun) wasTold(msgs []Message) bool {
+	key := tuiRuntimeHistoryKey(msgs)
+	stable := tuiRuntimeHistoryKey(tuiRuntimeWithoutDynamicTokenBudgetNotices(msgs))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Contains(r.toldKeys, key) || slices.Contains(r.toldKeys, stable)
 }
 
 // follows says msgs go on from the conversation the run last heard: that
