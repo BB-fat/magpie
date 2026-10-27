@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -246,5 +248,116 @@ func TestClaudeTUILeanPromptKeys(t *testing.T) {
 	}
 	if got := tuiRuntimeTurnKey("o", req, req.Messages); got != "bf8848d2aedac6f41acbe5c5c2d42e4b17b582189e3070c225e878a4ce8b8f0d" {
 		t.Errorf("turn key of a run not lean changed: %s", got)
+	}
+}
+
+// A run waiting on a tool's result when the setting changes finishes its
+// turn in the mode it was started in: the result is its own, by its call's
+// id, and the setting is not "settings changed while a PTY tool was running"
+// (409, the turn lost), nor a reason to let the run go and branch its
+// session. Its checkpoint keeps that mode, so the conversation's next turn
+// is rebuilt in the new one. Both the gateway's path (serveLite) and the
+// handler under it (serveMessagesInner) are held to it.
+func TestClaudeTUILeanPromptChangeKeepsARunningToolTurn(t *testing.T) {
+	for _, path := range []string{"lite", "inner"} {
+		for _, from := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s-from-lean-%t", path, from), func(t *testing.T) {
+				tuiLeanToolTurnAcrossTheSetting(t, path, from)
+			})
+		}
+	}
+}
+
+func tuiLeanToolTurnAcrossTheSetting(t *testing.T, path string, from bool) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
+	release := filepath.Join(dir, "tool-result-received")
+	wrapper := filepath.Join(dir, "mock-pty")
+	data := `#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"type":"assistant","uuid":"tool-row","session_id":"inner-L","message":{"id":"first","model":"claude-haiku-4-5","usage":{"input_tokens":11},"content":[{"type":"tool_use","id":"call_1","name":"mcp__magpie__echo_test","input":{"text":"HELLO"}}]}}'
+for i in $(seq 1 200); do
+  if [ -f "$LEAN_TEST_RELEASE" ]; then break; fi
+  sleep 0.05
+done
+if [ ! -f "$LEAN_TEST_RELEASE" ]; then exit 9; fi
+printf '%s\n' '{"type":"assistant","uuid":"answer-row","session_id":"inner-L","message":{"id":"second","model":"claude-haiku-4-5","usage":{"input_tokens":4,"output_tokens":5},"content":[{"type":"text","text":"LEAN_TOOL_TURN_OK"}]}}'
+printf '%s\n' '{"type":"result","session_id":"inner-L","stop_reason":"end_turn"}'
+`
+	if err := os.WriteFile(wrapper, []byte(data), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tuiRuntimeSetWrapper(t, wrapper)
+	t.Setenv("LEAN_TEST_RELEASE", release)
+	lean := from
+	old := tuiRuntimeSettings
+	cfg := *old
+	cfg.LeanPrompt = func() bool { return lean }
+	tuiRuntimeSettings = &cfg
+	t.Cleanup(func() { tuiRuntimeSettings = old })
+
+	s := tuiRuntimeNewTestServer()
+	owner, outer, model := "owner-L", "outer-L", "claude-haiku-4-5"
+	if path == "lite" {
+		owner = tuiRuntimeTestOwner
+	}
+	start := func(ctx context.Context, req *tuiRuntimeRequest) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+		return s.subscription.startInteractiveOneTurn(ctx, req, model, "", owner, outer)
+	}
+	post := func(body string) (int, string, string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+		var code int
+		var msg string
+		if path == "lite" {
+			code, msg = s.rt.serveMessages(rec, r, model, outer, []byte(body), &Usage{})
+		} else {
+			code, msg = s.serveSubscription(rec, r, protoAnthropic, "Claude Code", model, owner, []byte(body), &Usage{}, start)
+		}
+		return code, msg, rec.Body.String()
+	}
+	first := `{"model":"claude-haiku-4-5","max_tokens":100,"system":"RULES","tools":[{"name":"echo_test","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"Call echo_test."}]}`
+	if code, msg, body := post(first); code != 200 || !strings.Contains(body, `"id":"call_1"`) {
+		t.Fatalf("first turn did not yield the call: %d %s %s", code, msg, body)
+	}
+	var run *tuiRuntimeSubscriptionRun
+	s.subscription.mu.Lock()
+	for _, r := range s.subscription.runs {
+		run = r
+	}
+	s.subscription.mu.Unlock()
+	if run == nil {
+		t.Fatal("no run")
+	}
+	defer run.abort()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /cb/{token}", s.subscription.mcpCall)
+	go func() {
+		body := `{"tool_call_id":"call_1","name":"echo_test","arguments":{"text":"HELLO"}}`
+		mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/cb/"+run.token, strings.NewReader(body)))
+		_ = os.WriteFile(release, []byte("ok"), 0o600)
+	}()
+	waitFor(t, "the MCP callback registers its call", func() bool {
+		s.subscription.mu.Lock()
+		defer s.subscription.mu.Unlock()
+		return s.subscription.calls["call_1"] == run
+	})
+
+	lean = !from // the user turns the setting over while the tool runs
+	second := `{"model":"claude-haiku-4-5","max_tokens":100,"system":"RULES","tools":[{"name":"echo_test","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"Call echo_test."},{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"echo_test","input":{"text":"HELLO"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"HELLO"}]}]}`
+	if code, msg, body := post(second); code != 200 || !strings.Contains(body, "LEAN_TOOL_TURN_OK") {
+		t.Fatalf("the running tool turn was lost when the setting changed: %d %s %s", code, msg, body)
+	}
+	select {
+	case <-run.interactiveDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("wrapper did not exit")
+	}
+	saved, ok := s.subscription.interactiveSession(owner, outer)
+	asStarted := &tuiRuntimeRequest{Request: Request{System: "RULES"}}
+	asStarted.leanPrompt = from
+	if !ok || saved.Dirty || saved.SessionID != "inner-L" || saved.InstructionKey != tuiRuntimeInstructionKey(asStarted) {
+		t.Fatalf("checkpoint not kept in the run's own mode: %#v, %v", saved, ok)
 	}
 }
