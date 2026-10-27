@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/routes"
 	"github.com/yetone/magpie/internal/usage"
@@ -215,12 +216,30 @@ var (
 	// exceeded", "reached"): as magpie words an upstream error, with
 	// "rate_limit_error" for its type, every such 429 was, and rested a
 	// quarter of an hour rather than a minute (#153).
-	rateWords = regexp.MustCompile(`(?i)rate.?limit|too many requests|per.?(second|sec|minute|min)\b|\b[rt]pm\b|频率|太频繁`)
+	// "Frequency limit" is the English of 频率 (zoecats on Discord).
+	rateWords = regexp.MustCompile(`(?i)rate.?limit|frequency.?limit|too many requests|per.?(second|sec|minute|min)\b|\b[rt]pm\b|频率|太频繁`)
 	// plannedWords: a 429 that says the plan's own allowance is used, rate
 	// words or not — a day's free requests, say, or a sub2api key's own
 	// 5-hour, day or 7-day limit ("api key 7天限额已用完", sent as
 	// rate_limit_exceeded).
 	plannedWords = regexp.MustCompile(`(?i)quota|usage.?limit|hit your .*limit|limit.{0,24}resets|per.?(day|week|month)|daily|weekly|monthly|额度|用量|套餐|限额已用完`)
+	// minuteWords: a 429 that names a window of a minute or less, or the
+	// rate itself — tokens or requests per minute, TPM, RPM — which some
+	// vendors call a quota all the same: Gemini's "You exceeded your
+	// current quota … quotaId GenerateContentPaidTierInputTokensPerModel
+	// PerMinute … Please retry in 33s", Vertex's "Quota exceeded for
+	// …requests_per_minute_per_project…", Azure's "exceeded token rate
+	// limit". Read as a used-up plan, each rested the quarter of an hour
+	// of a quota that says nothing of when, with balance left
+	// (monater.114514 on Discord). A longer window named beside it
+	// (longWords) is still the plan's.
+	minuteWords = regexp.MustCompile(`(?i)per.?(second|minute)|per.?(sec|min)\b|\b[rt]p[ms]\b|(token|call|request) rate limit|每分钟|每秒`)
+	// longWords: a window longer than a minute, or a plan's own limit,
+	// named in a 429 — what minuteWords' rate limit is not.
+	longWords = regexp.MustCompile(`(?i)usage.?limit|hit your .*limit|limit.{0,24}resets|per.?(hour|day|week|month)|\bhours?\b|hourly|daily|weekly|monthly|\b[rt]p[dh]\b|额度已用|用量|套餐|限额已用完|小时|每天|每日|每周|每月`)
+	// urlWords: a link in an error, whose words are its path, not what the
+	// vendor said: Azure's rate limit points to aka.ms/oai/quotaincrease
+	urlWords = regexp.MustCompile(`https?://\S+`)
 	// resetsWords: Claude Code's "usage limit reached|<when it resets>".
 	resetsWords = regexp.MustCompile(`(?i)limit reached\|(\d{10})\b`)
 	// resetsWhen: a 429 that says in words when the account is back, as
@@ -338,38 +357,9 @@ const reloopedError = "the model's reasoning was stuck in a loop before it said 
 // over HTTP (proxyconnect) or SOCKS (socks connect).
 var proxyDown = regexp.MustCompile(`proxyconnect |socks connect `)
 
-// wordsOf is an error body as its words are matched: a JSON body that
-// escapes what isn't ASCII as \uXXXX (Python's json.dumps does by default)
-// has its strings decoded and put after it, one to a line, so "用量",
-// "频率" or "将在 … 重置" are read whether the vendor escaped them or not
-// (#1669). Any other body is matched as it is.
-func wordsOf(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`\u`)) {
-		return body
-	}
-	var v any
-	if json.Unmarshal(body, &v) != nil {
-		return body
-	}
-	out := append([]byte(nil), body...)
-	var walk func(any)
-	walk = func(x any) {
-		switch x := x.(type) {
-		case string:
-			out = append(append(out, '\n'), x...)
-		case map[string]any:
-			for _, y := range x {
-				walk(y)
-			}
-		case []any:
-			for _, y := range x {
-				walk(y)
-			}
-		}
-	}
-	walk(v)
-	return out
-}
+// wordsOf is catalog.Words: an error body as its words are matched, with
+// the strings of a JSON body that escapes what isn't ASCII decoded (#1669).
+func wordsOf(body []byte) []byte { return catalog.Words(body) }
 
 // failure says why a reply failed.
 func failure(status int, body []byte) string {
@@ -403,7 +393,20 @@ func failure(status int, body []byte) string {
 		// English one as a rate limit, and each rested its own fallback
 		// (#1669)
 		return failQuota
-	case status == 429 && rateWords.Match(body) && !plannedWords.Match(body):
+	case status == 429 && minuteLimit(body):
+		// a limit per minute, whatever it calls itself: back in a
+		// minute, not a plan used up (minuteWords)
+		return failRate
+	case status == 429 && !creditWords.Match(body) && backSoon(body):
+		// back within a wait a provider's patience can cover, as it says
+		// itself, whatever else it says: a LAN aggregator's "Usage has
+		// exceeded the frequency limit. … Your usage limit for the
+		// original model will reset in 1 minutes." read as a plan used up
+		// ("usage limit") and went to the agent at once, never waited
+		// for (zoecats on Discord). A limit that says it is back in
+		// hours stays out of quota below
+		return failRate
+	case status == 429 && rateWords.Match(body) && !plannedWords.Match(urlWords.ReplaceAll(body, nil)):
 		return failRate
 	case status >= 500 && quotaCodes.Match(body), status < 500 && usedUpWords.Match(body), status == 429 && plannedWords.Match(body):
 		return failQuota
@@ -411,6 +414,41 @@ func failure(status int, body []byte) string {
 		return failRate
 	}
 	return failOther
+}
+
+// minuteLimit says a 429's words name a limit per minute or less
+// (minuteWords), and nothing longer or spent beside it: no longer window
+// (longWords), no balance spent (brokeWords, insufficient_quota). Words
+// in a link don't count.
+func minuteLimit(body []byte) bool {
+	body = urlWords.ReplaceAll(body, nil)
+	return minuteWords.Match(body) && !longWords.Match(body) && !brokeWords.Match(body) && !bytes.Contains(body, []byte("insufficient_quota"))
+}
+
+// dashScopeTokenRate: DashScope's (Model Studio's) 429 for the tokens
+// per minute or second its account is allowed, which it words as a
+// quota: Throttling.AllocationQuota "Allocated quota exceeded, please
+// increase your quota limit.", or in OpenAI's shape insufficient_quota
+// "You exceeded your current quota, please check your plan and billing
+// details." — both "超出TPM/TPS限制" in its error-code list
+// (help.aliyun.com/zh/model-studio/error-code). Its free allowance used
+// up ("Free allocated quota exceeded."), its Coding Plan's hour, week or
+// month ("hour allocated quota exceeded") and arrears (400 Arrearage) are
+// worded otherwise. OpenAI's own insufficient_quota is out of credit, so
+// this is DashScope's alone.
+var dashScopeTokenRate = regexp.MustCompile(`Allocated quota exceeded, please increase your quota limit|"(?:code|type)"\s*:\s*"insufficient_quota"`)
+
+// dashScopeRate says p is DashScope and its 429 is a rate per minute or
+// second (dashScopeTokenRate), not its free allowance or a plan's window.
+func dashScopeRate(p provider.Provider, status int, body []byte) bool {
+	if status != http.StatusTooManyRequests || !dashScope(p) {
+		return false
+	}
+	w := wordsOf(body)
+	if bytes.Contains(bytes.ToLower(w), []byte("free allocated quota")) || longWords.Match(urlWords.ReplaceAll(w, nil)) {
+		return false
+	}
+	return dashScopeTokenRate.Match(w)
 }
 
 // failureOf says why c's reply failed: a Claude account's sign-in that
@@ -427,6 +465,9 @@ func failureOf(c candidate, status int, body []byte) string {
 	}
 	if restrictedRefused(c.p, status, body) {
 		return failRestricted
+	}
+	if dashScopeRate(c.p, status, body) {
+		return failRate
 	}
 	return failure(status, body)
 }
@@ -646,7 +687,7 @@ func (s *Server) UnrestAll(key string) int {
 	}
 	liftedLocked(key, now)
 	restingUntil.Unlock()
-	unsink(key)
+	unsinkAll(key)
 	s.trace.lifted()
 	return n
 }
@@ -796,7 +837,7 @@ var resetsInWords = regexp.MustCompile(`(?i)\bresets? in (?:(\d+)\s*d(?:ays?)?\b
 var quotaResetAfter = regexp.MustCompile(`(?i)\bquota will reset after ((?:\d+h)?(?:\d+m)?(?:\d+(?:\.\d+)?s)?)`)
 
 // resetsAfter is how long the refusal says until it is back
-// (resetsInWords, quotaResetAfter), held to longestWritten. Zero when it
+// (resetsInWords, quotaResetAfter, soonWords), held to longestWritten. Zero when it
 // doesn't say.
 func resetsAfter(body []byte) time.Duration {
 	body = wordsOf(body)
@@ -808,7 +849,52 @@ func resetsAfter(body []byte) time.Duration {
 			return d
 		}
 	}
-	return 0
+	return soonWritten(body)
+}
+
+// soonWords: a refusal that says in seconds, or in Chinese minutes, how
+// long until it is back: "try again in 30 seconds", "retry after 20s",
+// "resets in 45 secs", "请 1 分钟后重试", "30秒后再试". The English minutes,
+// hours and days are resetsInWords' and tryAgainIn's.
+var soonWords = regexp.MustCompile(`(?i)\b(?:resets? (?:in|after)|try again in|retry (?:in|after))\s*(\d+(?:\.\d+)?)\s*(?:s|secs?|seconds?)\b|(\d+)\s*(秒|分钟)钟?\s*(?:之?后)`)
+
+// soonest is the longest a refusal may say it is back in for a 429 to be
+// a rate limit waited out, not a plan used up: as long as a provider's
+// patience can be set to wait (provider.PatienceLongest).
+const soonest = time.Duration(provider.PatienceLongest) * time.Second
+
+// soonWritten is the seconds, or Chinese minutes, a refusal says until it
+// is back (soonWords). Zero when it doesn't say.
+func soonWritten(body []byte) time.Duration {
+	m := soonWords.FindSubmatch(body)
+	switch {
+	case m == nil:
+		return 0
+	case len(m[1]) > 0:
+		n, _ := strconv.ParseFloat(string(m[1]), 64)
+		return time.Duration(n * float64(time.Second))
+	}
+	n, _ := strconv.Atoi(string(m[2]))
+	if string(m[3]) == "分钟" {
+		return time.Duration(n) * time.Minute
+	}
+	return time.Duration(n) * time.Second
+}
+
+// backIn is how long a refusal says in words until it is back: resetsAfter,
+// or a "try again in" (tryAgainIn). Zero when it doesn't say.
+func backIn(body []byte) time.Duration {
+	body = wordsOf(body)
+	if d := resetsAfter(body); d > 0 {
+		return d
+	}
+	return spanWritten(tryAgainIn.FindSubmatch(body))
+}
+
+// backSoon says a refusal says it is back within soonest.
+func backSoon(body []byte) bool {
+	d := backIn(body)
+	return d > 0 && d <= soonest
 }
 
 // clineModelLimited says c, a provider whose requests reach Cline's API,
@@ -1028,7 +1114,15 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		d, r.By, r.Failures = s.rateRest(c, header, body, sharedPool, now)
 		// rate limited with quota left: to the back, where the order sinks
 		if c.full(now).IsZero() && !(c.isOpenRouterFree() && sharedPool) {
-			sink(c.restKey(), now)
+			// a remote magpie's rest is the model's alone (caa53673, the
+			// key's own limit apart): the sink keeps the same scope, or
+			// one model's 429 would send the remote's other models, never
+			// limited, behind the others too
+			if remoteModelRest(c, failRate, header) {
+				sink(c.restID(), now)
+			} else {
+				sink(c.restKey(), now)
+			}
 		}
 	case failRestricted:
 		// out until the vendor lifts it: an appeal, not a wait (#1849)
@@ -1127,6 +1221,11 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 	if why == failQuota && clineModelLimited(c, body) {
 		id = c.restID()
 	}
+	// a ZCode Start Plan trial entry ended or spent is that entry's: the
+	// account's GLM Coding Plan models still answer (#3661)
+	if why == failQuota && zcodeTrialRefused(c, status, body) {
+		id = c.restID()
+	}
 	// out of credit, or of a quota, on a model that costs credits where
 	// the subscription serves other models free is that model's: the free
 	// ones draw on no credits, and the account still serves them (Creat.wu
@@ -1177,9 +1276,14 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 // the refusal is read whoever answered). Its key refused, or the computer
 // unreachable, still rests it whole, and so does the key's own limit there
 // (keyLimited's 429, with remoteKeyLimitHeader), which refuses every model
-// alike (#2077).
+// alike (#2077). A magpie added by hand, as an OpenAI-compatible provider
+// of its own name, is one all the same: its reply names the provider that
+// answered there (providerHeader, which keepRetry notes as
+// answeredThereHeader), as no vendor's does (lagrangepoint1813
+// on Discord: "Remote Magpie: Claude Code: You've hit your session
+// limit" answered every model of it for the five hours it named).
 func remoteModelRest(c candidate, why string, header http.Header) bool {
-	if !c.p.IsRemoteMagpie() || header.Get(remoteKeyLimitHeader) != "" {
+	if !c.p.IsRemoteMagpie() && header.Get(answeredThereHeader) == "" || header.Get(remoteKeyLimitHeader) != "" || header.Get(keyLimitThereHeader) != "" {
 		return false
 	}
 	return why == failQuota || why == failCredit || why == failRate || why == failRestricted || why == failVerify
@@ -1357,6 +1461,21 @@ func keepRetry(dst, src http.Header, body []byte) {
 			dst.Set("Retry-After", strconv.Itoa(int(d.Seconds())))
 		}
 	}
+	if src.Get(remoteKeyLimitHeader) != "" {
+		// another magpie's gateway key is over its own limit: noted for
+		// restAfter, which rests that magpie whole (remoteModelRest), as
+		// the held try's header is all it reads (#2791, ggbdpq: the
+		// marker was left out, and the key's limit rested one model). A
+		// note, not the marker, so a magpie this one answers doesn't read
+		// another's key limit as this one's
+		dst.Set(keyLimitThereHeader, "1")
+	}
+	if who := src.Get(providerHeader); who != "" {
+		// another magpie refused it, naming its provider that did: this
+		// magpie's own name for the provider goes in the same header
+		// (noteMember), so it is noted beside it, for restAfter
+		dst.Set(answeredThereHeader, who)
+	}
 	if note, ok := policyRefusal(body); ok {
 		// the error the agent gets keeps the vendor's words but not its
 		// code (bio_policy): that it was the safety filter goes on beside
@@ -1369,6 +1488,23 @@ func keepRetry(dst, src http.Header, body []byte) {
 		dst.Set(zdrHeader, "1")
 	}
 }
+
+// keepRetryOut is keepRetry onto a reply that goes to the client as it
+// is, with no holdWriter to drop magpie's own notes.
+func keepRetryOut(dst, src http.Header, body []byte) {
+	keepRetry(dst, src, body)
+	dst.Del(answeredThereHeader)
+	dst.Del(keyLimitThereHeader)
+}
+
+// keyLimitThereHeader carries, from keepRetry to restAfter, that another
+// magpie refused with its gateway key's own limit (remoteKeyLimitHeader).
+const keyLimitThereHeader = "X-Magpie-Key-Limit-There"
+
+// answeredThereHeader carries, from keepRetry to restAfter, the provider
+// another magpie named on its refusal (providerHeader): the refusal is
+// that magpie's model's (remoteModelRest).
+const answeredThereHeader = "X-Magpie-Answered-There"
 
 // refusedHeader carries, from keepRetry to settle, that an error status
 // was the safety filter refusing the request, and what it said.
@@ -1445,6 +1581,11 @@ type weighing struct {
 	// free is each seat's model costing nothing there, by rest key: filled
 	// only when the routing weighs by it (routes.Strategy.ByFree)
 	free map[string]bool
+
+	// speed is each seat's speed lately, by restID (a group's heads can
+	// be two models on one key): filled only when the routing weighs by
+	// it (routes.Strategy.BySpeed)
+	speed map[string][2]float64
 }
 
 type allowanceKey struct {
@@ -1462,6 +1603,7 @@ type left struct {
 	// (Allowance.Fullest), zero when not known
 	fullest time.Time
 	soon    []time.Time // renews as Smart ranks them (Allowance.Renewal)
+	lapse   time.Time   // when the soonest of what is left is lost (Allowance.Lapse)
 	pace    float64     // weekly pace: share of its week left per hour until it renews
 	due     time.Time   // when the window that pace went by renews; zero when not known
 	// restarts: when an auto-used reset starts its windows again
@@ -1547,7 +1689,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 			pc, due := a.Pace(c.model, now)
 			amt, of, unit := a.Count(c.model, now)
 			rs := a.Restarts(now)
-			wg.lefts[c.allowanceKey()] = left{used: u, renews: r, fullest: a.Fullest(c.model, now), soon: a.Renewal(c.model, now), pace: pc, due: due, amount: amt, of: of, unit: unit,
+			wg.lefts[c.allowanceKey()] = left{used: u, renews: r, fullest: a.Fullest(c.model, now), soon: a.Renewal(c.model, now), lapse: a.Lapse(c.model, now), pace: pc, due: due, amount: amt, of: of, unit: unit,
 				restarts: rs, dueRestart: !rs.IsZero() && due.Equal(rs), credits: spendsCredits(c.p, a)} // one not known counts as unused
 		}
 	}
@@ -1569,7 +1711,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 			pace = provider.FreshPace
 		}
 		seats[i] = routes.Seat{Key: c.rest, Account: c.p.Account != nil, Known: known, Learns: learns(c, wg.lefts),
-			Used: l.used, Soon: l.soon, Pace: pace, Weight: keyWeight(c), Resting: resting(c), Tokens: routed.used[c.restKey()].now(now), Credits: l.credits}
+			Used: l.used, Soon: l.soon, Lapse: l.lapse, Pace: pace, Weight: keyWeight(c), Resting: resting(c), Tokens: routed.used[c.restKey()].now(now), Credits: l.credits}
 	}
 	routed.Unlock()
 	if st.ByUse {
@@ -1585,6 +1727,15 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 		for i, c := range cs {
 			free := c.p.FreeModel(c.model)
 			seats[i].Free, wg.free[c.rest] = free, free
+		}
+	}
+	if st.BySpeed {
+		// a map lookup each (speed.go): what was measured as answers
+		// ended, never the usage history
+		wg.speed = map[string][2]float64{}
+		for i, c := range cs {
+			seats[i].TTFT, seats[i].TPS = speedOf(c, now)
+			wg.speed[c.restID()] = [2]float64{seats[i].TTFT, seats[i].TPS}
 		}
 	}
 	order := routes.Apply(st, p.ID, seats)

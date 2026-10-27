@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync/atomic"
+	"time"
 
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/pii"
@@ -28,25 +30,67 @@ func options() redact.Options { return optionsCtx(context.Background()) }
 // optionsCtx is options with the model's wait ending with ctx.
 func optionsCtx(ctx context.Context) redact.Options {
 	st := settings.Shared()
-	o := redact.Options{Secrets: st.Redact, Personal: st.RedactPersonal, Kinds: st.RedactKinds, Words: st.RedactWords, WordsAnyCase: st.RedactWordsAnyCase, Rules: st.RedactRules,
+	o := redact.Options{Secrets: st.Redact, Personal: st.RedactPersonal, Kinds: st.RedactKinds, Words: st.RedactWords, WordsAnyCase: st.RedactWordsAnyCase, WordsWhole: st.RedactWordsWhole, Rules: st.RedactRules,
 		Actions: st.RedactActions, Allow: st.RedactAllow, Shape: st.RedactShape}
 	if st.RedactModel {
-		o.Model = model(ctx)
+		m := picked(st)
+		o.Model = model(ctx, m, pii.Threshold(st.RedactModelScore, m))
 	}
 	return o
 }
 
-// model is the local model (internal/pii) as redact's Model, waited for
-// until ctx ends. One that can't answer, or isn't waited for any longer,
-// panics, and the request is held back (gwmw.Safely) rather than sent
-// with only the rules' masking: the user asked for the model's.
-func model(ctx context.Context) redact.Model {
+// picked is the local model st has masking use; a var for tests. One
+// that is Privacy Filter only because no model was picked (pii.Choose)
+// starts AstrLink Guard's download, the default, and is moved onto it
+// once that is done.
+var picked = func(st settings.Settings) pii.Model {
+	id := pii.Choose(st.RedactModelName, true)
+	if st.RedactModelName == "" && id == pii.PrivacyFilter {
+		toGuard()
+	}
+	return pii.Of(id)
+}
+
+// guardTried is when toGuard last started a download, so a failed one is
+// tried again an hour later rather than on every request.
+var guardTried atomic.Int64
+
+// toGuard downloads AstrLink Guard, then saves it as the pick, unless the
+// user picked a model in between, and lets Privacy Filter go.
+func toGuard() {
+	now := time.Now().Unix()
+	if t := guardTried.Load(); t != 0 && now-t < 3600 || !guardTried.CompareAndSwap(t, now) {
+		return
+	}
+	g := pii.Of(pii.AstrLinkGuard)
+	g.Download(func() {
+		if settings.Load().RedactModelName == "" && settings.UseRedactModel(pii.AstrLinkGuard) == nil {
+			pii.Of(pii.PrivacyFilter).Stop()
+			g.Warm()
+		}
+	})
+}
+
+// model is the local model m (internal/pii) as redact's Model, waited for
+// until ctx ends, keeping what it is at least min sure of. One that can't
+// answer, or isn't waited for any longer, panics, and the request is held
+// back (gwmw.Safely) rather than sent with only the rules' masking: the
+// user asked for the model's.
+func model(ctx context.Context, m pii.Model, min float64) redact.Model {
 	return func(texts []string) [][]redact.Found {
-		got, err := pii.FindContext(ctx, texts)
+		got, err := m.Find(ctx, texts)
 		if err != nil {
 			panic(err)
 		}
-		return got
+		out := make([][]redact.Found, len(got))
+		for i, fs := range got {
+			for _, f := range fs {
+				if f.Score >= min {
+					out[i] = append(out[i], f)
+				}
+			}
+		}
+		return out
 	}
 }
 
@@ -56,7 +100,11 @@ func ModelOn() bool { return settings.Shared().RedactModel }
 // ModelBusy says what the local model is doing that a request may wait
 // on, for the error of one that waited too long: "" when nothing.
 func ModelBusy() string {
-	st := pii.Now()
+	st := settings.Shared()
+	return busy(picked(st).Now())
+}
+
+func busy(st pii.Status) string {
 	var what string
 	switch {
 	case st.Loading:

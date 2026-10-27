@@ -16,8 +16,10 @@ import (
 // been routed; Phase is said only when the gateway knows it: "slot" while
 // it waits in a key's or account's queue (MaxConcurrency), "rpm" while it
 // waits for room in the minute (MaxRPM), "upstream" while a try is out at
-// the vendor (the request sent, or its reply streaming). A request served
-// another way (a subscription bridge, a title helper) has none.
+// the vendor (the request sent, or its reply streaming), "redact" while
+// it is masked (noteRedacting: the rules, and the local model with its
+// wait for a turn). A request served another way (a subscription bridge,
+// a title helper) has none.
 type Active struct {
 	ID       int64     `json:"id"`
 	Agent    string    `json:"agent"`
@@ -44,6 +46,10 @@ type inflight struct {
 	begun []*Route
 	// unrouted: its watch while no route is begun for it (unrouted.go)
 	unrouted *unroutedHold
+	// tr: the trace its routes are in, for the phase they say (under mu)
+	tr *trace
+	// redaction: its maskings, their phase and time (redact_phase.go)
+	redaction redaction
 }
 
 type inflightKey struct{}
@@ -58,7 +64,7 @@ type inflights struct {
 // add counts r in and answers it with its inflight on its context, and the
 // func that counts it out.
 func (l *inflights) add(r *http.Request) (*http.Request, func()) {
-	f := &inflight{agent: agentOf(r), session: sessionOf(r.Header), start: time.Now()}
+	f := &inflight{agent: callerFrom(r).agent, session: sessionOf(r.Header), start: time.Now()}
 	l.mu.Lock()
 	if l.m == nil {
 		l.m = map[int64]*inflight{}
@@ -84,6 +90,9 @@ func inflightOf(ctx context.Context) *inflight {
 // func that puts back where it stood before: a try out at the vendor whose
 // own requests wait for room in the minute (rpmTransport) is out at the
 // vendor again once they go.
+//
+// A phase is a wait magpie knows of (noteWait): one before a route is
+// begun has unroutedMost, not unroutedUnknown.
 func notePhase(ctx context.Context, phase string) (restore func()) {
 	f := inflightOf(ctx)
 	if f == nil {
@@ -91,7 +100,8 @@ func notePhase(ctx context.Context, phase string) (restore func()) {
 	}
 	was, _ := f.phase.Load().(string)
 	f.phase.Store(phase)
-	return func() { f.phase.Store(was) }
+	waited := noteWait(ctx)
+	return func() { waited(); f.phase.Store(was) }
 }
 
 // noteRoute ties ctx's request in flight to its routing trace, the first

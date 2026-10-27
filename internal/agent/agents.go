@@ -46,6 +46,45 @@ func init() {
 	}
 	// a Copilot CLI signed in inside a running distro (#723)
 	provider.CopilotWSLHomes = copilotWSLHomes
+	// the Codex app's app-server is restarted when magpie becomes Codex's
+	// provider for its used-up ChatGPT account, and when it stops being it;
+	// and when Codex is connected or disconnected, or its route otherwise
+	// changes, so a running app sends where its config now says
+	provider.CodexAppRoute = codexAppRoute
+}
+
+// codexAppRoute is where Codex's config sends it, as the app-server reads
+// it at its start: the keys magpie writes for that, never one the Codex
+// app writes itself (model); and whether magpie is Codex's provider for
+// its used-up ChatGPT account (AppOut). Not known when Codex's config
+// can't be read.
+func codexAppRoute() (route string, out, known bool) {
+	home, _ := homes()
+	a := codex(home)
+	if _, err := os.ReadFile(a.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", false, false
+	}
+	out = a.AppOut != nil && a.AppOut()
+	var b strings.Builder
+	for _, k := range []string{"model_provider", "openai_base_url", "model_catalog_json"} {
+		v, _ := edit.GetTOMLTop(a.Path, k)
+		b.WriteString(k + "=" + v + "\n")
+	}
+	t, _ := edit.GetTOMLTable(a.Path, "model_providers."+magpieID)
+	b.WriteString("magpie.base_url=" + t["base_url"] + "\n")
+	// and the list in that catalog, which the app-server also reads only
+	// as it starts: a provider or group renamed, or a model added, left
+	// the app on the names and models it started with (lucis0116 on X)
+	if c, _ := edit.GetTOMLTop(a.Path, "model_catalog_json"); c != "" {
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(filepath.Dir(a.Path), c)
+		}
+		b.WriteString("catalog=" + codexCatalogTag(c) + "\n")
+	}
+	if out {
+		b.WriteString("out\n")
+	}
+	return b.String(), out, true
 }
 
 // others are clients that reach the gateway without being agents magpie
@@ -93,6 +132,21 @@ func homes() (home, cfg string) {
 
 // builtins are the agents magpie has wiring of its own for.
 func builtins(home, cfg string) []*Agent {
+	return append(onMachine(home, cfg), wslAgents()...)
+}
+
+// local is All() without the agents in WSL distros, which wsl.exe is asked
+// for: what start-up moves look in, on every command, `magpie version`
+// too, and the moves came before WSL agents. A wsl.exe that hangs held each
+// command 20s, its two listings' timeouts.
+func local() []*Agent {
+	home, cfg := homes()
+	own := onMachine(home, cfg)
+	return append(own, pluggedAgents(home, own, nil)...)
+}
+
+// onMachine are builtins but those in WSL.
+func onMachine(home, cfg string) []*Agent {
 	return append([]*Agent{
 		claude(home),
 		claudeDesktop(home),
@@ -107,6 +161,7 @@ func builtins(home, cfg string) []*Agent {
 		pi(home),
 		stepcode(home),
 		mothx(home),
+		penguin(home),
 		aside(home),
 		omo(home),
 		primeAgent(home),
@@ -150,6 +205,7 @@ func builtins(home, cfg string) []*Agent {
 		codebuddy(home),
 		pencil(home),
 		openPencil(home, cfg),
+		newMax(home),
 		raycast(home),
 		kiroCrew(home),
 		t3code(home),
@@ -160,7 +216,7 @@ func builtins(home, cfg string) []*Agent {
 		cindy(),
 		aionui(),
 		lody(home),
-	}, append(ompProfiles(home), wslAgents()...)...)
+	}, ompProfiles(home)...)
 }
 
 // ---- accessors -------------------------------------------------------------

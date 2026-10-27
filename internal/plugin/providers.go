@@ -165,8 +165,8 @@ type Provider struct {
 
 // Option is a switch a plugin declares for its provider (auth.options,
 // #2038): magpie shows it, keeps the user's value in settings'
-// PluginOptions and hands it to the plugin (input.magpie.option). Nothing
-// runs when it changes.
+// PluginOptions and hands it to the plugin (input.magpie.option). A change
+// has the providers listed again (SetProviderOptions); nothing else runs.
 type Option struct {
 	Key         string `json:"key"`
 	Label       string `json:"label"`
@@ -187,12 +187,18 @@ func OptionOn(chosen map[string]map[string]bool, provider string, o Option) bool
 }
 
 // SetProviderOptions hands the user's option values (settings' PluginOptions) to
-// the host running now; a host started later reads them at its start.
+// the host running now; a host started later reads them at its start. The
+// providers kept are asked again after: a models hook may list by an
+// option (WorkBuddy's "Free models only", plugins#430), and the list
+// follows the switch without a restart.
 func SetProviderOptions(ctx context.Context) error {
 	if !Running() {
+		forgetProviders()
 		return nil
 	}
-	return Call(ctx, "setProviderOptions", map[string]any{"options": settings.Load().PluginOptions}, nil)
+	err := Call(ctx, "setProviderOptions", map[string]any{"options": settings.Load().PluginOptions}, nil)
+	forgetProviders()
+	return err
 }
 
 // Account is one account a provider is signed in to: Key is where
@@ -1072,7 +1078,7 @@ type UsageResets struct {
 
 type UsageWindow struct {
 	Name      string   `json:"name"`
-	Used      float64  `json:"used"`     // percent
+	Used      *float64 `json:"used"`     // percent; nil when the plugin didn't say
 	ResetsAt  string   `json:"resetsAt"` // RFC 3339
 	ResetSecs int64    `json:"resetSecs"`
 	Display   string   `json:"display"`

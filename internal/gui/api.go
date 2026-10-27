@@ -197,6 +197,9 @@ type agentJSON struct {
 	// Launch: the command that starts an agent taking the gateway only
 	// from its environment (agy) on magpie, to copy
 	Launch string `json:"launch,omitempty"`
+	// Typed: what starts it on magpie typed in a new terminal, a function
+	// magpie gave the user's shells (agy); the launch is for one open now
+	Typed string `json:"typed,omitempty"`
 	// Models: how many of the catalog its lists show, for an agent that
 	// picks among it (agent_models.go)
 	Models *modelCountJSON `json:"models,omitempty"`
@@ -221,6 +224,10 @@ type agentJSON struct {
 	// Joined: connected with its own models still in its list (Codex
 	// signed in with ChatGPT, agent.Agent.Join)
 	Joined bool `json:"joined,omitempty"`
+	// AppOut: magpie is Codex's provider while the ChatGPT account it is
+	// signed in to is used up (agent.Agent.AppOut), which turns the Codex
+	// app's ChatGPT side off until the reset
+	AppOut *appOutJSON `json:"appOut,omitempty"`
 	// Failover: not connected, yet its requests go through magpie for
 	// account failover alone (agent.Agent.FailingOver, #1385)
 	Failover bool `json:"failover,omitempty"`
@@ -816,7 +823,9 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	if gw != nil {
 		served.Store(gw)
 	}
-	if isWeb(w) {
+	// magpie web's own page, not the app's served to a browser, which the
+	// app's windows share their settings state with
+	if ownWeb(w) {
 		webPage.Store(true)
 	}
 	mux := http.NewServeMux()
@@ -838,7 +847,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		// and whether it is a gateway's page alone (gatewaymode.go), so the
 		// pages left out never show
-		if on, _ := gatewayMode(isWeb(w)); on {
+		if on, _ := gatewayMode(ownWeb(w)); on {
 			boot["gateway"] = true
 		}
 		// and the built-in plugins it leaves out (builtins.go), gone
@@ -850,7 +859,14 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// in (#1519's read waits for the agents); only this process's own,
 		// for one served by another magpie is the providers' read to find
 		if served.Load() != nil {
-			boot["sideGateway"] = map[string]any{"url": gateway.URL(), "running": true, "boot": true}
+			side := map[string]any{"url": gateway.URL(), "running": true, "boot": true}
+			// and MAGPIE_PUBLIC_URL while other machines are let in, which
+			// a page they open (magpie web) shows instead (noahhrreion on
+			// Discord: in Docker the line said the container's loopback)
+			if u := gateway.PublicURL(); u != "" && (s.LAN || gateway.OnNetwork()) {
+				side["publicURL"] = u
+			}
+			boot["sideGateway"] = side
 		}
 		// and the settings of those the page draws (kernel.js)
 		boot["pluginConfig"] = builtinConfig(list)
@@ -1176,6 +1192,9 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	cliBehindRoutes(mux)
 	gatewayFixRoutes(mux)
 	gatewayModeRoutes(mux)
+	if !isWeb(w) {
+		appPageRoutes(mux)
+	}
 	privacyModelRoutes(mux)
 	maskingRoutes(mux)
 	builtinRoutes(mux)
@@ -1222,9 +1241,17 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		if _, sent := fields["noAutoDownload"]; !sent {
 			in.NoAutoDownload = cur.NoAutoDownload
 		}
+		// nor the update channel (ssharpcc on X)
+		if _, sent := fields["updateChannel"]; !sent {
+			in.UpdateChannel = cur.UpdateChannel
+		}
 		// nor whether the masked words match in any case
 		if _, sent := fields["redactWordsAnyCase"]; !sent {
 			in.RedactWordsAnyCase = cur.RedactWordsAnyCase
+		}
+		// nor whether they match only as whole words
+		if _, sent := fields["redactWordsWhole"]; !sent {
+			in.RedactWordsWhole = cur.RedactWordsWhole
 		}
 		// nor whether a key goes as a made-up one of its form
 		if _, sent := fields["redactShape"]; !sent {
@@ -1273,6 +1300,8 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		in.GatewayConversations = cur.GatewayConversations // Sessions' explicit recording consent
 		in.RedactRules = cur.RedactRules                   // the masking rules, set on their own
 		in.RedactModel = cur.RedactModel                   // set on its own (privacy-model)
+		in.RedactModelName = cur.RedactModelName           // set on its own (privacy-model)
+		in.RedactModelScore = cur.RedactModelScore         // set on its own (privacy-model)
 		in.RedactActions = cur.RedactActions               // set on their own (redact-actions below)
 		in.RedactAllow = cur.RedactAllow                   // set on its own (redact-allow below)
 		in.DisabledModels = cur.DisabledModels             // set on their own (disabled-models below, #1867)
@@ -1387,6 +1416,13 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// tried again through it, not in six hours (#294), and marked so
 		// before this answers: the page stops asking on the old error
 		if strings.TrimSpace(in.Proxy) != strings.TrimSpace(cur.Proxy) && updates.json().State == "error" && updates.begin() {
+			go updates.run()
+		}
+		// another update channel: the feed is asked again on it, so the
+		// version row and the header's Update follow (a download from
+		// every version is dropped on Stable, run), unless automatic
+		// updates are off and nothing was found
+		if in.UpdateChannel != cur.UpdateChannel && (!in.NoAutoUpdate || updates.json().Latest != "") && updates.begin() {
 			go updates.run()
 		}
 		writeJSON(rw, settingsState())
@@ -1601,7 +1637,8 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		writeJSON(rw, settingsState())
 	})
 	// where Codex's request for a thread's description goes: "" as Codex
-	// sends it, or a model's id. It is separate from the title setting.
+	// sends it, "off", or a model's id. It is separate from the title
+	// setting.
 	mux.HandleFunc("POST /api/settings/codex-descriptions", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Model string }
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -1609,7 +1646,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			return
 		}
 		v := strings.TrimSpace(in.Model)
-		if v != "" {
+		if v != "" && v != "off" {
 			if _, _, ok := provider.Resolve(v); !ok {
 				fail(rw, fmt.Errorf("no model %s to write Codex's descriptions", v))
 				return
@@ -1695,7 +1732,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			return
 		}
 		v := strings.TrimSpace(in.Model)
-		if v != "" {
+		if v != "" && v != settings.CodexAutoReviewSession {
 			// Resolve intentionally accepts arbitrary names under a known
 			// provider. An approval reviewer must be a model or group magpie
 			// actually lists, including providers kept unlisted for routing.
@@ -2377,6 +2414,15 @@ func held(h http.Handler) http.Handler {
 			// a page waits on the session files: the warm-up reading
 			// them reads at full speed meanwhile
 			defer sessions.Ask()()
+			// and what the read threw away goes back once the page rests
+			defer readingPage()()
+			// and collected under GOGC 25 while it runs: a poll's reads
+			// allocated ~330 MB to keep ~105 MB, and at the default 100 the
+			// heap grew to twice what it kept before a collection, ~320 MB
+			// in Activity Monitor during a poll. The memory limit the
+			// warm-up's read takes too isn't taken here: held as close as
+			// heldMemory, every poll collected over and over, 5x the CPU.
+			defer tightenGC(false)()
 		}
 		if !(api && r.Method == http.MethodGet) {
 			// anything that may have written drops what was held, once it
@@ -2423,6 +2469,9 @@ func state() stateJSON {
 			aj.StaleCopies = a.StaleCopies()
 			aj.Stale = len(aj.StaleCopies)
 			aj.Joined = a.Joined != nil && a.Joined()
+			if a.AppOut != nil && a.AppOut() {
+				aj.AppOut = codexAppOut()
+			}
 		} else {
 			aj.Source = a.Source()
 			aj.Failover = a.FailingOver != nil && a.FailingOver()
@@ -2438,6 +2487,9 @@ func state() stateJSON {
 		}
 		if a.Launch != nil {
 			aj.Launch = a.Launch()
+		}
+		if a.Typed != nil && aj.Launch != "" {
+			aj.Typed = a.Typed()
 		}
 		aj.CLIMissing = a.CLIMissing()
 		if a.Native != nil {
@@ -2489,6 +2541,175 @@ func openError(w Windows, url string) string {
 func writeJSON(rw http.ResponseWriter, v any) {
 	rw.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(rw).Encode(v)
+}
+
+// writeJSONSame is writeJSON for a read the page asks for again and again:
+// the answer's X-Magpie-Tag is a hash of its bytes, and a request whose
+// X-Magpie-Had is that tag gets X-Magpie-Same and no body, which the page
+// reads as the answer it has (api in app.js). The Sessions tab read a long
+// history's ~8 MB list and ~0.7 MB of stats every 15 s, and parsed and
+// compared them whole to find them the same. Not an ETag and a 304:
+// WebView2 is sent no If-None-Match, and Wails turns its 304 into a 505.
+func writeJSONSame(rw http.ResponseWriter, r *http.Request, v any) {
+	var b bytes.Buffer
+	if err := json.NewEncoder(&b).Encode(v); err != nil {
+		fail(rw, err)
+		return
+	}
+	sum := sha256.Sum256(b.Bytes())
+	tag := hex.EncodeToString(sum[:16])
+	rw.Header().Set("X-Magpie-Tag", tag)
+	if r.Header.Get("X-Magpie-Had") == tag {
+		rw.Header().Set("X-Magpie-Same", "1")
+		rw.WriteHeader(http.StatusOK)
+		return
+	}
+	rw.Header().Set("Content-Type", "application/json")
+	_, _ = rw.Write(b.Bytes())
+}
+
+// sentRows is each row's hash in the last few lists writeJSONRows sent, by
+// the answer's tag, oldest first: a few, for a window and a browser tab or
+// two asking at once.
+var sentRows struct {
+	sync.Mutex
+	tags []string
+	rows map[string][][16]byte
+}
+
+const sentRowsKept = 4
+
+// rowsSize is the size of the last answer writeJSONRows wrote of each key,
+// what the next one's buffer is made for.
+var rowsSize sync.Map
+
+// writeJSONRows is writeJSONSame for an answer that is a long list, key,
+// beside the fields of rest: one asked with the tag of a list sent before
+// that changed since gets X-Magpie-Delta: key, and its list holds only the
+// rows not in that one, each run of rows that was, in its order, written
+// [from, count] of the list the page has. While an agent works, its
+// session's row changes every poll, and the Sessions tab read all ~5000
+// rows (~8 MB) again for it.
+func writeJSONRows[T any](rw http.ResponseWriter, r *http.Request, key string, rows []T, rest any) {
+	tail, err := json.Marshal(rest)
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	k, _ := json.Marshal(key)
+	// the rows are written once, into the answer itself: each row's
+	// Marshal, their Join and the answer's buffer were three copies of the
+	// ~8 MB list a poll, and the buffer grew to it from nothing
+	var whole bytes.Buffer
+	if n, ok := rowsSize.Load(key); ok {
+		whole.Grow(n.(int) + n.(int)/8)
+	}
+	whole.WriteByte('{')
+	whole.Write(k)
+	whole.WriteString(":[")
+	enc := json.NewEncoder(&whole)
+	ends := make([]int, len(rows)+1)
+	ends[0] = whole.Len()
+	for i := range rows {
+		if err := enc.Encode(rows[i]); err != nil {
+			fail(rw, err)
+			return
+		}
+		// Encode ends the row with a newline: it is the comma after it
+		whole.Bytes()[whole.Len()-1] = ','
+		ends[i+1] = whole.Len()
+	}
+	if len(rows) > 0 {
+		whole.Truncate(whole.Len() - 1)
+	}
+	end := func(b *bytes.Buffer) {
+		b.WriteByte(']')
+		if len(tail) > 2 {
+			b.WriteByte(',')
+			b.Write(tail[1:])
+		} else {
+			b.WriteByte('}')
+		}
+		b.WriteByte('\n')
+	}
+	end(&whole)
+	rowsSize.Store(key, whole.Len())
+	all := whole.Bytes()
+	raw := make([][]byte, len(rows))
+	sums := make([][16]byte, len(rows))
+	for i := range rows {
+		raw[i] = all[ends[i] : ends[i+1]-1]
+		sum := sha256.Sum256(raw[i])
+		sums[i] = [16]byte(sum[:16])
+	}
+	body := func(items [][]byte) []byte {
+		var b bytes.Buffer
+		b.WriteByte('{')
+		b.Write(k)
+		b.WriteString(":[")
+		b.Write(bytes.Join(items, []byte(",")))
+		end(&b)
+		return b.Bytes()
+	}
+	sum := sha256.Sum256(all)
+	tag := hex.EncodeToString(sum[:16])
+	rw.Header().Set("X-Magpie-Tag", tag)
+	had := r.Header.Get("X-Magpie-Had")
+	if had == tag {
+		rw.Header().Set("X-Magpie-Same", "1")
+		rw.WriteHeader(http.StatusOK)
+		return
+	}
+	sentRows.Lock()
+	was, ok := sentRows.rows[had]
+	if _, kept := sentRows.rows[tag]; !kept {
+		if sentRows.rows == nil {
+			sentRows.rows = map[string][][16]byte{}
+		}
+		if len(sentRows.tags) == sentRowsKept {
+			delete(sentRows.rows, sentRows.tags[0])
+			sentRows.tags = sentRows.tags[1:]
+		}
+		sentRows.tags = append(sentRows.tags, tag)
+		sentRows.rows[tag] = sums
+	}
+	sentRows.Unlock()
+	rw.Header().Set("Content-Type", "application/json")
+	if !ok || had == "" {
+		_, _ = rw.Write(all)
+		return
+	}
+	at := make(map[[16]byte][]int, len(was))
+	for j, s := range was {
+		at[s] = append(at[s], j)
+	}
+	var items [][]byte
+	from, n := 0, 0
+	run := func() {
+		if n > 0 {
+			items = append(items, []byte("["+strconv.Itoa(from)+","+strconv.Itoa(n)+"]"))
+		}
+		n = 0
+	}
+	for i, s := range sums {
+		js := at[s]
+		if len(js) == 0 {
+			run()
+			items = append(items, raw[i])
+			continue
+		}
+		j := js[0]
+		at[s] = js[1:]
+		if n > 0 && j == from+n {
+			n++
+			continue
+		}
+		run()
+		from, n = j, 1
+	}
+	run()
+	rw.Header().Set("X-Magpie-Delta", key)
+	_, _ = rw.Write(body(items))
 }
 
 func fail(rw http.ResponseWriter, err error) {
@@ -2621,4 +2842,27 @@ func countClient(m map[string]string, client, as string) (map[string]string, err
 var bunSaid = map[string]string{
 	"windows": "Bun, which runs plugins, can't start on this version of Windows: it needs Windows 10 version 1809 or later, or Windows Server 2019 or later. Update Windows to use plugins, or set MAGPIE_BUN to a bun that runs here.",
 	"cpu":     "Bun, which runs plugins, can't start on this computer's processor: it needs an x64 processor with SSE4.2 (Intel or AMD from 2008 on; in a virtual machine, a CPU type that passes it through). Run magpie on such a processor to use plugins, or set MAGPIE_BUN to a bun that runs here.",
+}
+
+// appOutJSON is Codex on magpie while its ChatGPT account is used up: the
+// account, when it has room again (zero when the reading doesn't say), and
+// whether a Codex app is left on the account, its app-server not
+// restarted (provider.CodexAppStuck), for the user to reopen it.
+type appOutJSON struct {
+	User  string     `json:"user,omitempty"`
+	Until *time.Time `json:"until,omitempty"`
+	Stuck bool       `json:"stuck,omitempty"`
+}
+
+func codexAppOut() *appOutJSON {
+	o := &appOutJSON{Stuck: provider.CodexAppStuck()}
+	for _, l := range provider.Logins("codex") {
+		if l.Active {
+			o.User = l.User
+		}
+	}
+	if u := provider.CodexOutUntil(); !u.IsZero() {
+		o.Until = &u
+	}
+	return o
 }

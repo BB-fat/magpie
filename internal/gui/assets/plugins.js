@@ -139,7 +139,7 @@
   }
   function logo(ic, big, kind) {
     const box = el("span", "pm-logo" + (big ? " big" : ""));
-    if (ic) box.append(icon(ic));
+    if (ic) box.append(icon(ic, !big));
     else box.append(glyph({ mw: PIPE, ag: TERM, tl: TOOL, pg: PAGE }[kind] || PUZZLE, big ? 22 : 17, 1.4));
     return box;
   }
@@ -1152,15 +1152,14 @@
       c.title = (isGit(e.spec) ? t("{head} is the newest commit of {repo}", { head: ck.head || e.head || "", repo: e.spec }) : t("v{v} is the newest on npm", { v: e.version })) + "\n" + t("Last checked {time}", { time: checkedAt() });
       nm.append(c);
     }
-    // the built-in subscriptions moved onto it: taking it away or off
-    // stops them, as there is no built-in to go back to, so the row says
-    // it carries them
+    // built-ins moved onto it, then its other providers if 2+ (#3902)
     const moved = (e.moved || []).map((id) => SUBS.find((x) => x.agent === id)?.name || id);
     const names = moved.join(t(", "));
-    if (moved.length && !e.off) {
+    const all = [...moved, ...e.serves || []];
+    if (all[0] && !e.off) {
       const c = el("span", "pm-chip moved");
-      c.append(el("span", "dot"), el("span", "", t("Serves {names}", { names })));
-      c.title = t("{names} runs on this plugin in place of the built-in", { names });
+      c.append(el("span", "dot"), el("span", "", t("Serves {names}", { names: all.join(t(", ")) })));
+      if (names) c.title = t("{names} runs on this plugin in place of the built-in", { names });
       nm.append(c);
     }
     // gateway middleware runs in magpie's gateway, not as a subscription:
@@ -1503,9 +1502,9 @@
   // it; leave() sends it off when the README comes. Its marks are data-*,
   // not classes, so the dialog's observer doesn't place it again each hop
   function bounceLoader() {
-    const box = el("div", "pm-bounce"), s = document.createElementNS("http://www.w3.org/2000/svg", "svg"), b = el("div", "pm-bird");
+    const box = el("div", "pm-bounce"), s = document.createElementNS("http://www.w3.org/2000/svg", "svg"), b = el("div", "sk-bird");
     s.innerHTML = "<path/><path/><path/><path/>";
-    b.innerHTML = `<svg viewBox="0 0 44 44"><use href="#bird" clip-path="url(#bird-body)"/><g class="tail"><use href="#bird" clip-path="url(#bird-tail)"/></g><g class="wing"><use href="#bird" clip-path="url(#bird-wing)"/></g></svg>`;
+    b.innerHTML = BIRD;
     box.append(s, b);
     const ps = [...s.children], ws = [1, .94, .6, .82], at = [.16, .44, .3, .58];
     const L = ws.map((w, i) => ({ y: 31 + i * 22, d: 0, v: 0, bx: 0, hold: false }));

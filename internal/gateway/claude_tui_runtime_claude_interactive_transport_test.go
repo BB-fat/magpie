@@ -1776,11 +1776,20 @@ printf '%s\n' '{"type":"result","session_id":"quiet-inner","stop_reason":"end_tu
 	if !strings.Contains(out, "KEEPALIVE_OK") || !strings.Contains(out, `"type":"message_stop"`) {
 		t.Fatalf("quiet PTY reply incomplete:\n%s", out)
 	}
-	if pings := strings.Count(out, `"type":"ping"`); pings < 2 {
-		t.Fatalf("quiet PTY emitted only %d pre-output/downstream pings:\n%s", pings, out)
+	// Upstream's Anthropic encoder only emits "type":"ping" after message_start,
+	// and spaces those by pingEvery; before the first model event the stream is
+	// kept alive with SSE comments (": keepalive"). Count either form.
+	pings := strings.Count(out, `"type":"ping"`)
+	comments := strings.Count(out, ": keepalive")
+	if pings+comments < 2 {
+		t.Fatalf("quiet PTY emitted only %d pings and %d comments:\n%s", pings, comments, out)
 	}
-	firstPing, answer := strings.Index(out, `"type":"ping"`), strings.Index(out, "KEEPALIVE_OK")
-	if firstPing < 0 || answer < 0 || firstPing >= answer {
+	firstKeep := strings.Index(out, ": keepalive")
+	if firstKeep < 0 {
+		firstKeep = strings.Index(out, `"type":"ping"`)
+	}
+	answer := strings.Index(out, "KEEPALIVE_OK")
+	if firstKeep < 0 || answer < 0 || firstKeep >= answer {
 		t.Fatalf("first keepalive did not precede the model answer:\n%s", out)
 	}
 }

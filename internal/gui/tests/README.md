@@ -401,6 +401,12 @@ group's "Show all" comes on hover, "Hide all" at the foot sends every one
 but the model in use, "Show all" there sends none, and Esc or a
 click elsewhere closes it.
 
+`agent-models-group-on.test.cjs` opens Codex's model list with only Codex
+serving, a routing group of the user's off and on, in Chromium and WebKit,
+English and Chinese: Codex's 10 models stay open either way, and the group
+is there to pick (shiqi_40904 on Discord: with a group on, the provider's
+models started folded and looked gone).
+
 `omp-roles.test.cjs` draws omp's subagents, smol and slow roles in Chromium
 and WebKit, English and Chinese: each is a square after the model's picker,
 not a picker of its own, as they follow the model while unset; unset it is
@@ -2352,6 +2358,18 @@ is faked.
 node --test internal/gui/tests/update-mirror.test.cjs
 ```
 
+`update-network.test.cjs` checks the Version row after a download the
+network broke off (`network` in `/api/update`, AIMetaPhD on X): it says
+the download broke off, a network problem, and that Check tries again or
+the release page has it, with no address and no raw error in the row.
+Check asks `/api/update/check` again, and the release page is offered.
+Every language, Chromium and WebKit, at 1100 and 390 wide, no sideways
+scroll; the API is faked.
+
+```sh
+node --test internal/gui/tests/update-network.test.cjs
+```
+
 `lane-limit.test.cjs` checks each key's and account's own limit on requests
 at once (#892): its row's pill says what runs and waits under it while
 requests are out ("1/1 running · 2 queued"), read again from `/api/lanes`
@@ -2504,3 +2522,14 @@ does. Both engines, at 440px. The reckoning itself is covered by
 `TestHistoricalWindowHoldsUsesEachWindowsOwnReading`,
 `TestWindowHoldsResetBeforeRefillReading` and
 `TestWindowHoldsDryAgainAfterReset`.
+
+## Browser access
+
+`browser-access.test.cjs` checks Settings › Network and sharing › Browser
+access, the app's own page served to a browser: Off, This computer and
+Local network posted to `/api/web-page`, the link shown with its key as
+"…" and copied whole, New key, the port with Apply and a taken port's
+reason, the "Not encrypted" row on the local network, no native select or
+left border, nothing wider or cut off at 360px, and no such section (nor a
+read of it) in a browser on the page. Every language, Chromium and WebKit,
+with the API faked.

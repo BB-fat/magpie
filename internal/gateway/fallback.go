@@ -147,6 +147,49 @@ func (c candidate) who() string {
 	return c.restKey()
 }
 
+// remoteUpstream is, for a remote magpie's model, the provider there that
+// serves it, its id's first part (anthropic of anthropic/claude-…), or a
+// group of the remote's, its whole id; "" for any other provider's model,
+// and for a remote's model named without one. The remote magpie is one
+// key here, but each of its providers is a vendor of its own, with its
+// own cache and its own seals (fremontdango on Discord: a group of one
+// model from two of the remote's providers kept a conversation on the
+// second when the first was resting, as one account, where the same
+// group on the remote moved it as gone).
+func remoteUpstream(p provider.Provider, model string) string {
+	if !p.IsRemoteMagpie() {
+		return ""
+	}
+	if strings.HasPrefix(model, provider.GroupPrefix) {
+		return model
+	}
+	up, _, _ := strings.Cut(model, "/")
+	if up == model {
+		return ""
+	}
+	return up
+}
+
+// vendor is who as the vendor a conversation is with knows it: the key or
+// account, and behind a remote magpie the provider there (remoteUpstream).
+// What a vendor keeps of a conversation — its cache, the reasoning and
+// compactions it sealed — goes by it; what the user limits on the key
+// here — its lanes, requests a minute — still goes by who.
+func (c candidate) vendor() string {
+	if up := remoteUpstream(c.p, c.model); up != "" {
+		return c.who() + ">" + up
+	}
+	return c.who()
+}
+
+// sameVendor says whether c is with the vendor that who, asked for model,
+// was: the same key or account, and behind a remote magpie the same
+// provider there. With no model known (an answer the usage log has) it
+// is the key or account alone.
+func (c candidate) sameVendor(who, model string) bool {
+	return c.who() == who && (model == "" || remoteUpstream(c.p, c.model) == remoteUpstream(c.p, model))
+}
+
 // perKey is a provider once per key it has on, in order — or, for a
 // signed-in agent, once per account it has on, its own first. A key made
 // for one protocol only serves on that one's endpoint, and the keys that
@@ -239,7 +282,12 @@ func perKeyBarred(p provider.Provider, model string, from provider.Protocol) (ou
 	}
 	keys := p.KeysOn()
 	serves := p.Serving(model) // the lists read once, not once a key (@NetRozee on X)
-	var unlisted []candidate
+	// a key on a plan of its own whose models leave this one out
+	// (KeyAccount.Plan): the Agent Plan's key is never sent the pay as
+	// you go's deepseek-v4-1-flash-261017, while a key whose plan has it
+	// can take it (yckonnnn on X)
+	planHas := p.PlanServing(model)
+	var unlisted, planless []candidate
 	var noURL provider.Protocol
 	for i, k := range keys {
 		q := p.WithKey(k)
@@ -257,6 +305,10 @@ func perKeyBarred(p provider.Provider, model string, from provider.Protocol) (ou
 			barred = append(barred, candidate{p: q, model: model, rest: rest, rank: i})
 			continue
 		}
+		if !planHas(k) {
+			planless = append(planless, candidate{p: q, model: model, rest: rest, rank: i})
+			continue
+		}
 		if !serves(k) {
 			// the vendor lists the model to another key only
 			unlisted = append(unlisted, candidate{p: q, model: model, rest: rest, rank: i})
@@ -266,6 +318,13 @@ func perKeyBarred(p provider.Provider, model string, from provider.Protocol) (ou
 	}
 	if len(out) == 0 {
 		out, unlisted = unlisted, nil // no key lists it: try them all the same
+	}
+	if len(out) == 0 {
+		// no key's plan has it as magpie knows the plans: a model the
+		// vendor added since, tried on them all the same. Else a key
+		// whose plan lacks it is never asked, not even after the others
+		// refused it: its endpoint has no such model either
+		out = planless
 	}
 	if len(out) == 0 && len(barred) > 0 {
 		return nil, nil, nil, barred
@@ -645,7 +704,7 @@ func capHeld(p, acct provider.Provider, model string, now time.Time) *capHold {
 	}
 	a := acct.Account
 	caps := provider.HoldCaps(p, a.Agent, a.User)
-	if a.Agent == "codex" && freeOnChatGPT(model) {
+	if a.Agent == "codex" && freeOnChatGPT(model, a.Plan) {
 		// a call ChatGPT counts in no window spends nothing a usage cap
 		// keeps (#1593); credits set not to be spent still hold it at
 		// 100%, as nothing says the backend answers it there
@@ -1412,7 +1471,9 @@ func windowIn(served func() []provider.Entry, p provider.Provider, model string)
 	if n := p.Contexts[model]; n > 0 {
 		return n
 	}
-	for _, e := range served() {
+	cat := served()
+	for i := range cat {
+		e := &cat[i]
 		if e.Group == "" && e.Provider.ID == p.ID && (e.Model == model || e.ID == model) && e.Context > 0 {
 			return e.Context
 		}
@@ -1428,10 +1489,12 @@ const (
 	// clear than a busy moment: pauses of 1, 2 and 4s, or what Retry-After
 	// says, under half a minute in all
 	rateRetries = 3
-	// longestPause is the longest the vendor's Retry-After is waited for
-	// before that; longer, and the agent gets the error.
-	longestPause = 8 * time.Second
 )
+
+// longestPause is the longest the vendor's Retry-After is waited for by
+// the same-one retries; longer, and a plain provider or a group waits it
+// out within its patience (replan), else the agent gets the error.
+var longestPause = 8 * time.Second
 
 // retryPause is the first pause before the last one left is tried again;
 // each pause after is twice the one before.
@@ -1503,7 +1566,9 @@ func holds(c candidate, tokens int) bool {
 // to compact.
 //
 // Those left out are handed back (small, their rows in smallW when the
-// order has one each), kept for the last resort: when every candidate
+// order has one each, with Window set to the window: the trace lists
+// them as left out, so the Routing page keeps their rows and says why,
+// #3749), kept for the last resort: when every candidate
 // with room is out of its allowance, a fallback too small is asked all
 // the same (Kai on Discord: both Claude accounts at their limit until
 // the next day, the Claude provider's Fallback a Codex model of 272K
@@ -1543,7 +1608,9 @@ func roomy(cs []candidate, pl planned, from provider.Protocol, body []byte) (out
 		if w := windows[key(c)]; w > 0 && tokens >= w {
 			small = append(small, c)
 			if parallel {
-				smallW = append(smallW, pl.order[i])
+				x := pl.order[i]
+				x.Window = w
+				smallW = append(smallW, x)
 			}
 			continue
 		}
@@ -1638,6 +1705,8 @@ type holdWriter struct {
 	// answers with a 429 whatever quota it has left — Claude Code's, its
 	// Agent SDK's — so the account isn't at fault and doesn't rest (#666)
 	turnedAway bool
+	// turnedAwayHint says why, for that system prompt (antigravityHint)
+	turnedAwayHint string
 
 	// refused: the vendor's safety filter ended the reply before any of it
 	// was said — Anthropic's stop_reason "refusal", OpenAI's content_filter
@@ -1817,7 +1886,7 @@ func (h *holdWriter) pass() {
 	}
 	dst := h.w.Header()
 	for k, v := range h.header {
-		if k != resetsHeader && k != refusedHeader && k != zdrHeader { // magpie's own notes, for restAfter and settle
+		if k != resetsHeader && k != refusedHeader && k != zdrHeader && k != answeredThereHeader && k != keyLimitThereHeader { // magpie's own notes, for restAfter and settle
 			dst[k] = v
 		}
 	}
@@ -1910,7 +1979,9 @@ func (h *holdWriter) cutLoop(b []byte, t loopTrip) (int, error) {
 	} else {
 		io.WriteString(h.w, "\n\n")
 	}
-	streamError(h.w, proto, http.StatusBadGateway, msg)
+	// no model: the reply went ahead under its own id and model, and an
+	// error that starts a message of its own after it is #3792
+	streamError(h.w, proto, "", http.StatusBadGateway, msg)
 	h.looped, h.ended = msg, true
 	h.flush()
 	if h.stop != nil {
@@ -2162,6 +2233,9 @@ var keepHeldAfter = holdLongest
 // a reply: the stream's headers and SSE comments, nothing of the reply.
 type keptAlive struct {
 	proto provider.Protocol
+	// model is the one the agent asked for, which an error sent in the
+	// stream names (streamError, #3728)
+	model string
 	sent  bool      // the stream's 200 and headers went out
 	at    time.Time // the last comment
 	// told is when the agent was last sent anything of a reply, else when
@@ -2222,7 +2296,7 @@ func (h *holdWriter) keepAlive() {
 		}
 		dst := h.w.Header()
 		for k, v := range src {
-			if k != resetsHeader && k != refusedHeader && k != zdrHeader && k != "Content-Length" {
+			if k != resetsHeader && k != refusedHeader && k != zdrHeader && k != answeredThereHeader && k != keyLimitThereHeader && k != "Content-Length" {
 				dst[k] = slices.Clone(v)
 			}
 		}
@@ -2439,10 +2513,10 @@ func (h *holdWriter) release() {
 		case h.failure != 0:
 			// a 200 that is no reply of the protocol's (settle)
 			who := cmp.Or(h.header.Get(providerHeader), "the provider")
-			streamError(h.w, h.alive.proto, h.failure, who+" "+h.failMsg)
+			streamError(h.w, h.alive.proto, h.alive.model, h.failure, who+" "+h.failMsg)
 		case h.status >= 400:
 			// an error status, once the agent has a stream: told as its error
-			streamError(h.w, h.alive.proto, h.status, provider.APIError(h.held.Bytes(), http.StatusText(h.status)))
+			streamError(h.w, h.alive.proto, h.alive.model, h.status, provider.APIError(h.held.Bytes(), http.StatusText(h.status)))
 		default:
 			// a reply given whole by a vendor that ignored stream:true,
 			// after the agent was kept alive: sent as the stream it asked

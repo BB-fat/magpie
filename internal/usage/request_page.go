@@ -7,10 +7,14 @@ package usage
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash"
+	"hash/maphash"
 	"io"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -73,6 +77,7 @@ type packedRow struct {
 	RouteID                        int64
 	Cost, Credits                  float64
 	Status, Tries                  int32
+	Masking                        int32 // ms (Record.Masking)
 	Flags                          uint16
 }
 
@@ -221,7 +226,7 @@ func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 		c.Bytes += int64(len(s) + 48)
 		return id
 	}
-	p := packedRow{Time: r.Time, Tokens: [6]int64{int64(r.Input), int64(r.Output), int64(r.CacheRead), int64(r.CacheWrite), int64(r.Reasoning), int64(r.CacheWrite1h)}, Millis: r.Millis, TTFT: r.TTFT, FirstText: r.FirstText, FirstReasoning: r.FirstReasoning, Sent: r.Sent, Flow: r.Flow, Own: r.Own, Retried: r.Retried, Queued: r.Queued, Order: order, RouteID: r.RouteID, Cost: r.Cost, Status: int32(r.Status), Tries: int32(r.Tries)}
+	p := packedRow{Time: r.Time, Tokens: [6]int64{int64(r.Input), int64(r.Output), int64(r.CacheRead), int64(r.CacheWrite), int64(r.Reasoning), int64(r.CacheWrite1h)}, Millis: r.Millis, TTFT: r.TTFT, FirstText: r.FirstText, FirstReasoning: r.FirstReasoning, Sent: r.Sent, Flow: r.Flow, Own: r.Own, Masking: int32(min(r.Masking, math.MaxInt32)), Retried: r.Retried, Queued: r.Queued, Order: order, RouteID: r.RouteID, Cost: r.Cost, Status: int32(r.Status), Tries: int32(r.Tries)}
 	var t [rowTexts]uint32
 	for i, s := range rowText(&r) {
 		t[i] = intern(*s)
@@ -288,7 +293,7 @@ func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 }
 func (c *rowChunk) row(i int) Row {
 	p := &c.Rows[i]
-	r := Row{Record: Record{RouteID: p.RouteID, Time: p.Time, Input: int(p.Tokens[0]), Output: int(p.Tokens[1]), CacheRead: int(p.Tokens[2]), CacheWrite: int(p.Tokens[3]), CacheWrite1h: int(p.Tokens[5]), Reasoning: int(p.Tokens[4]), Millis: p.Millis, TTFT: p.TTFT, FirstText: p.FirstText, FirstReasoning: p.FirstReasoning, ReasoningHidden: p.Flags&rowReasoningHidden != 0, CacheUnknown: p.Flags&rowCacheUnknown != 0, Sent: p.Sent, Flow: p.Flow, Own: p.Own, Retried: p.Retried, Queued: p.Queued, Status: int(p.Status), Tries: int(p.Tries), HandedOn: p.Flags&rowHandedOn != 0, Rejected: p.Flags&4 != 0, SessionOfficialLogin: p.Flags&8 != 0}, Cost: p.Cost, Priced: p.Flags&1 != 0, Swapped: p.Flags&2 != 0, Routed: p.Flags&32 != 0}
+	r := Row{Record: Record{RouteID: p.RouteID, Time: p.Time, Input: int(p.Tokens[0]), Output: int(p.Tokens[1]), CacheRead: int(p.Tokens[2]), CacheWrite: int(p.Tokens[3]), CacheWrite1h: int(p.Tokens[5]), Reasoning: int(p.Tokens[4]), Millis: p.Millis, TTFT: p.TTFT, FirstText: p.FirstText, FirstReasoning: p.FirstReasoning, ReasoningHidden: p.Flags&rowReasoningHidden != 0, CacheUnknown: p.Flags&rowCacheUnknown != 0, Sent: p.Sent, Flow: p.Flow, Own: p.Own, Masking: int64(p.Masking), Retried: p.Retried, Queued: p.Queued, Status: int(p.Status), Tries: int(p.Tries), HandedOn: p.Flags&rowHandedOn != 0, Rejected: p.Flags&4 != 0, SessionOfficialLogin: p.Flags&8 != 0}, Cost: p.Cost, Priced: p.Flags&1 != 0, Swapped: p.Flags&2 != 0, Routed: p.Flags&32 != 0}
 	if p.Flags&rowCredits != 0 {
 		credits := p.Credits
 		r.Credits = &credits
@@ -311,6 +316,8 @@ func (c *rowChunk) row(i int) Row {
 	}
 	if r.Swapped && p.Flags&swapKnown == 0 && (SameSpelled(r.Model, r.Served) || ServingName(r.Model, r.Served) || RelayRenamed(r.Model, r.Served)) {
 		r.Swapped = false // kept before a name spelled otherwise, a vendor's serving name or a relay's rename was the same
+	} else if r.Swapped && ListedAs(r.Provider, r.Model, r.Served) {
+		r.Swapped = false // the name the provider's list gives the model asked for
 	}
 	if r.cacheNotCounted() {
 		r.CacheUnknown = true // kept before its plugin said its vendor counts no cache
@@ -639,7 +646,6 @@ func readRequestState(now time.Time) requestState {
 		return strings.Compare(a.Path, b.Path)
 	})
 	ids, _ := json.Marshal(provider.SessionIdentities(sessions.CodexDir()))
-	codexIdentityKey, _ := json.Marshal(codexIdentities)
 	renamed := provider.UsageRenames().Key()
 	cfg := settings.Load()
 	prices, _ := json.Marshal(cfg.ModelPrices)
@@ -662,7 +668,7 @@ func readRequestState(now time.Time) requestState {
 	h.Reset()
 	snapshot := readLogSnapshot()
 	fmt.Fprint(h, meta, snapshot.version, now.In(time.Local).Format("2006-01-02 MST"))
-	h.Write(codexIdentityKey)
+	hashCodexIdentities(h, codexIdentities)
 	for _, s := range sources {
 		fmt.Fprintf(h, "%s:%d:%d;", s.Path, s.Size, s.Modified.UnixNano())
 	}
@@ -671,8 +677,36 @@ func readRequestState(now time.Time) requestState {
 		fmt.Fprintf(h, "%s:%d:%d;", s.path, s.size, s.mod.UnixNano())
 	}
 	return requestState{sources: sources, codexIdentities: codexIdentities, cfg: cfg, snapshot: snapshot, days: days, someShared: someShared,
-		root: Path() + "|" + catalog.CachePath(), meta: meta, key: fmt.Sprintf("%x", h.Sum(nil))}
+		root: requestRoot(), meta: meta, key: fmt.Sprintf("%x", h.Sum(nil))}
 }
+
+// hashCodexIdentities writes ids into h in the order of their keys. They
+// were json.Marshal()ed first, ~20k threads' identities encoded into a new
+// buffer of several MB on every page and effort ask.
+func hashCodexIdentities(h hash.Hash, ids map[string]sessions.CodexIdentity) {
+	keys := make([]string, 0, len(ids))
+	for k := range ids {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	b := make([]byte, 0, 32<<10)
+	for _, k := range keys {
+		id := ids[k]
+		for _, s := range [...]string{k, id.ID, id.Role, id.ParentSession, id.RootSession} {
+			b = binary.AppendUvarint(b, uint64(len(s)))
+			b = append(b, s...)
+		}
+		if len(b) > 30<<10 {
+			h.Write(b)
+			b = b[:0]
+		}
+	}
+	h.Write(b)
+}
+
+// requestRoot is the logs a request state is read from: another home's
+// answer is no answer.
+func requestRoot() string { return Path() + "|" + catalog.CachePath() }
 
 func QueryPage(p Period, f Filter, offset, limit int) RequestPage {
 	return queryPage(p, f, offset, limit, sessions.ReadCallSource)
@@ -793,7 +827,7 @@ func codexEffortOfIndex(st requestState, p Period, now time.Time) map[string][]s
 	b := readRequestBlocks(idx, st, p, now, sessions.ReadCallSource)
 	sums := effortSums{}
 	ps, next := pairRowsMemo(p, now, b.gateways, b.chunks, b.others, st.codexIdentities, memo)
-	ps.visit(func(_ timedRef, r *Row) { sums.add(r) })
+	ps.visitActors(func(r *Row) { sums.add(r) })
 	b.priced.release()
 	shared.Lock()
 	if shared.keep(idx, b.on) {
@@ -828,7 +862,7 @@ func readRequestBlocks(idx *requestIndex, st requestState, p Period, now time.Ti
 	// reader of the session files has a pricer of its own, with its memos.
 	pricers := func() func(Record, string) Row {
 		price := Pricer()
-		swapped := map[[2]string]bool{}
+		swapped := map[[4]string]bool{}
 		return func(r Record, source string) Row {
 			sent := r.Model
 			if source == "" {
@@ -836,10 +870,10 @@ func readRequestBlocks(idx *requestIndex, st requestState, p Period, now time.Ti
 			}
 			row := Row{Record: r, Source: source, Routed: GroupRouted(sent, r.Served)}
 			if r.Served != "" {
-				k := [2]string{sent, r.Served}
+				k := [4]string{r.Provider, r.Model, sent, r.Served}
 				s, ok := swapped[k]
 				if !ok {
-					s = Swapped(sent, r.Served)
+					s = Swapped(sent, r.Served) && !ListedAs(r.Provider, r.Model, r.Served)
 					swapped[k] = s
 				}
 				row.Swapped = s
@@ -873,7 +907,7 @@ func readRequestBlocks(idx *requestIndex, st requestState, p Period, now time.Ti
 			gateways = append(gateways, c)
 		}
 	}
-	if c := probeChunk(snapshot.probes, gatewaySince, renames); c != nil {
+	if c := probeChunk(snapshot.probes, gatewaySince, renames, snapshot.hosts); c != nil {
 		gateways = append(gateways, c) // listed, never counted (SourceProbe)
 	}
 	on := map[string]bool{}
@@ -1175,8 +1209,12 @@ func (idx *requestIndex) trim(bound int64) {
 // references for matches, never a full hydrated row for every call.
 func visibleLocal(chunks []*rowChunk) map[rowRef]bool {
 	duplicates := map[rowRef]bool{}
-	seen := map[string]bool{}
-	rows := lentRows() // a kept message id is cloned
+	// a message id seen is kept as two 64-bit hashes of it, not a copy of
+	// the decoded chunk's string: a long history's ~400k ids held ~7MB of
+	// copies at the start's peak, and a key of these is a string header's
+	// size. Two ids alike in both are ~1e-28 likely.
+	seen := map[[2]uint64]struct{}{}
+	rows := lentRows()
 	defer rows.release()
 	for _, c := range chunks {
 		open := rows.of(c)
@@ -1186,16 +1224,18 @@ func visibleLocal(chunks []*rowChunk) map[rowRef]bool {
 			if msg == "" {
 				continue
 			}
-			if seen[msg] {
+			k := [2]uint64{maphash.String(msgSeeds[0], msg), maphash.String(msgSeeds[1], msg)}
+			if _, ok := seen[k]; ok {
 				duplicates[rowRef{c, i}] = true
 			} else {
-				// a copy: a decoded chunk's strings are one allocation
-				seen[strings.Clone(msg)] = true
+				seen[k] = struct{}{}
 			}
 		}
 	}
 	return duplicates
 }
+
+var msgSeeds = [2]maphash.Seed{maphash.MakeSeed(), maphash.MakeSeed()}
 
 // matchKey narrows candidates before comparing their end times. Request IDs
 // are consumed first; fallback matching still requires uniqueness both ways.
@@ -1537,6 +1577,28 @@ func (ps *pairedRows) visit(fn func(timedRef, *Row)) {
 		ps.visitChunk(&rows, c, &r, fn)
 	}
 }
+
+// visitActors is visit of the rows of the chunks a Codex thread is known
+// for some row of (codexActors), the only rows Codex's effort adds up: it
+// decoded every session file's chunk, ~90 MB of what eight Sessions polls
+// allocated, for the few that are Codex's. The rows' strings are lent
+// (lentRows), so fn clones what it keeps.
+func (ps *pairedRows) visitActors(fn func(*Row)) {
+	rows := lentRows()
+	defer rows.release()
+	var r Row
+	for _, c := range ps.all {
+		if slices.ContainsFunc(c.codexActors, func(a string) bool { return a != "" }) {
+			if visitingActors != nil {
+				visitingActors(c)
+			}
+			ps.visitChunk(&rows, c, &r, func(_ timedRef, r *Row) { fn(r) })
+		}
+	}
+}
+
+// visitingActors, in tests, is told each chunk visitActors reads.
+var visitingActors func(*rowChunk)
 
 // visitChunk is visit of c's rows alone, read through rows into r.
 func (ps *pairedRows) visitChunk(rows *chunkRows, c *rowChunk, r *Row, fn func(timedRef, *Row)) {

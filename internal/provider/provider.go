@@ -80,6 +80,8 @@ type Provider struct {
 	KeyProtocol Protocol `json:"keyProtocol,omitempty"`
 	// KeyWeight is the first key's weight (see KeyAccount.Weight).
 	KeyWeight int `json:"keyWeight,omitempty"`
+	// KeyPlan is the first key's plan (see KeyAccount.Plan).
+	KeyPlan string `json:"keyPlan,omitempty"`
 
 	// Base URLs, one per protocol the vendor serves natively. magpie appends
 	// the usual paths: chat/responses bases end in /v1 (OpenAI style),
@@ -243,6 +245,17 @@ type Provider struct {
 	// fitting, which a backend that isn't OpenAI's needs (#350).
 	CodexAsSent bool `json:"codexAsSent,omitempty"`
 
+	// PromptAsWritten, on Antigravity's subscription, has the system prompt
+	// go to Google exactly as the agent wrote it. By default the few lines
+	// Google answers with a 429 "Resource has been exhausted" whatever
+	// quota is left (Claude Code's billing line, the Claude Agent SDK's
+	// identity line, Codex's GPT-5 identity lines, Hermes Agent's earlier
+	// default persona) go with a zero-width space inside them, which Google
+	// lets through and the model reads the same (gateway's
+	// antigravityCloak). Set with `magpie provider set antigravity
+	// prompt=as-written`; prompt=default turns it back.
+	PromptAsWritten bool `json:"promptAsWritten,omitempty"`
+
 	// AdditionalTools says the provider's Responses API takes an
 	// additional_tools input item, as OpenAI's does: a deferred tool an
 	// Anthropic client's tool search loaded goes to it in such an item
@@ -251,6 +264,16 @@ type Provider struct {
 	// without it; another vendor isn't unless this is set, since xAI's
 	// turns the item away (#350).
 	AdditionalTools bool `json:"additionalTools,omitempty"`
+
+	// Patience is how many seconds more a request to this provider alone,
+	// not through a group, may be kept once it has failed in a way that
+	// passes (overloaded, unavailable, rate limited for a moment) and the
+	// same-one retries are spent, as a group's Patience is (zoecats on
+	// Discord): 0 keeps it PatienceDefault, PatienceOff hands the agent
+	// the error at once, and it is at most PatienceLongest. Set with
+	// `magpie provider set <id> patience=`; a group it is in keeps the
+	// group's own.
+	Patience int `json:"patience,omitempty"`
 
 	// NativeCompaction has Codex's compaction_trigger go to the provider
 	// as Codex sent it, and the compaction the provider writes back go to
@@ -441,6 +464,10 @@ type Provider struct {
 	// Account is set when the provider is an agent the user signed in to
 	// (see account.go); it is derived, never stored.
 	Account *Account `json:"-"`
+
+	// keyView is set on p.WithKey(k): p as that one key is asked with,
+	// at its plan, whose keys no longer tell plans apart (plansMixed)
+	keyView bool
 }
 
 type file struct {
@@ -709,6 +736,7 @@ func withPicks(a, pk Provider) Provider {
 	a.SwitchOnly = pk.SwitchOnly
 	a.Sink, a.NoModels = pk.Sink, pk.NoModels
 	a.NativeCompaction = pk.NativeCompaction
+	a.PromptAsWritten = pk.PromptAsWritten
 	a.Proxy, a.AccountProxies, a.AccountModels = pk.Proxy, pk.AccountProxies, pk.AccountModels
 	a.AccountCaps, a.AccountWindowCaps = pk.AccountCaps, pk.AccountWindowCaps
 	a.AccountNames = pk.AccountNames
@@ -751,23 +779,33 @@ func Find(id string) (*Provider, error) {
 }
 
 func findIn(all []Provider, id string) (*Provider, error) {
+	if p := lookIn(all, id); p != nil {
+		return p, nil
+	}
+	return nil, fmt.Errorf("no provider %q — magpie providers lists them%s", id, readElsewhere())
+}
+
+// lookIn is findIn without its error, which looks on disk for where else
+// this magpie's files may be (readElsewhere): a request's model not found
+// among the providers asked it twice, for nothing (#3394).
+func lookIn(all []Provider, id string) *Provider {
 	q := strings.ToLower(strings.TrimSpace(id))
 	// an id before a name: a provider of the user's called WorkBuddy isn't
 	// the workbuddy subscription
 	if i := slices.IndexFunc(all, func(p Provider) bool { return p.ID == q }); i >= 0 {
-		return &all[i], nil
+		return &all[i]
 	}
 	for _, p := range all {
 		if strings.ToLower(p.Name) == q {
-			return &p, nil
+			return &p
 		}
 	}
 	for _, p := range all {
 		if slices.Contains(p.Was, q) {
-			return &p, nil
+			return &p
 		}
 	}
-	return nil, fmt.Errorf("no provider %q — magpie providers lists them%s", id, readElsewhere())
+	return nil
 }
 
 // readElsewhere says, for a provider not found, that this magpie reads its
@@ -836,7 +874,7 @@ func Save(p Provider) error {
 		if p.ID == "kiro" {
 			key = p.Key
 		}
-		p = Provider{ID: p.ID, Key: key, Models: p.Models, NoModels: p.NoModels, PickedFrom: p.PickedFrom, Delisted: p.Delisted, Unlisted: p.Unlisted, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, AccountClaudeModes: p.AccountClaudeModes, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, QuotaRest: p.QuotaRest, QuotaResetAt: p.QuotaResetAt, RestCap: p.RestCap, PinUpstream: p.PinUpstream, NativeCompaction: p.NativeCompaction, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
+		p = Provider{ID: p.ID, Key: key, Models: p.Models, NoModels: p.NoModels, PickedFrom: p.PickedFrom, Delisted: p.Delisted, Unlisted: p.Unlisted, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, AccountClaudeModes: p.AccountClaudeModes, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, QuotaRest: p.QuotaRest, QuotaResetAt: p.QuotaResetAt, RestCap: p.RestCap, PinUpstream: p.PinUpstream, NativeCompaction: p.NativeCompaction, PromptAsWritten: p.PromptAsWritten, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
 	} else {
 		p.AccountProxies = keyProxies(p) // a provider of keys proxies each key apart
 		if subscriptionID(p.ID) && !stored(p.ID) {
@@ -1022,7 +1060,7 @@ func AddCopy(p Provider, from string) (string, error) {
 		return "", fmt.Errorf("%s is a signed-in account, which can't be copied", src.Name)
 	}
 	if p.Key == "" {
-		p.Key, p.KeyName, p.KeyProtocol, p.KeyWeight = src.Key, src.KeyName, src.KeyProtocol, src.KeyWeight
+		p.Key, p.KeyName, p.KeyProtocol, p.KeyWeight, p.KeyPlan = src.Key, src.KeyName, src.KeyProtocol, src.KeyWeight, src.KeyPlan
 		p.Keys = slices.Clone(src.Keys)
 		p.Routing, p.Sink, p.Affinity = src.Routing, src.Sink, src.Affinity
 	}
@@ -1244,6 +1282,10 @@ func keyOptional(p Provider) bool {
 func normalize(p Provider) Provider {
 	p.ID = strings.ToLower(strings.TrimSpace(p.ID))
 	p.Name = strings.TrimSpace(p.Name)
+	if p.Patience < 0 {
+		p.Patience = PatienceOff
+	}
+	p.Patience = min(p.Patience, PatienceLongest)
 	p.Key = strings.TrimSpace(p.Key)
 	p.Proxy = strings.TrimSpace(p.Proxy)
 	p.AccountProxies = normalAccountProxies(p.AccountProxies)
@@ -1265,7 +1307,7 @@ func normalize(p Provider) Provider {
 		// in for neither that token nor a project, and the provider as
 		// found still saves
 		p.Chat, p.Responses, p.Anthropic, p.Gemini, p.Decide = "", "", "", "", ""
-		p.Key, p.KeyName, p.Keys, p.KeyProtocol, p.KeyWeight = "", "", nil, "", 0
+		p.Key, p.KeyName, p.Keys, p.KeyProtocol, p.KeyWeight, p.KeyPlan = "", "", nil, "", 0, ""
 	}
 	p.remoteMagpieEndpoints()
 	for _, u := range []*string{&p.Chat, &p.Responses, &p.Anthropic, &p.Gemini, &p.Decide, &p.Website, &p.KeysURL} {
@@ -1319,7 +1361,7 @@ func normalize(p Provider) Provider {
 	if (p.Preset == OMLXPreset || p.Preset == MLXServePreset || p.Preset == "ollama" || p.Preset == "ollama-cloud") && p.Decide == "" && p.Chat != "" {
 		p.Decide = p.Chat
 	}
-	if p.Routing != Ordered && p.Routing != Rotate && p.Routing != LeastUsed && p.Routing != Pace && p.Routing != Weighted && p.Routing != FreeFirst && !PluginRouting(p.Routing) {
+	if p.Routing != Ordered && p.Routing != Rotate && p.Routing != LeastUsed && p.Routing != Pace && p.Routing != Weighted && p.Routing != FreeFirst && p.Routing != Fastest && !PluginRouting(p.Routing) {
 		p.Routing = ""
 	}
 	if !slices.Contains(Affinities, p.Affinity) {

@@ -1,11 +1,11 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"slices"
@@ -95,6 +95,23 @@ func (p Provider) PluginProvider() string {
 		return ""
 	}
 	return p.Account.plugin.ID
+}
+
+// PluginOpenAICompatible is whether p is a plugin's provider that speaks
+// model on an OpenAI-compatible API (@ai-sdk/openai-compatible), whose
+// other routes, the images API among them, its fetch sends under the same
+// base: SenseNova's plugin at token.sensenova.cn/v1. A plugin of a vendor
+// with an API of its own (Cursor's, Kiro's) speaks another package.
+func (p Provider) PluginOpenAICompatible(model string) bool {
+	if !p.IsPlugin() {
+		return false
+	}
+	pp := *p.Account.plugin
+	if cur, ok := PluginOf(p.ID); ok {
+		pp = cur
+	}
+	m, ok := pluginModel(pp, model)
+	return ok && firstOf(m.NPM, pp.NPM) == "@ai-sdk/openai-compatible"
 }
 
 // PluginOf is the plugin provider magpie's provider id is, when it is one.
@@ -506,12 +523,15 @@ func pluginFetch(pp plugin.Provider, account string, req *http.Request) (*http.R
 	ctx := req.Context()
 	var body []byte
 	if req.Body != nil {
-		b, err := io.ReadAll(req.Body)
+		// read into the length said: io.ReadAll grows from 512 bytes, so a
+		// 1 MB request was some 3 MB read (#3472)
+		buf := bytes.NewBuffer(make([]byte, 0, max(req.ContentLength, 0)+bytes.MinRead))
+		_, err := buf.ReadFrom(req.Body)
 		req.Body.Close()
 		if err != nil {
 			return nil, err
 		}
-		body = b
+		body = buf.Bytes()
 	}
 	rest := strings.TrimPrefix(req.URL.String(), pluginBase+pp.ID)
 	model := bodyModel(body)
