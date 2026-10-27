@@ -21,6 +21,10 @@ func TestClaudeTUIRuntimeInteractiveEquivalentContextPreservesEffectiveSettings(
 	}
 	for _, mutate := range []func(*tuiRuntimeRequest){
 		func(r *tuiRuntimeRequest) { r.System = "changed instructions" },
+		func(r *tuiRuntimeRequest) { r.Model = "claude-sonnet-5-5" },
+		func(r *tuiRuntimeRequest) {
+			r.Format = &Format{Type: "json_schema", Schema: json.RawMessage(`{"type":"string"}`)}
+		},
 		func(r *tuiRuntimeRequest) { r.Effort = "max" },
 		func(r *tuiRuntimeRequest) { r.ToolChoice = "required" },
 		func(r *tuiRuntimeRequest) { r.WebSearch = true },

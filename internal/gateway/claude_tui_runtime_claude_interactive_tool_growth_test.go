@@ -12,7 +12,7 @@ import (
 
 func TestClaudeTUIRuntimeExactInteractiveToolGrowthRequiresUnchangedOriginalContext(t *testing.T) {
 	base := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Effort: "high", System: "same system", Tools: []Tool{{Name: "echo", Schema: json.RawMessage(`{"type":"object"}`)}}}}
-	run := &tuiRuntimeSubscriptionRun{interactive: true, tools: map[string]bool{"echo": true}, effort: base.Effort, interactiveContextKey: tuiRuntimeTurnKey("owner", base, nil)}
+	run := &tuiRuntimeSubscriptionRun{interactive: true, owner: "owner", tools: map[string]bool{"echo": true}, effort: base.Effort, interactiveContextSnapshot: tuiRuntimeTestContextSnapshot(base)}
 	withMore := *base
 	withMore.Tools = append(append([]Tool(nil), base.Tools...), Tool{Name: "extra", Schema: json.RawMessage(`{"type":"object"}`)})
 	if run.offers(withMore.Tools) {
@@ -71,8 +71,7 @@ func TestClaudeTUIRuntimeExactInteractiveToolGrowthPassesHTTPHandoffWithoutRepla
 	waiter := make(chan tuiRuntimeMcpToolResult, 1)
 	run := &tuiRuntimeSubscriptionRun{bridge: b, token: "live-tool-growth", owner: owner, outerSession: outer,
 		model: req.Model, interactive: true, effort: req.Effort, interactiveContextSnapshot: &snapshot,
-		interactiveContextKey: tuiRuntimeTurnKey(owner, &initial, nil),
-		tools:                 map[string]bool{"echo": true}, shown: []tuiRuntimeShownCall{{id: "known-call", name: "echo", args: "{}"}},
+		tools: map[string]bool{"echo": true}, shown: []tuiRuntimeShownCall{{id: "known-call", name: "echo", args: "{}"}},
 		pending: map[string]chan tuiRuntimeMcpToolResult{"known-call": waiter}, parkedAt: time.Now(),
 		timer: time.AfterFunc(time.Minute, func() {}),
 	}
@@ -110,12 +109,11 @@ func TestClaudeTUIRuntimeExactInteractiveToolGrowthPassesHTTPHandoffWithoutRepla
 	}
 	run.mu.Lock()
 	added := run.tools["new_tool"]
-	contextKey := run.interactiveContextKey
 	run.mu.Unlock()
 	if !added {
 		t.Fatal("added tool was not registered for subsequent native handoffs")
 	}
-	if contextKey != tuiRuntimeTurnKey(owner, req, nil) || !run.interactiveEquivalentContext(req) {
+	if !run.interactiveEquivalentContext(req) {
 		t.Fatal("accepted tool growth was not committed as the run's current context")
 	}
 	if !run.offers(req.Tools) && !run.exactInteractiveToolGrowth(owner, req, tuiRuntimeByExactID) {

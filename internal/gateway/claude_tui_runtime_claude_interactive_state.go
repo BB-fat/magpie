@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const tuiRuntimeInteractiveSessionStateVersion = 1
+const tuiRuntimeInteractiveSessionStateVersion = 2
 
 type tuiRuntimeInteractiveRestoreStatus string
 
@@ -40,14 +40,14 @@ const (
 )
 
 type tuiRuntimeInteractiveSessionEntry struct {
-	SessionID  string    `json:"session_id"`
-	Model      string    `json:"model,omitempty"`
-	ThreadKey  string    `json:"thread_key,omitempty"`
-	ConvKey    string    `json:"conv_key"`
-	ReplyKey   string    `json:"reply_key,omitempty"`
-	ContextKey string    `json:"context_key"`
-	Dirty      bool      `json:"dirty,omitempty"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	SessionID      string    `json:"session_id"`
+	Model          string    `json:"model,omitempty"`
+	ThreadKey      string    `json:"thread_key,omitempty"`
+	ConvKey        string    `json:"conv_key"`
+	ReplyKey       string    `json:"reply_key,omitempty"`
+	InstructionKey string    `json:"instruction_key"`
+	Dirty          bool      `json:"dirty,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type tuiRuntimeInteractiveSessionState struct {
@@ -155,7 +155,7 @@ func tuiRuntimeLoadInteractiveSessionStateStrict() (tuiRuntimeInteractiveSession
 		// ReplyKey is optional for a dirty first-tool anchor, but these
 		// three fields are mandatory for both clean and dirty checkpoints.
 		// An empty nested JSON object is not a valid older native session.
-		if entry.SessionID == "" || entry.ConvKey == "" || entry.ContextKey == "" {
+		if entry.SessionID == "" || entry.ConvKey == "" || entry.InstructionKey == "" {
 			return empty, errors.New("checkpoint store contains an incomplete session entry")
 		}
 	}
@@ -240,7 +240,7 @@ func (b *tuiRuntimeSubscriptionBridge) loadInteractiveSession(owner, outerSessio
 }
 
 func (b *tuiRuntimeSubscriptionBridge) saveInteractiveSession(owner, outerSession string, e tuiRuntimeInteractiveSessionEntry) error {
-	if outerSession == "" || e.SessionID == "" || e.ConvKey == "" || e.ContextKey == "" {
+	if outerSession == "" || e.SessionID == "" || e.ConvKey == "" || e.InstructionKey == "" {
 		return errors.New("incomplete interactive checkpoint entry")
 	}
 	b.stateMu.Lock()
@@ -265,7 +265,7 @@ func (b *tuiRuntimeSubscriptionBridge) saveInteractiveSession(owner, outerSessio
 // transcript checkpoint or used to resume an uncertain native tool.
 func (r *tuiRuntimeSubscriptionRun) persistFirstToolAnchorLocked() error {
 	if r == nil || r.firstTurnAnchorKey == "" || r.sessionID == "" || r.outerSession == "" ||
-		r.bridge == nil || r.bridge.toolJournal == nil || len(r.seenMCPCallIDs) == 0 {
+		r.bridge == nil || r.bridge.toolJournal == nil || r.interactiveContextSnapshot == nil || len(r.seenMCPCallIDs) == 0 {
 		return nil
 	}
 	b := r.bridge
@@ -284,7 +284,7 @@ func (r *tuiRuntimeSubscriptionRun) persistFirstToolAnchorLocked() error {
 	}
 	state.Sessions[key] = tuiRuntimeInteractiveSessionEntry{
 		SessionID: r.sessionID, Model: r.model, ThreadKey: r.threadKey,
-		ConvKey: r.firstTurnAnchorKey, ContextKey: r.interactiveContextKey,
+		ConvKey: r.firstTurnAnchorKey, InstructionKey: r.interactiveContextSnapshot.instructions,
 		Dirty: true, UpdatedAt: time.Now().UTC(),
 	}
 	return tuiRuntimeWriteInteractiveSessionState(state)

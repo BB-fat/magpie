@@ -120,7 +120,7 @@ func TestClaudeTUIRuntimeNativeLeaseRejectedResumeDoesNotDirtyOtherRuntimeCheckp
 	if !ok || saved.Dirty {
 		t.Fatalf("clean checkpoint precondition violated: %+v", saved)
 	}
-	_, _, err = b.startInteractiveResumeTurn(context.Background(), req, tuiRuntimeAutoTestModel, "", owner, outer, saved, req.Messages, false)
+	_, _, err = b.startInteractiveResumeTurn(context.Background(), req, tuiRuntimeAutoTestModel, "", owner, outer, saved, req.Messages)
 	if !errors.Is(err, tuiRuntimeErrInteractiveOuterLive) {
 		t.Fatalf("competing native session was allowed to resume: %v", err)
 	}

@@ -446,7 +446,7 @@ printf '%s\n' '{"type":"result","session_id":"inner-ro-img","stop_reason":"end_t
 	keys := tuiRuntimeConversationKeys(owner, base)
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: "inner-ro-img", Model: model, ThreadKey: firstWords(&baseReq.Request),
-		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: true,
+		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]), InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: true,
 	})
 	// Merged opt-in row: stale tool_result + current image + sentinel.
 	req := &tuiRuntimeRequest{Request: Request{Model: model, Messages: []Message{

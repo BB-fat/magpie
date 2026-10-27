@@ -250,6 +250,16 @@ read is refused, never taken for none, and those not used for 30 days go.
 The safeguards beta is resolved before matching a live run, so unchanged
 safeguards continue the same tool call.
 
+Checkpoint format version 2 stores `instruction_key`, the fingerprint of
+the rendered external system instructions, instead of the old catch-all
+`context_key`. Version 1 is not accepted or
+migrated: stop the service, back up and move aside
+`claude-interactive-sessions.json`, then start the new binary. Keep the native
+transcripts. Existing conversations rebuild from their next request once and
+save version 2 checkpoints. For rollback, restore the old binary and its
+checkpoint backup together. An incompatible file left in place is an error,
+not an empty store, and writes never silently replace it.
+
 A resume marks its checkpoint dirty before it starts. When it ends with no
 answer and no tool call (its client went away, its start failed), the run,
 once reaped, takes it back (`rewindCancelledResume`): the session's
@@ -318,6 +328,25 @@ require a fresh cache write; changing between standard and TUI also rebuilds.
 The gateway preserves reported cache reads, writes and 1-hour writes, and
 counts repeated transcript rows of one upstream message once. These counters
 and stable-prefix tests do not establish Anthropic's live cache hit rate.
+
+Instruction identity and runtime settings are independent. A resumable history
+with the same rendered instructions resumes the same native session and sends
+only the new suffix, even when tools, tool choice, effort or output schema
+change between completed turns. Each new wrapper receives the current MCP
+definitions and launch settings. A forced tool choice (`required`, `name:`)
+is a `<current_turn_constraint>` placed before the current request of every
+prompt kind (first turn, rebuild, resume, parked copy), never inside the
+instructions, so it binds that request only; a read-only recovery turn, which
+drops it, therefore keeps the request's instruction key. Changed instructions
+rebuild from the client's current
+history; no `external_context_refresh` text is appended to an old transcript.
+Copying a parked session for tool results likewise sends only the new turn,
+since the copy already contains its instructions. A live MCP handoff still
+checks model, instructions, tools, tool choice, output schema, thinking and
+effort separately; only the existing verified additive-tool update may relax
+that check. Fingerprints of individual fields keep prompts out of diagnostics;
+there is no combined configuration key. Request/history replay keys remain
+separate from these checks.
 
 A rebuilt session can ask for a tool call again: a write or a command may
 be proposed a second time. Nothing here makes a side effect happen exactly

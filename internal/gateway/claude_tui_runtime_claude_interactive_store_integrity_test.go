@@ -20,7 +20,7 @@ func TestClaudeTUIRuntimeInteractiveInvalidCheckpointStoreFailsBeforeNewNativeRu
 	}{
 		{"invalid JSON", `{"version":`},
 		{"incompatible version", `{"version":999,"sessions":{}}`},
-		{"missing session map", `{"version":1}`},
+		{"missing session map", `{"version":2}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -56,7 +56,7 @@ func TestClaudeTUIRuntimeInteractiveCheckpointStoreIntegrityAcceptsValidAndAbsen
 	if err := b.verifyInteractiveSessionStore(); err != nil {
 		t.Fatalf("fresh account with no checkpoint store refused: %v", err)
 	}
-	entry := tuiRuntimeInteractiveSessionEntry{SessionID: "native", ConvKey: "known-history-hash", ContextKey: "known-context-hash"}
+	entry := tuiRuntimeInteractiveSessionEntry{SessionID: "native", ConvKey: "known-history-hash", InstructionKey: "known-context-hash"}
 	if err := b.saveInteractiveSession("owner", "outer", entry); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestClaudeTUIRuntimeInteractiveCheckpointStoreIntegrityAcceptsValidAndAbsen
 		t.Fatal(err)
 	}
 	other := filepath.Join(t.TempDir(), "other-state")
-	if err := os.WriteFile(other, []byte(`{"version":1,"sessions":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(other, []byte(`{"version":2,"sessions":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(other, path); err != nil {
@@ -96,9 +96,9 @@ func TestClaudeTUIRuntimeInteractiveCheckpointSaveNeverOverwritesCorruptOrInsecu
 	}{
 		{"truncated JSON", `{"version":`, 0o600},
 		{"future version", `{"version":999,"sessions":{}}`, 0o600},
-		{"null session map", `{"version":1,"sessions":null}`, 0o600},
-		{"incomplete session entry", `{"version":1,"sessions":{"a":{"session_id":"native"}}}`, 0o600},
-		{"publicly readable store", `{"version":1,"sessions":{}}`, 0o644},
+		{"null session map", `{"version":2,"sessions":null}`, 0o600},
+		{"incomplete session entry", `{"version":2,"sessions":{"a":{"session_id":"native"}}}`, 0o600},
+		{"publicly readable store", `{"version":2,"sessions":{}}`, 0o644},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -112,7 +112,7 @@ func TestClaudeTUIRuntimeInteractiveCheckpointSaveNeverOverwritesCorruptOrInsecu
 			b := tuiRuntimeNewSubscriptionBridge()
 			defer tuiRuntimeBridges.Delete(b)
 			err := b.saveInteractiveSession("owner", "outer", tuiRuntimeInteractiveSessionEntry{
-				SessionID: "native", ConvKey: "history", ContextKey: "context",
+				SessionID: "native", ConvKey: "history", InstructionKey: "context",
 			})
 			if err == nil {
 				t.Fatal("corrupted state overwritten instead of rejecting save")
@@ -131,12 +131,12 @@ func TestClaudeTUIRuntimeInteractiveCheckpointDirtyUpdateDoesNotReplaceDamagedSt
 	defer tuiRuntimeBridges.Delete(b)
 	owner, outer := "owner", "outer"
 	if err := b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
-		SessionID: "native", ConvKey: "checkpoint", ContextKey: "context",
+		SessionID: "native", ConvKey: "checkpoint", InstructionKey: "context",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	path := tuiRuntimeInteractiveSessionStatePath()
-	broken := []byte(`{"version":1,"sessions":`)
+	broken := []byte(`{"version":2,"sessions":`)
 	if err := os.WriteFile(path, broken, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -155,9 +155,9 @@ func TestClaudeTUIRuntimeInteractiveCheckpointSaveRejectsSymlinkAndOversizedStor
 	}
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
-	entry := tuiRuntimeInteractiveSessionEntry{SessionID: "native", ConvKey: "history", ContextKey: "context"}
+	entry := tuiRuntimeInteractiveSessionEntry{SessionID: "native", ConvKey: "history", InstructionKey: "context"}
 	target := filepath.Join(t.TempDir(), "real-state")
-	data := []byte(`{"version":1,"sessions":{}}`)
+	data := []byte(`{"version":2,"sessions":{}}`)
 	if err := os.WriteFile(target, data, 0o600); err != nil {
 		t.Fatal(err)
 	}

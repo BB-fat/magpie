@@ -18,7 +18,7 @@ func TestClaudeTUIRuntimeInteractiveRestoreRejectsStoreChangedAfterPreflight(t *
 			b := tuiRuntimeNewSubscriptionBridge()
 			defer tuiRuntimeBridges.Delete(b)
 			if err := b.saveInteractiveSession("owner", "outer", tuiRuntimeInteractiveSessionEntry{
-				SessionID: "native", ConvKey: "checkpoint", ContextKey: "context",
+				SessionID: "native", ConvKey: "checkpoint", InstructionKey: "context",
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -60,7 +60,7 @@ func TestClaudeTUIRuntimeInteractiveCheckpointOversizedUpdatePreservesPreviousSt
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
-	entry := tuiRuntimeInteractiveSessionEntry{SessionID: "native", ConvKey: "checkpoint", ContextKey: "context"}
+	entry := tuiRuntimeInteractiveSessionEntry{SessionID: "native", ConvKey: "checkpoint", InstructionKey: "context"}
 	if err := b.saveInteractiveSession("owner", "outer", entry); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestClaudeTUIRuntimeInteractiveCheckpointOversizedUpdatePreservesPreviousSt
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry.ContextKey = strings.Repeat("x", tuiRuntimeMaxInteractiveSessionStoreBytes)
+	entry.InstructionKey = strings.Repeat("x", tuiRuntimeMaxInteractiveSessionStoreBytes)
 	if err := b.saveInteractiveSession("owner", "outer", entry); err == nil {
 		t.Fatal("an update may not create a store that its own reader rejects")
 	}
@@ -101,7 +101,7 @@ func TestClaudeTUIRuntimeInteractiveResumeRequiresPersistedDirtyMarker(t *testin
 				if os.Geteuid() == 0 {
 					t.Skip("root bypasses directory write permissions")
 				}
-				if err := b.saveInteractiveSession("boundary-owner", "boundary-"+kind, tuiRuntimeInteractiveSessionEntry{SessionID: "native", ConvKey: "checkpoint", ContextKey: "context"}); err != nil {
+				if err := b.saveInteractiveSession("boundary-owner", "boundary-"+kind, tuiRuntimeInteractiveSessionEntry{SessionID: "native", ConvKey: "checkpoint", InstructionKey: "context"}); err != nil {
 					t.Fatal(err)
 				}
 				parent := filepath.Dir(path)
@@ -144,7 +144,7 @@ func TestClaudeTUIRuntimeInteractiveLateStoreFailureReturnsConflict(t *testing.T
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
-	if err := b.saveInteractiveSession("owner", "outer", tuiRuntimeInteractiveSessionEntry{SessionID: "native", ConvKey: "checkpoint", ContextKey: "context"}); err != nil {
+	if err := b.saveInteractiveSession("owner", "outer", tuiRuntimeInteractiveSessionEntry{SessionID: "native", ConvKey: "checkpoint", InstructionKey: "context"}); err != nil {
 		t.Fatal(err)
 	}
 	rt := &tuiRuntime{bridge: b}

@@ -94,7 +94,7 @@ func tuiRuntimeScSaveClean(t *testing.T, b *tuiRuntimeSubscriptionBridge, sessio
 	if err := b.saveInteractiveSession(tuiRuntimeScOwner, tuiRuntimeScOuter, tuiRuntimeInteractiveSessionEntry{
 		SessionID: session, Model: "claude-opus-5-5", ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]),
-		ContextKey: tuiRuntimeTurnKey(tuiRuntimeScOwner, baseReq, nil), Dirty: dirty,
+		InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: dirty,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +549,7 @@ func TestClaudeTUIRuntimeLiteParkedRunLetGoResumesItsOwnSession(t *testing.T) {
 	tuiRuntimeOlWrapper(t, dir, "lite-park-bridge", tuiRuntimeOlParkScript())
 	t.Setenv("DAV1878_PARK_RELEASE", filepath.Join(dir, "never"))
 	rt, b := tuiRuntimeScRuntime(t)
-	tools := `"tools":[{"name":"write_file","input_schema":{"type":"object"}}]`
+	tools := `"system":"PARKED_INSTRUCTIONS","tools":[{"name":"write_file","input_schema":{"type":"object"}}]`
 	first := `{"model":"claude-opus-5-5","max_tokens":64,` + tools + `,"messages":[{"role":"user","content":"把结果写进 notes.txt"}]}`
 	if code, out := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, first); code != 200 || !strings.Contains(out, `"call_1"`) {
 		t.Fatalf("first turn did not park: %d %s", code, out)
@@ -569,7 +569,7 @@ func TestClaudeTUIRuntimeLiteParkedRunLetGoResumesItsOwnSession(t *testing.T) {
 	if err := os.MkdirAll(sessions, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	native := `{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"inner-ol","message":{"role":"user","content":"把结果写进 notes.txt"}}
+	native := `{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"inner-ol","message":{"role":"user","content":"<external_system_instructions>\nPARKED_INSTRUCTIONS\n</external_system_instructions>\n\n把结果写进 notes.txt"}}
 {"type":"assistant","uuid":"t0","parentUuid":"u1","sessionId":"inner-ol","message":{"id":"m1","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"SIG"}]}}
 {"type":"assistant","uuid":"t1","parentUuid":"t0","sessionId":"inner-ol","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"mcp__magpie__write_file","input":{"zeta":1,"path":"a"}}]}}
 {"type":"user","uuid":"i1","parentUuid":"t1","sessionId":"inner-ol","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"[Request interrupted by user for tool use]"}]}}
@@ -595,7 +595,7 @@ func TestClaudeTUIRuntimeLiteParkedRunLetGoResumesItsOwnSession(t *testing.T) {
 		t.Fatalf("did not resume a copy of the run's own session: %v", run)
 	}
 	copied := run["seed.jsonl"]
-	for _, kept := range []string{`"signature":"SIG"`, `"input":{"zeta":1,"path":"a"}`, `"sessionId":"` + run["resume"] + `"`, "WROTE_OK", tuiRuntimeLiteResultsReceived} {
+	for _, kept := range []string{"PARKED_INSTRUCTIONS", `"signature":"SIG"`, `"input":{"zeta":1,"path":"a"}`, `"sessionId":"` + run["resume"] + `"`, "WROTE_OK", tuiRuntimeLiteResultsReceived} {
 		if !strings.Contains(copied, kept) {
 			t.Fatalf("resumed session lacks %s:\n%s", kept, copied)
 		}
@@ -605,7 +605,7 @@ func TestClaudeTUIRuntimeLiteParkedRunLetGoResumesItsOwnSession(t *testing.T) {
 			t.Fatalf("resumed session keeps %s:\n%s", gone, copied)
 		}
 	}
-	if !strings.Contains(run["stdin"], tuiRuntimeLiteContinueText) {
+	if !strings.Contains(run["stdin"], tuiRuntimeLiteContinueText) || strings.Contains(run["stdin"], "PARKED_INSTRUCTIONS") {
 		t.Fatalf("turn prompt: %q", run["stdin"])
 	}
 	if b, err := os.ReadFile(filepath.Join(sessions, "inner-ol.jsonl")); err != nil || string(b) != native {
@@ -624,7 +624,7 @@ func TestClaudeTUIRuntimeLiteParkedBranchNeedsExactlyItsCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run.interactiveContextKey = tuiRuntimeTurnKey(tuiRuntimeScOwner, req, nil)
+	run.interactiveContextSnapshot = tuiRuntimeTestContextSnapshot(req)
 	b.noteLiteParked(run)
 	if _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, tuiRuntimeScOuter, "claude-opus-5-5", "", req); ok {
 		t.Fatal("one result of two calls resumed the run's session")

@@ -27,7 +27,7 @@ func tuiRuntimeFirstAnchorFixture(t *testing.T) (*tuiRuntimeSubscriptionBridge, 
 	r := &tuiRuntimeSubscriptionRun{
 		bridge: b, interactive: true, owner: owner, outerSession: outer,
 		token: "real-native-token", model: tuiRuntimeAutoTestModel, threadKey: "first-thread",
-		firstTurnAnchorKey: initial, interactiveContextKey: "context-hash",
+		firstTurnAnchorKey: initial, interactiveContextSnapshot: tuiRuntimeTestContextSnapshot(&tuiRuntimeRequest{}),
 		seenMCPCallIDs: map[string]bool{},
 	}
 	return b, r
@@ -87,8 +87,8 @@ func TestClaudeTUIRuntimeInteractiveFirstTurnDirtyAnchorRecoversToolFreeAndCommi
 		bridge: b, interactive: true, owner: owner, outerSession: outer,
 		token: "true-native-callback", model: tuiRuntimeAutoTestModel,
 		sessionID: "real-native-init-session", threadKey: firstWords(&request.Request),
-		firstTurnAnchorKey:    tuiRuntimeToolEvidenceHash(owner + "\x00" + tuiRuntimeHistoryKey(first)),
-		interactiveContextKey: "initial-context", seenMCPCallIDs: map[string]bool{},
+		firstTurnAnchorKey:         tuiRuntimeToolEvidenceHash(owner + "\x00" + tuiRuntimeHistoryKey(first)),
+		interactiveContextSnapshot: tuiRuntimeTestContextSnapshot(&tuiRuntimeRequest{}), seenMCPCallIDs: map[string]bool{},
 	}
 	argsHash, err := tuiRuntimeToolEvidenceArgumentsHash(json.RawMessage(`{"file_path":"note.txt"}`))
 	if err != nil {
@@ -169,7 +169,7 @@ func TestClaudeTUIRuntimeInteractiveFirstTurnAnchorsOnlyRealNativeSessionAndRegi
 
 func TestClaudeTUIRuntimeInteractiveFirstTurnAnchorDoesNotOverwriteCompletedCheckpoint(t *testing.T) {
 	b, r := tuiRuntimeFirstAnchorFixture(t)
-	entry := tuiRuntimeInteractiveSessionEntry{SessionID: "previous-session", ConvKey: "completed", ReplyKey: "reply", ContextKey: "context"}
+	entry := tuiRuntimeInteractiveSessionEntry{SessionID: "previous-session", ConvKey: "completed", ReplyKey: "reply", InstructionKey: "context"}
 	if err := b.saveInteractiveSession(r.owner, r.outerSession, entry); err != nil {
 		t.Fatal(err)
 	}

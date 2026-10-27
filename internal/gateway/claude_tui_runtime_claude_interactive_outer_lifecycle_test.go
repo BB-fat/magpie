@@ -81,7 +81,7 @@ func tuiRuntimeOlSave(t *testing.T, b *tuiRuntimeSubscriptionBridge, owner, oute
 	b.saveInteractiveSession(owner, outer, tuiRuntimeInteractiveSessionEntry{
 		SessionID: session, Model: tuiRuntimeOlModel, ThreadKey: firstWords(&baseReq.Request),
 		ConvKey: keys[0], ReplyKey: tuiRuntimeAssistantReplyKey(base[1]),
-		ContextKey: tuiRuntimeTurnKey(owner, baseReq, nil), Dirty: dirty,
+		InstructionKey: tuiRuntimeInstructionKey(baseReq), Dirty: dirty,
 	})
 }
 
