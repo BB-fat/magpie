@@ -280,6 +280,20 @@ the history again. Changed instructions rebuild. A side question, a
 compaction, an edit of an earlier turn and a retried cut-off turn each
 continue their own transcript; none takes another's place.
 
+A request offering no tools that goes on from a point whose run had them
+(Codex's own compaction request carries none: openai/codex#37305) is run
+with that run's MCP definitions byte for byte, held: tool definitions are
+the head of the prefix Anthropic cached, so dropping them wrote the whole
+conversation to the cache again (au-exit 10-27: cache_read 0 and 1249,
+~130k written, on both compactions). A point records the hash of its run's
+definitions (`keepInteractiveTools`, kept by hash in
+`<config>/claude-tui/claude-interactive-tools/`, unused for 30 days they
+go). The turn is told no tools are available
+(`tuiRuntimeHeldToolsConstraint`); a call of a held tool is answered as not
+executed by `mcpCall` and its transcript row is never shown to the client.
+A turn with images, or one going on from the checkpoint or a parked copy,
+is not held.
+
 Limits: points are made at complete replies only; a reply that called tools
 is found by call id in memory (`liteParkedBranch`) and not after a restart.
 Each fork is a copy of its transcript's rows; nothing removes interactive

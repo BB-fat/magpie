@@ -251,6 +251,8 @@ type tuiRuntimeSubscriptionRun struct {
 	workKey                    string                                          // state key of the run's cwd, where its session's transcript is
 	lastRow                    string                                          // uuid of the last transcript row read: a complete reply's cut point
 	startKey                   string                                          // replay key of the lite request it was started for
+	heldTools                  map[string]bool                                 // tools defined for the cache but not offered (heldTools)
+	toolsHash                  string                                          // the kept definitions it was started with (keepInteractiveTools)
 	interactiveUserNonce       string                                          // pending native post-tool user context
 	interactiveUserAcked       bool                                            // retained before temporary files are removed
 	outerSession               string                                          // outer client conversation persisted across PTY turns
@@ -1018,12 +1020,13 @@ func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop str
 		sessionID, outerSession, threadKey := r.sessionID, r.outerSession, r.threadKey
 		r.mu.Unlock()
 		r.mu.Lock()
-		row, work := r.lastRow, r.workKey
+		row, work, toolsHash := r.lastRow, r.workKey, r.toolsHash
 		r.mu.Unlock()
 		if outerSession != "" && sessionID != "" && conv != "" && row != "" && work != "" {
 			if err := tuiRuntimeSaveInteractivePoint(conv, tuiRuntimeInteractivePoint{
 				SessionID: sessionID, Row: row, Work: work, Outer: tuiRuntimeInteractiveSessionStateKey(r.owner, outerSession),
 				Model: r.model, InstructionKey: tuiRuntimeInstructionKey(req), ReplyKey: tuiRuntimeAssistantReplyKey(reply),
+				ToolsHash: toolsHash,
 			}); err != nil {
 				log.Printf("Claude interactive cut point not saved: %v", err)
 			}
@@ -2847,6 +2850,14 @@ func (b *tuiRuntimeSubscriptionBridge) mcpCall(w http.ResponseWriter, r *http.Re
 		// registered in b.calls.
 		run.noteReadOnlyToolSignal()
 		writeJSON(w, 200, tuiRuntimeMcpToolResult{IsError: true, Content: []map[string]any{{"type": "text", "text": "This is a read-only recovery turn; no tools are available. Answer in text only."}}})
+		return
+	}
+	run.mu.Lock()
+	held := run.interactive && run.heldTools[call.Name] && !run.tools[call.Name]
+	run.mu.Unlock()
+	if held {
+		// defined only to keep the cached prefix: the client offered no tools
+		writeJSON(w, 200, tuiRuntimeMcpToolResult{IsError: true, Content: []map[string]any{{"type": "text", "text": tuiRuntimeHeldToolsRefusal}}})
 		return
 	}
 	if run.interactive && call.Name == tuiRuntimeInteractiveImageTool {
