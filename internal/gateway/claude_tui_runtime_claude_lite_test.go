@@ -360,17 +360,21 @@ func TestClaudeTUIRuntimeLitePairedToolTraffic(t *testing.T) {
 	}
 }
 
-// A helper call reusing the conversation id for another thread (Desktop
-// titles, subagents) keeps upstream's routing: stateless, the checkpoint
-// untouched.
-func TestClaudeTUIRuntimeLiteOtherThreadOnTheConversationIdRunsStateless(t *testing.T) {
+// An explicitly identified subagent sharing the conversation id runs
+// stateless without replacing its parent's checkpoint.
+func TestClaudeTUIRuntimeLiteSubagentOnTheConversationIdRunsStateless(t *testing.T) {
 	_, runs := tuiRuntimeScWrapper(t)
 	rt, b := tuiRuntimeScRuntime(t)
 	tuiRuntimeScSaveClean(t, b, "inner-saved", false)
 	b.anchorOuterThread(tuiRuntimeScOwner, tuiRuntimeScOuter, &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "先读一下配置"}}}}}})
 	before, _, _ := b.loadInteractiveSession(tuiRuntimeScOwner, tuiRuntimeScOuter)
-	code, out := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, `{"model":"claude-opus-5-5","max_tokens":64,"messages":[
-		{"role":"user","content":"Explore the repository and list its packages"},{"role":"assistant","content":"Looking"},{"role":"user","content":"go on"}]}`)
+	body := `{"model":"claude-opus-5-5","max_tokens":64,"messages":[
+		{"role":"user","content":"Explore the repository and list its packages"},{"role":"assistant","content":"Looking"},{"role":"user","content":"go on"}]}`
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+	req.Header.Set("x-claude-code-agent-id", "explorer")
+	rec := httptest.NewRecorder()
+	code, _ := rt.serveMessages(rec, req, "claude-opus-5-5", tuiRuntimeScOuter, []byte(body), &Usage{})
+	out := rec.Body.String()
 	if code != 200 || !strings.Contains(out, "SC_ANSWER") {
 		t.Fatalf("helper: %d %s", code, out)
 	}
