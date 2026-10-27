@@ -389,6 +389,14 @@ after the setting changes, a conversation's next turn is rebuilt from the
 request, as after its instructions change. The keys of runs not lean are the
 bytes they were, so their checkpoints stay valid.
 
+A run keeps the mode it was started in. A request matched to a live run
+(its tool results, by call id) takes that run's mode
+(`tuiRuntimeKeepRunMode`), and `interactiveEquivalentContext` compares the
+request in the run's mode (the snapshot's `lean`): the setting changing while
+a tool runs neither refuses the results with 409 nor lets the run go. That
+turn's checkpoint is the run's mode, so the conversation's next turn is the
+one rebuilt.
+
 ## Prompt-cache continuity
 
 A stable supported session header lets a completed conversation resume its

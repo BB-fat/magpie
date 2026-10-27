@@ -3338,6 +3338,7 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 	}
 	var search Tool
 	run, results, how := rt.bridge.match(req)
+	tuiRuntimeKeepRunMode(req, run)
 	recoveryCurrent := tuiRuntimeInteractiveAbandonedToolRecoveryIndex(req)
 	optInCurrent := tuiRuntimeInteractiveReadOnlyOptInIndex(req)
 	// Any dirty recovery turn is tool-free; the index is the wider of the

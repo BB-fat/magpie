@@ -50,12 +50,36 @@ func tuiRuntimeInteractiveCanonicalTools(tools []Tool) []Tool {
 	return normalized
 }
 
+// keepRunMode gives req the lean mode run was started in, when the request
+// goes on in that run: its system prompt can't change while it lives, and
+// the setting changing under a tool turn is not the caller's context
+// changing. The turn's checkpoint and keys then keep the run's mode, and
+// the conversation's next turn is rebuilt in the setting's.
+func tuiRuntimeKeepRunMode(req *tuiRuntimeRequest, run *tuiRuntimeSubscriptionRun) {
+	if run == nil {
+		return
+	}
+	run.mu.Lock()
+	snapshot := run.interactiveContextSnapshot
+	run.mu.Unlock()
+	if snapshot != nil {
+		req.leanPrompt = snapshot.lean
+	}
+}
+
 func (r *tuiRuntimeSubscriptionRun) interactiveEquivalentContext(req *tuiRuntimeRequest) bool {
 	r.mu.Lock()
 	snapshot := r.interactiveContextSnapshot
 	r.mu.Unlock()
 	if snapshot == nil {
 		return false
+	}
+	// the setting is not the request's context: a run keeps the mode it
+	// was started in (tuiRuntimeKeepRunMode)
+	if req.leanPrompt != snapshot.lean {
+		copied := *req
+		copied.leanPrompt = snapshot.lean
+		req = &copied
 	}
 	now := tuiRuntimeInteractiveContextDiagnosticFromRequest(req)
 	return snapshot.model == now.model && snapshot.instructions == now.instructions &&

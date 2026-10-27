@@ -14,9 +14,12 @@ import (
 type tuiRuntimeInteractiveContextDiagnosticSnapshot struct {
 	system, tools, unorderedTools, toolChoice, schema [32]byte
 	thinkOff, webSearch, effortSet                    bool
-	effort                                            [32]byte
-	model, instructions                               string
-	canonicalTools, canonicalSchema                   [32]byte
+	// lean is whether the run was started with the caller's instructions
+	// as its system prompt (ClaudeLeanPrompt); a run keeps that mode.
+	lean                            bool
+	effort                          [32]byte
+	model, instructions             string
+	canonicalTools, canonicalSchema [32]byte
 }
 
 func tuiRuntimeInteractiveContextDiagnosticFromRequest(req *tuiRuntimeRequest) tuiRuntimeInteractiveContextDiagnosticSnapshot {
@@ -43,6 +46,7 @@ func tuiRuntimeInteractiveContextDiagnosticFromRequest(req *tuiRuntimeRequest) t
 		toolChoice:      sha256.Sum256([]byte(req.ToolChoice)),
 		schema:          sha256.Sum256(req.Format.schema()),
 		thinkOff:        req.ThinkOff, webSearch: req.WebSearch, effortSet: req.Effort != "",
+		lean: req.leanPrompt,
 	}
 }
 
