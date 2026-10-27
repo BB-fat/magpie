@@ -811,6 +811,7 @@ func tuiRuntimeNewLooseTurn(owner string, req *tuiRuntimeRequest, msgs []Message
 	}
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d\x00%d", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, req.System, req.WebSearch, req.Format.schema(), len(msgs), start)
+	tuiRuntimeLeanIdentity(h, req)
 	tuiRuntimeHashMessages(h, msgs[:start], nil)
 	l := &tuiRuntimeLooseTurn{key: hex.EncodeToString(h.Sum(nil))}
 	words := tuiRuntimeMessageWords(msgs)
@@ -1588,8 +1589,19 @@ func tuiRuntimeTurnKey(owner string, req *tuiRuntimeRequest, msgs []Message) str
 	h := sha256.New()
 	tools, _ := json.Marshal(req.Tools)
 	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, req.System, tools, req.WebSearch, req.Format.schema())
+	tuiRuntimeLeanIdentity(h, req)
 	tuiRuntimeHashMessages(h, msgs, nil)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// leanIdentity sets a run started lean apart from one started with Claude
+// Code's prompt: one has the caller's instructions as its system prompt,
+// the other in its first message, and neither goes on with the other's
+// turns. It adds no bytes otherwise, preserving the keys of those runs.
+func tuiRuntimeLeanIdentity(h hash.Hash, req *tuiRuntimeRequest) {
+	if req.leanPrompt {
+		fmt.Fprint(h, "\x00lean-prompt")
+	}
 }
 
 // conversationKeys is the conversation so far as it stood after each of
@@ -3293,6 +3305,9 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 		return out.Fail(400, err.Error())
 	}
 	req.Model = model
+	// a run started lean has the caller's instructions as its system
+	// prompt (tuiRuntimeLeanSystem), not in its first message
+	req.leanPrompt = tuiRuntimeLeanPrompt()
 	if err := tuiRuntimeValidateInteractiveOutboundCredentials(body, r.Header); err != nil {
 		return out.Fail(http.StatusBadRequest, err.Error())
 	}

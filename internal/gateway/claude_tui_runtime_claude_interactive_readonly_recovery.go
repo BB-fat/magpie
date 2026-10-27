@@ -354,6 +354,9 @@ func tuiRuntimeRenderInteractiveReadOnlyBootstrap(req *tuiRuntimeRequest) (strin
 
 	// Only notices in the current user role run are current instructions.
 	instructions := *req
+	if req.leanPrompt {
+		instructions.System = ""
+	}
 	currentStart := positions[current]
 	for currentStart > 0 && original.Messages[currentStart-1].Role == "system" {
 		currentStart--
@@ -365,7 +368,7 @@ func tuiRuntimeRenderInteractiveReadOnlyBootstrap(req *tuiRuntimeRequest) (strin
 			}
 		}
 	}
-	prefix := tuiRuntimeRenderInteractiveExternalInstructions(&instructions) + importHeader
+	prefix := tuiRuntimeImportInstructions(&instructions) + importHeader
 	fixedBytes := len(prefix) + len(currentBlock)
 	if fixedBytes > tuiRuntimeInteractiveHistoricalBootstrapMaxBytes {
 		return "", errors.New("Claude interactive read-only bootstrap current request and instructions exceed the safe PTY transport budget")

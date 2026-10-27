@@ -273,7 +273,8 @@ type Settings struct {
 	// (--system-prompt-file), in place of Claude Code's (about 1.1K tokens
 	// a request on Sonnet 5.5), and not in its first message. Still the
 	// real Claude Code, its billing line and identity line kept; off, as by
-	// default, the run is the shape every Claude Code run has.
+	// default, the run is the shape every Claude Code run has. Accounts on
+	// the standard bridge and on the Claude TUI both follow it.
 	ClaudeLeanPrompt bool `json:"claudeLeanPrompt,omitempty"`
 	// ClaudeRunsMost is how many Claude Code processes a Claude
 	// subscription may have running at once: conversations' runs, those

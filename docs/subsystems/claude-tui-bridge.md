@@ -58,7 +58,8 @@ account is never answered by `claude -p`.
    is installed, downloaded or run with sudo.
 2. A client cache-mark opt-in (`X-Magpie-Cache-Marks: client`) is refused
    400: the run's cache slots are Claude Code's own. The short system
-   prompt setting (`claudeLeanPrompt`) does not apply.
+   prompt setting (`claudeLeanPrompt`) applies as on the standard bridge
+   ([below](#the-callers-instructions-as-the-system-prompt-claudeleanprompt)).
 3. The account's config folder (`tuiAccountDir`): its saved sign-in's,
    `provider` `claude-accounts/<hash>`, refreshed by magpie as for the
    standard bridge. Claude Code's own home is never run in or copied.
@@ -115,6 +116,7 @@ from the fork's per-account mode control.
 | `Env` | the account's proxy (`netproxy.EnvForBunWith`), `CLAUDE_CONFIG_DIR`, `IS_SANDBOX` as root |
 | `MaxRSS` | `claudeTuiMaxRSSMiB`, else `claudeRunBudget` |
 | `CanSearch`, `SearchHandler`, `NoteLimits`, `MovedOff` | the gateway's search availability and web search, `provider.NoteClaudeLimits`, `provider.ClaudeCodeMovedOff` |
+| `LeanPrompt` | `settings.ClaudeLeanPrompt`, read for each request |
 
 ## The MCP server name and tool names
 
@@ -359,6 +361,33 @@ so split parallel calls keep all their matched results. A result whose call was
 removed by compaction is preserved as labelled historical output with its
 error status and images, rather than emitted as an invalid orphan tool result.
 Visible mismatched tool handoffs still fail with 409.
+
+## The caller's instructions as the system prompt (`claudeLeanPrompt`)
+
+By default a run keeps Claude Code's own system prompt, and the caller's
+instructions open its first prompt inside `<external_system_instructions>`
+(`tuiRuntimeRenderInteractiveExternalInstructions`), or the historical and
+read-only bootstraps' prompts. With Settings' Short Claude system prompt
+on, as for the [standard bridge](claude-subscription-bridge.md#the-callers-instructions-as-the-system-prompt-claudeleanprompt),
+`serveLite` and `serveMessagesInner` mark the request lean
+(`tuiRuntimeLeanPrompt`), and every launch, a resume or fork included, is
+given `--system-prompt-file=<run temp>/system.md` (0600; one argv, since the
+wrapper doesn't know the flag's arity). The file holds `tuiRuntimeLeanSystem`:
+the caller's instructions without the client Claude Code's billing line.
+The prompts then carry only what is the turn's own: the current system
+notices (in `<external_system_instructions>`, none when there are none,
+`tuiRuntimeImportInstructions`) and `tool_choice`
+(`<current_turn_constraint>`). A Desktop suggestion run, which is given no
+instructions, is lean with an empty system prompt; Claude Code 2.1.308 uses
+a given prompt even when it is empty.
+
+A session holds its instructions in one place or the other, so lean is part
+of `tuiRuntimeInstructionKey` and of the run-matching keys
+(`tuiRuntimeTurnKey`, the loose turn, through `tuiRuntimeLeanIdentity`). A
+checkpoint, point or parked run of one mode is never resumed by the other:
+after the setting changes, a conversation's next turn is rebuilt from the
+request, as after its instructions change. The keys of runs not lean are the
+bytes they were, so their checkpoints stay valid.
 
 ## Prompt-cache continuity
 

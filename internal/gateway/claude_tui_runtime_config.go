@@ -78,6 +78,10 @@ type tuiRuntimeConfig struct {
 	// HandedOver is called when a saved account was moved over to Claude
 	// Code's own sign-in.
 	HandedOver func(user string)
+
+	// LeanPrompt says whether a run starts with the caller's instructions
+	// as its system prompt, in place of Claude Code's (ClaudeLeanPrompt).
+	LeanPrompt func() bool
 }
 
 var tuiRuntimeSettings *tuiRuntimeConfig
@@ -157,7 +161,15 @@ func initTUIRuntime(cfg *tuiRuntimeConfig) {
 	if cfg.HandedOver != nil {
 		c.HandedOver = cfg.HandedOver
 	}
+	if cfg.LeanPrompt != nil {
+		c.LeanPrompt = cfg.LeanPrompt
+	}
 	tuiRuntimeSettings = &c
+}
+
+// leanPrompt is LeanPrompt's answer, false when the gateway gave none.
+func tuiRuntimeLeanPrompt() bool {
+	return tuiRuntimeSettings.LeanPrompt != nil && tuiRuntimeSettings.LeanPrompt()
 }
 
 // tempRoot is where runs' folders and tmux sockets are made.
