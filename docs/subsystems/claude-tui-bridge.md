@@ -265,6 +265,18 @@ The rows carry the message's usage and its parallel calls, so both stay
 with the request that showed the call. A row that comes after that wait
 is counted with the next request.
 
+Claude Code's auto mode classifier is refused 400 with
+`x-should-retry: false`, before any native run
+(`tuiRuntimeAutoModeClassifier`: no tools, only user messages, the first
+beginning `<transcript>\n`). Auto mode asks the API to review each action
+and reads `safeguard_results`; a TUI run's native Claude Code keeps that
+verdict (its transcript has none), so the client classifies each action
+locally: its whole transcript in a request the PTY types as one prompt
+block, written to the cache again every time (about 300k tokens a call on
+a long session). Refused, Claude Code asks the user about the action, or
+stops the turn after several in a row; nothing runs unreviewed. Auto mode
+wants the account set to `standard`.
+
 A completed reply is reused only for the same request semantics: canonical
 tool arguments, result error flags, media contents, safeguards and generation
 settings participate in its replay key. This strict replay identity is separate
