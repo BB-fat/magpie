@@ -2364,6 +2364,14 @@ func (r *tuiRuntimeSubscriptionRun) readOutput(rd io.Reader) {
 // once.
 var tuiRuntimeUnstreamedQuiet = 300 * time.Millisecond
 
+// callbackRowWait is how long a tool shown from its MCP callback alone
+// waits for its message's transcript rows before its turn is closed. They
+// carry the message's usage and its parallel calls; Claude Code can write
+// them a second or more after the first call's callback (closed at
+// unstreamedQuiet, the usage went to the next request with the next call).
+// Some never come before the call's result, and wait this long for nothing.
+var tuiRuntimeCallbackRowWait = 2 * time.Second
+
 func tuiRuntimeRenderClaudePrompt(req *tuiRuntimeRequest) ([]map[string]any, error) {
 	var blocks []map[string]any
 	var text strings.Builder

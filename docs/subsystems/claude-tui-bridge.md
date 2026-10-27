@@ -258,6 +258,13 @@ same bytes, and the checkpoint is clean again. The resend resumes the same
 session, with its message in it once, instead of rebuilding the history.
 A turn that answered, called a tool or had any MCP callback stays dirty.
 
+A tool shown from its MCP callback before its transcript row waits up to
+`tuiRuntimeCallbackRowWait` (2s) for that row, then `tuiRuntimeUnstreamedQuiet`
+once a row of its message comes (at once when its row was read already).
+The rows carry the message's usage and its parallel calls, so both stay
+with the request that showed the call. A row that comes after that wait
+is counted with the next request.
+
 A completed reply is reused only for the same request semantics: canonical
 tool arguments, result error flags, media contents, safeguards and generation
 settings participate in its replay key. This strict replay identity is separate

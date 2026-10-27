@@ -10,6 +10,7 @@ import (
 )
 
 func TestClaudeTUIRuntimeInteractiveMCPCallbackAndTranscriptOrder(t *testing.T) {
+	tuiRuntimeShortCallbackRowWait(t)
 	for _, order := range []string{"callback_before_transcript", "transcript_before_callback"} {
 		t.Run(order, func(t *testing.T) {
 			rd, wr := io.Pipe()
@@ -102,6 +103,7 @@ func TestClaudeTUIRuntimeInteractiveMCPCallbackAndTranscriptOrder(t *testing.T) 
 // The callback must not merely show the client a tool: the returned
 // result must reach the original HTTP MCP helper exactly once.
 func TestClaudeTUIRuntimeInteractiveCallbackWithoutTranscriptRoundTrip(t *testing.T) {
+	tuiRuntimeShortCallbackRowWait(t)
 	b := tuiRuntimeNewSubscriptionBridge()
 	defer tuiRuntimeBridges.Delete(b)
 	run := &tuiRuntimeSubscriptionRun{bridge: b, token: "pending-native-call", interactive: true, model: "claude-opus-5-5", tools: map[string]bool{"Read": true}, pending: map[string]chan tuiRuntimeMcpToolResult{}, timer: time.AfterFunc(time.Minute, func() {})}
@@ -190,6 +192,7 @@ toolShown:
 // is already blocked in MCP, so the next callback must clear the marker
 // when a new continuation has attached to the same run.
 func TestClaudeTUIRuntimeInteractiveSequentialCallbackWithoutNextTranscript(t *testing.T) {
+	tuiRuntimeShortCallbackRowWait(t)
 	rd, wr := io.Pipe()
 	defer rd.Close()
 	defer wr.Close()
@@ -262,4 +265,12 @@ func TestClaudeTUIRuntimeInteractiveSequentialCallbackWithoutNextTranscript(t *t
 	case <-time.After(time.Second):
 		t.Fatal("reader leaked")
 	}
+}
+
+// shortCallbackRowWait keeps a test whose callback has no transcript row
+// from waiting callbackRowWait for it on every call.
+func tuiRuntimeShortCallbackRowWait(t *testing.T) {
+	was := tuiRuntimeCallbackRowWait
+	tuiRuntimeCallbackRowWait = 300 * time.Millisecond
+	t.Cleanup(func() { tuiRuntimeCallbackRowWait = was })
 }
