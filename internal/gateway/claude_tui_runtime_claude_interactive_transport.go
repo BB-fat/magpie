@@ -1639,6 +1639,8 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 }
 
 func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
+	// as the reader starts: a test may set them for its own runs
+	quietFor, rowWait := tuiRuntimeUnstreamedQuiet, tuiRuntimeCallbackRowWait
 	scanner := bufio.NewScanner(rd)
 	scanner.Buffer(make([]byte, 64<<10), 64<<20)
 	seenRows := map[string]bool{}
@@ -1655,6 +1657,9 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 	// written to the transcript (and sometimes never writes that row until
 	// the MCP result returns). Both sources must share this ID ledger.
 	shownIDs := map[string]bool{}
+	// transcribed: the tool_use IDs of every assistant row read, shown or
+	// passed over; a callback whose row came already has none to wait for.
+	transcribed := map[string]bool{}
 	const callbackMessage = "__mcp_callback_pending__"
 	settleToolTurn := func() { // pmu held
 		if quiet != nil {
@@ -1736,7 +1741,11 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 			if quiet != nil {
 				quiet.Stop()
 			}
-			quiet = time.AfterFunc(tuiRuntimeUnstreamedQuiet, func() {
+			wait := rowWait
+			if transcribed[id] {
+				wait = quietFor
+			}
+			quiet = time.AfterFunc(wait, func() {
 				pmu.Lock()
 				defer pmu.Unlock()
 				settleToolTurn()
@@ -1861,6 +1870,11 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 			if r.readOnlyRecovery && msg.Message.Model == "<synthetic>" {
 				pmu.Unlock()
 				continue
+			}
+			for _, block := range msg.Message.Content {
+				if block.Type == "tool_use" {
+					transcribed[block.ID] = true
+				}
 			}
 			// A transcript row may be appended only after an MCP callback has
 			// already delivered and settled its tool turn. Do not start a
@@ -2005,15 +2019,16 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 					}
 				}
 			}
-			if calledTools {
+			if calledTools || (pendingToolMessage != "" && pendingToolMessage == msg.Message.ID) {
 				// A whole assistant message can be split into one transcript row
 				// per parallel tool call. Match the official headless parser's
-				// unstreamedQuiet rule before closing the outer client's turn.
+				// unstreamedQuiet rule before closing the outer client's turn;
+				// a row of a message shown from its callback ends that wait too.
 				pendingToolMessage = msg.Message.ID
 				if quiet != nil {
 					quiet.Stop()
 				}
-				quiet = time.AfterFunc(tuiRuntimeUnstreamedQuiet, func() {
+				quiet = time.AfterFunc(quietFor, func() {
 					pmu.Lock()
 					defer pmu.Unlock()
 					settleToolTurn()
