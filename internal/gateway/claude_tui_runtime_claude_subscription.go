@@ -107,10 +107,17 @@ type tuiRuntimeSubscriptionBridge struct {
 	// prevents an immediate same-payload replay from being rebuilt as a new
 	// turn; process restarts deliberately require separate recovery evidence.
 	liteCompleted map[string]tuiRuntimeLiteCompletedTurn
-	// liteParked is each conversation's run last parked on tool calls, by
-	// its state key: once let go, its session is where those calls' results
-	// resume (liteParkedBranch).
+	// liteParked is each run parked on tool calls, by those calls' ids:
+	// when the live run does not take their results, its session is where
+	// they resume (liteParkedBranch).
 	liteParked map[string]*tuiRuntimeSubscriptionRun
+	// liteInFlight holds the replay key of each lite request being served,
+	// closed when it is done: the same request again waits for it
+	// (enterLiteTurn). Other requests of a conversation run beside it.
+	liteInFlight map[string]chan struct{}
+	// claimedSessions are the native sessions a start is about to go on in
+	// (claimSession), before its run is published under the session's id.
+	claimedSessions map[string]bool
 	// liveOuter holds the same state keys while a canonical interactive run
 	// owns the outer conversation. An HTTP reply can end — and with it the
 	// outerTurns claim — while its PTY run is still alive parked on client
@@ -241,6 +248,9 @@ type tuiRuntimeSubscriptionRun struct {
 	nativeLease                *os.File                                        // held by Runtime and inherited by wrapper; only plugin feature-gated
 	interactiveContextSnapshot *tuiRuntimeInteractiveContextDiagnosticSnapshot // immutable per-field compatibility and diagnostic digests
 	firstTurnAnchorKey         string                                          // first user message hash, only for opt-in first-turn durable recovery
+	workKey                    string                                          // state key of the run's cwd, where its session's transcript is
+	lastRow                    string                                          // uuid of the last transcript row read: a complete reply's cut point
+	startKey                   string                                          // replay key of the lite request it was started for
 	interactiveUserNonce       string                                          // pending native post-tool user context
 	interactiveUserAcked       bool                                            // retained before temporary files are removed
 	outerSession               string                                          // outer client conversation persisted across PTY turns
@@ -1007,6 +1017,17 @@ func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop str
 		r.mu.Lock()
 		sessionID, outerSession, threadKey := r.sessionID, r.outerSession, r.threadKey
 		r.mu.Unlock()
+		r.mu.Lock()
+		row, work := r.lastRow, r.workKey
+		r.mu.Unlock()
+		if outerSession != "" && sessionID != "" && conv != "" && row != "" && work != "" {
+			if err := tuiRuntimeSaveInteractivePoint(conv, tuiRuntimeInteractivePoint{
+				SessionID: sessionID, Row: row, Work: work, Outer: tuiRuntimeInteractiveSessionStateKey(r.owner, outerSession),
+				Model: r.model, InstructionKey: tuiRuntimeInstructionKey(req), ReplyKey: tuiRuntimeAssistantReplyKey(reply),
+			}); err != nil {
+				log.Printf("Claude interactive cut point not saved: %v", err)
+			}
+		}
 		if outerSession != "" && sessionID != "" && conv != "" {
 			err := r.bridge.saveInteractiveSession(r.owner, outerSession, tuiRuntimeInteractiveSessionEntry{
 				SessionID: sessionID, Model: r.model, ThreadKey: threadKey,
@@ -3215,8 +3236,8 @@ func (b *tuiRuntimeSubscriptionBridge) removeRun(run *tuiRuntimeSubscriptionRun)
 			delete(b.calls, id)
 		}
 	}
-	if run.outerSession != "" {
-		delete(b.liveOuter, tuiRuntimeInteractiveSessionStateKey(run.owner, run.outerSession))
+	if key := tuiRuntimeInteractiveSessionStateKey(run.owner, run.outerSession); run.outerSession != "" && b.liveOuter[key] == run {
+		delete(b.liveOuter, key)
 	}
 	b.mu.Unlock()
 	_ = os.RemoveAll(run.tmp)

@@ -240,61 +240,80 @@ func TestClaudeTUIRuntimeLiteInterjectionWithoutLiveRunKeepsTheUsersWords(t *tes
 // A run parked on a tool call Science's next request does not answer (the
 // user stopped, Science moved on) is stopped and the request answered —
 // where Desktop's path refuses with 409 to protect a live tool.
-func TestClaudeTUIRuntimeLiteNewTurnStopsAParkedRunInsteadOf409(t *testing.T) {
-	dir := tuiRuntimeOlDir(t)
-	tuiRuntimeOlWrapper(t, dir, "sc-park-bridge", tuiRuntimeOlParkScript())
-	rt, b := tuiRuntimeScRuntime(t)
-	t.Setenv("DAV1878_PARK_RELEASE", filepath.Join(dir, "never"))
-	first := `{"model":"claude-opus-5-5","max_tokens":64,"tools":[{"name":"write_file","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"把结果写进 notes.txt"}]}`
-	if code, out := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, first); code != 200 || !strings.Contains(out, `"type":"tool_use"`) {
-		t.Fatalf("first turn did not park: %d %s", code, out)
+func TestClaudeTUIRuntimeLiteNewTurnBesideAParkedRunInsteadOf409(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply string
+		stopped     bool
+	}{
+		// The client shows its own words where the call was: another branch
+		// from the first message, which may still come back with results.
+		{"another_branch", `"已停止"`, false},
+		// The client's history holds the call and goes on without its
+		// result: the run will never be answered.
+		{"went_on_without_the_result", `[{"type":"tool_use","id":"call_1","name":"write_file","input":{"path":"a"}}]`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tuiRuntimeOlDir(t)
+			tuiRuntimeOlWrapper(t, dir, "sc-park-bridge", tuiRuntimeOlParkScript())
+			rt, b := tuiRuntimeScRuntime(t)
+			t.Setenv("DAV1878_PARK_RELEASE", filepath.Join(dir, "never"))
+			first := `{"model":"claude-opus-5-5","max_tokens":64,"tools":[{"name":"write_file","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"把结果写进 notes.txt"}]}`
+			if code, out := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, first); code != 200 || !strings.Contains(out, `"type":"tool_use"`) {
+				t.Fatalf("first turn did not park: %d %s", code, out)
+			}
+			parked := b.interactiveOuterOwner(tuiRuntimeScOwner, tuiRuntimeScOuter)
+			if parked == nil {
+				t.Fatal("no parked run owns the conversation")
+			}
+			_, runs := tuiRuntimeScWrapper(t)
+			code, out := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, `{"model":"claude-opus-5-5","max_tokens":64,"tools":[{"name":"write_file","input_schema":{"type":"object"}}],"messages":[
+		{"role":"user","content":"把结果写进 notes.txt"},{"role":"assistant","content":`+tc.reply+`},{"role":"user","content":"算了，直接告诉我结果"}]}`)
+			if code != 200 || !strings.Contains(out, "SC_ANSWER") {
+				t.Fatalf("new turn on a parked conversation was refused: %d %s", code, out)
+			}
+			parked.mu.Lock()
+			closed := parked.closed
+			parked.mu.Unlock()
+			if closed != tc.stopped {
+				t.Fatalf("parked run stopped=%t, want %t", closed, tc.stopped)
+			}
+			tuiRuntimeOnlyRun(t, runs())
+		})
 	}
-	parked := b.interactiveOuterOwner(tuiRuntimeScOwner, tuiRuntimeScOuter)
-	if parked == nil {
-		t.Fatal("no parked run owns the conversation")
-	}
-	_, runs := tuiRuntimeScWrapper(t)
-	code, out := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, `{"model":"claude-opus-5-5","max_tokens":64,"tools":[{"name":"write_file","input_schema":{"type":"object"}}],"messages":[
-		{"role":"user","content":"把结果写进 notes.txt"},{"role":"assistant","content":"已停止"},{"role":"user","content":"算了，直接告诉我结果"}]}`)
-	if code != 200 || !strings.Contains(out, "SC_ANSWER") {
-		t.Fatalf("new turn on a parked conversation was refused: %d %s", code, out)
-	}
-	parked.mu.Lock()
-	closed := parked.closed
-	parked.mu.Unlock()
-	if !closed {
-		t.Fatal("the parked run was left alive beside the new one")
-	}
-	tuiRuntimeOnlyRun(t, runs())
 }
 
-// A conversation still answering another request past the wait is told to
-// retry: a second native run of one conversation is never started beside
-// the first, and its checkpoint is untouched.
-func TestClaudeTUIRuntimeLiteBusyConversationAsksForRetryAndStartsNothing(t *testing.T) {
+// The very same request while it is still being answered (a client's
+// retry) waits for it, and past the wait is told to retry: it is never
+// answered by a second native run beside the first. Another request of
+// the conversation is not held up by it.
+func TestClaudeTUIRuntimeLiteSameRequestInFlightAsksForRetry(t *testing.T) {
 	_, runs := tuiRuntimeScWrapper(t)
 	rt, b := tuiRuntimeScRuntime(t)
 	old := tuiRuntimeLiteTurnWait
 	tuiRuntimeLiteTurnWait = 200 * time.Millisecond
 	t.Cleanup(func() { tuiRuntimeLiteTurnWait = old })
-	tuiRuntimeScSaveClean(t, b, "inner-saved", false)
-	before, _, _ := b.loadInteractiveSession(tuiRuntimeScOwner, tuiRuntimeScOuter)
-	if !b.claimInteractiveOuterTurn(tuiRuntimeScOwner, tuiRuntimeScOuter) {
-		t.Fatal("claim")
-	}
-	defer b.releaseInteractiveOuterTurn(tuiRuntimeScOwner, tuiRuntimeScOuter)
-	rec := httptest.NewRecorder()
 	body := `{"model":"claude-opus-5-5","max_tokens":64,"messages":[{"role":"user","content":"先读一下配置"},{"role":"assistant","content":"配置已读"},{"role":"user","content":"继续"}]}`
+	req, err := tuiRuntimeParseRequest([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Model = "claude-opus-5-5"
+	release, ok := b.enterLiteTurn(t.Context(), tuiRuntimeLiteReplayKey(tuiRuntimeScOwner, req))
+	if !ok {
+		t.Fatal("enter")
+	}
+	defer release()
+	rec := httptest.NewRecorder()
 	code, _ := rt.serveMessages(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body)), "claude-opus-5-5", tuiRuntimeScOuter, []byte(body), &Usage{})
 	if code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
-		t.Fatalf("busy conversation: %d retry-after=%q", code, rec.Header().Get("Retry-After"))
+		t.Fatalf("same request in flight: %d retry-after=%q", code, rec.Header().Get("Retry-After"))
 	}
 	if n := len(runs()); n != 0 {
-		t.Fatalf("%d native runs started for a busy conversation", n)
+		t.Fatalf("%d native runs started for a request already in flight", n)
 	}
-	after, _, _ := b.loadInteractiveSession(tuiRuntimeScOwner, tuiRuntimeScOuter)
-	if after != before {
-		t.Fatalf("checkpoint changed: %+v -> %+v", before, after)
+	other := strings.Replace(body, "继续", "换个问题", 1)
+	if code, out := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, other); code != 200 || !strings.Contains(out, "SC_ANSWER") {
+		t.Fatalf("another request of the conversation: %d %s", code, out)
 	}
 }
 
@@ -619,18 +638,18 @@ func TestClaudeTUIRuntimeLiteParkedBranchNeedsExactlyItsCalls(t *testing.T) {
 	b := tuiRuntimeNewSubscriptionBridge()
 	t.Cleanup(func() { tuiRuntimeBridges.Delete(b) })
 	run := &tuiRuntimeSubscriptionRun{interactive: true, owner: tuiRuntimeScOwner, outerSession: tuiRuntimeScOuter, model: "claude-opus-5-5",
-		sessionID: "inner-x", closed: true, parkedAt: time.Now(), shown: []tuiRuntimeShownCall{{id: "call_1"}, {id: "call_2"}}}
+		sessionID: "inner-x", workKey: tuiRuntimeInteractiveSessionStateKey(tuiRuntimeScOwner, tuiRuntimeScOuter), closed: true, parkedAt: time.Now(), shown: []tuiRuntimeShownCall{{id: "call_1"}, {id: "call_2"}}}
 	req, err := tuiRuntimeParseRequest([]byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"go"},{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"echo","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"x"}]}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	run.interactiveContextSnapshot = tuiRuntimeTestContextSnapshot(req)
 	b.noteLiteParked(run)
-	if _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, tuiRuntimeScOuter, "claude-opus-5-5", "", req); ok {
+	if _, _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, tuiRuntimeScOuter, "claude-opus-5-5", "", req); ok {
 		t.Fatal("one result of two calls resumed the run's session")
 	}
 	b.noteLiteParked(run)
-	if _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, tuiRuntimeScOuter, "claude-sonnet-5-5", "", req); ok {
+	if _, _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, tuiRuntimeScOuter, "claude-sonnet-5-5", "", req); ok {
 		t.Fatal("another model resumed the run's session")
 	}
 }

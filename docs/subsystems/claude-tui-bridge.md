@@ -234,17 +234,64 @@ choice controls both the launch flag and work-directory settings.
 
 ## Turns, recovery and its limits
 
-Kept from the plugin (`claude_tui_runtime_claude_lite.go`): a conversation's turns wait for
-each other (60s, then 503 with `Retry-After: 5`); tool results go on in
-the live run, else the parked session copied up to the calls
-(`liteParkedBranch`), else the conversation's checkpoint
-(`restoreInteractiveSession`), else a session rebuilt from the request's
-history (`tuiRuntimeLiteSeed`), with its tools. Tool results that don't answer the
-visible reply's calls are refused 409. The very same tool-result request
-after its reply is answered with that reply, with no new run
+Kept from the plugin (`claude_tui_runtime_claude_lite.go`): tool results
+go on in the live run that shows their calls, else in the parked session
+copied up to the calls (`liteParkedBranch`, its runs found by call id), else
+from a cut point (below), else from the conversation's checkpoint
+(`restoreInteractiveSession`), else in a session rebuilt from the request's
+history (`tuiRuntimeLiteSeed`), with its tools. Tool results that don't
+answer the visible reply's calls are refused 409. The very same tool-result
+request after its reply is answered with that reply, with no new run
 (`liteCompletedToolTurn`). A run parked on tool calls is let go after 5
 minutes (`tuiRuntimeInteractiveParkLongest`), a run ends after 12 hours
-(`tuiRuntimeInteractiveActiveLongest`). Checkpoints live in
+(`tuiRuntimeInteractiveActiveLongest`).
+
+Requests of one conversation run side by side, each in its own native
+session. Only the very same request (its replay key: a client's retry)
+waits for the one in flight, 60s, then 503 with `Retry-After: 5`
+(`enterLiteTurn`); it is never answered by two native runs at once. A new
+request stops a run only when it shows the conversation went on without
+it (`letGoAbandonedRuns`): a run started for this same request whose client
+left, or a run parked on calls the request's history holds but does not
+answer. A run parked on calls of another branch is left for that branch's
+results.
+
+### Cut points
+
+A cut point (`claude_tui_runtime_claude_interactive_points.go`) is where a
+native transcript holds a complete reply: the conversation's key up to
+that reply (`conversationKeys`, which names the owner) → the session, the
+uuid of the reply's last row, the session's cwd, the model, the
+instruction key and the reply key. `ended` records one for every complete
+reply, beside the checkpoint. Native transcripts only grow, so a point
+never changes. They live in `<config>/claude-tui/claude-interactive-points.json`
+(30 days, 128 per conversation, 4096 in all, the oldest go first); a store
+that doesn't read is not resumed from and not written over.
+
+A request goes on from the deepest point its history extends: by the
+conversation's key (any of the owner's conversations, so the same history
+under another session id is found too), else, in its own conversation, by
+a reply the client kept while it rewrote what came before. It goes on in
+that session itself when no run writes it and nothing was said in it after
+the point (`claimSession`, `transcriptEndsAt`), else in a copy of the
+session up to the point (`forkTranscript`), in the session's own cwd. Both
+send Anthropic the prefix it cached for that reply; only a rebuild writes
+the history again. Changed instructions rebuild. A side question, a
+compaction, an edit of an earlier turn and a retried cut-off turn each
+continue their own transcript; none takes another's place.
+
+Limits: points are made at complete replies only; a reply that called tools
+is found by call id in memory (`liteParkedBranch`) and not after a restart.
+Each fork is a copy of its transcript's rows; nothing removes interactive
+transcripts yet. With the opt-in durable tool journal
+(`MAGPIE_CLAUDE_DURABLE_TOOL_JOURNAL=1`), the native lease is still one per
+conversation, so a second branch's start is refused while another runs.
+A binary from before points ignores their file: rolling back keeps working
+from the checkpoint.
+
+The conversation's checkpoint (below) is still written and read when no
+point is deeper. A point's session resumed in place makes that checkpoint
+dirty only when it names the same session. Checkpoints live in
 `<config>/claude-tui/claude-interactive-sessions.json`; one that doesn't
 read is refused, never taken for none, and those not used for 30 days go.
 The safeguards beta is resolved before matching a live run, so unchanged
@@ -313,8 +360,8 @@ The request's history is authoritative. A changed first user message
 cannot safely resume, the bridge rebuilds from that request and saves the
 new checkpoint; subsequent turns can resume it, including after a gateway
 restart. No agent-specific summary recognition or branch store is needed.
-There is still one checkpoint per conversation: forks sharing a session
-ID can cause repeated rebuilds and should use separate IDs. Explicit
+Forks sharing a session ID go on from their own cut points (above), side
+by side. Explicit
 `x-claude-code-agent-id` subagents run stateless without changing the parent
 checkpoint; Desktop compaction/suggestion and one-message other-model
 helper routing remain separate. An unmarked helper sharing the parent's

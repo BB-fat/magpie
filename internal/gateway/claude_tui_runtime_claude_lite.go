@@ -173,12 +173,14 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 		outerSession = ""
 	}
 	if outerSession != "" {
-		if !rt.bridge.takeLiteTurn(r.Context(), owner, outerSession) {
-			msg := "Claude interactive conversation is still answering another request; retry shortly"
+		rt.bridge.letGoAbandonedRuns(owner, req)
+		release, ok := rt.bridge.enterLiteTurn(r.Context(), req.replayKey)
+		if !ok {
+			msg := "Claude interactive is still answering this same request; retry shortly"
 			out.Header().Set("Retry-After", "5")
 			return out.Fail(http.StatusServiceUnavailable, msg)
 		}
-		defer rt.bridge.releaseInteractiveOuterTurn(owner, outerSession)
+		defer release()
 	}
 	run, events, err := rt.bridge.startLite(r.Context(), req, model, owner, outerSession, configDir)
 	if err != nil {
@@ -186,6 +188,7 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	}
 	defer run.releaseHTTP()
 	run.mu.Lock()
+	run.startKey = req.replayKey
 	run.httpConsumers++
 	keepImage := len(run.images) > 0
 	run.tools = map[string]bool{}
@@ -390,70 +393,182 @@ func (b *tuiRuntimeSubscriptionBridge) liteCanonical(owner, outerSession, model 
 	return true
 }
 
-// takeLiteTurn makes this request the conversation's only turn. A turn still
-// unwinding is waited out. A run parked on tool calls is stopped: this is
-// the conversation's own next request (helpers were routed stateless before
-// here), so those calls are either answered in its history — and served
-// from it — or never reached the client. It reports false when another run
-// of the conversation is still generating after liteTurnWait.
-func (b *tuiRuntimeSubscriptionBridge) takeLiteTurn(ctx context.Context, owner, outerSession string) bool {
-	deadline := time.Now().Add(tuiRuntimeLiteTurnWait)
+// enterLiteTurn admits a lite request. Different requests of one
+// conversation run side by side, each in its own native session; only the
+// very same request (a client's retry) waits for the one in flight, so it
+// is never answered by two native runs at once. It reports false when that
+// one is still running after liteTurnWait.
+func (b *tuiRuntimeSubscriptionBridge) enterLiteTurn(ctx context.Context, key string) (func(), bool) {
+	wait := time.NewTimer(tuiRuntimeLiteTurnWait)
+	defer wait.Stop()
 	for {
-		if b.claimInteractiveOuterTurn(owner, outerSession) {
-			old := b.interactiveOuterOwner(owner, outerSession)
-			if old == nil {
-				return true
-			}
-			old.mu.Lock()
-			idle := old.terminalDelivered || !old.parkedAt.IsZero()
-			old.mu.Unlock()
-			if idle {
-				log.Printf("Claude interactive stopped the conversation's idle or parked run for its next request")
-				old.abort()
-			}
-			b.releaseInteractiveOuterTurn(owner, outerSession)
+		b.mu.Lock()
+		if b.liteInFlight == nil {
+			b.liteInFlight = map[string]chan struct{}{}
 		}
-		if time.Now().After(deadline) {
-			return false
+		ch := b.liteInFlight[key]
+		if ch == nil {
+			ch = make(chan struct{})
+			b.liteInFlight[key] = ch
+			b.mu.Unlock()
+			return func() {
+				b.mu.Lock()
+				delete(b.liteInFlight, key)
+				b.mu.Unlock()
+				close(ch)
+			}, true
 		}
+		b.mu.Unlock()
 		select {
+		case <-ch:
 		case <-ctx.Done():
-			return false
-		case <-time.After(100 * time.Millisecond):
+			return nil, false
+		case <-wait.C:
+			return nil, false
 		}
 	}
 }
 
-// startLite starts the native run for a turn: the checkpointed session
-// resumed when the request exactly follows it, a first turn as a first turn,
-// and otherwise a session rebuilt from the request's history. Stateless
-// requests (outerSession "") never read or write a checkpoint.
+// letGoAbandonedRuns stops the runs req shows its conversation went on
+// without: one started for this very request whose client is gone (a
+// retry), and one parked on tool calls that req's history holds but does
+// not answer. A run of another branch — its calls not in req's history —
+// is left alone: that branch may still come back with its results.
+func (b *tuiRuntimeSubscriptionBridge) letGoAbandonedRuns(owner string, req *tuiRuntimeRequest) {
+	called := map[string]bool{}
+	for _, m := range req.Messages {
+		for _, p := range m.Parts {
+			if m.Role == "assistant" && p.Kind == ToolCall {
+				called[p.ID] = true
+			}
+		}
+	}
+	_, results, _ := tuiRuntimeLiteTail(req.Messages)
+	answered := map[string]bool{}
+	for _, m := range results {
+		for _, p := range m.Parts {
+			answered[p.CallID] = true
+		}
+	}
+	var gone []*tuiRuntimeSubscriptionRun
+	for _, run := range b.allRuns() {
+		run.mu.Lock()
+		if run.interactive && !run.closed && run.owner == owner && run.httpConsumers == 0 {
+			abandoned := run.startKey != "" && run.startKey == req.replayKey
+			if !abandoned && !run.parkedAt.IsZero() {
+				inHistory, all := false, true
+				for _, c := range run.shown {
+					inHistory = inHistory || called[c.id]
+					all = all && answered[c.id]
+				}
+				abandoned = inHistory && !all
+			}
+			if abandoned {
+				gone = append(gone, run)
+			}
+		}
+		run.mu.Unlock()
+	}
+	for _, run := range gone {
+		log.Printf("Claude interactive stopped a run its conversation went on without")
+		run.abort()
+	}
+}
+
+// startLite starts the native run for a turn, keeping as much of the
+// prefix Anthropic cached as it can: the session of the deepest reply the
+// request goes on from, in place or forked there (startLiteAtPoint); the
+// conversation's checkpoint as earlier versions saved it; else a first turn
+// as a first turn, and a session rebuilt from the request's history.
+// Stateless requests (outerSession "") never read or write either.
 func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	if outerSession != "" {
-		if id, prompt, images, ok := b.liteParkedBranch(owner, outerSession, model, configDir, req); ok {
+		if id, prompt, images, work, ok := b.liteParkedBranch(owner, outerSession, model, configDir, req); ok {
 			log.Printf("Claude interactive resuming the conversation's own session with its tool results")
 			b.anchorOuterThread(owner, outerSession, req)
 			copied := *req
-			copied.resumedCopy = true
+			copied.resumedCopy, copied.workKey = true, work
 			return b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
+		}
+		point, pointSince, havePoint := tuiRuntimeInteractivePoint{}, []Message(nil), false
+		if tuiRuntimeClaudeDesktopTurnCompanionSuffix(req) == nil {
+			point, pointSince, havePoint = tuiRuntimeFindInteractivePoint(owner, outerSession, model, req)
 		}
 		saved, savedOK, err := b.loadInteractiveSession(owner, outerSession)
 		if err != nil {
 			return nil, nil, err
 		}
+		var since []Message
+		status := tuiRuntimeInteractiveRestoreStateMissing
 		if savedOK && !saved.Dirty && (saved.Model == "" || saved.Model == model) {
-			if saved, since, status := b.restoreInteractiveSession(owner, outerSession, req); status == tuiRuntimeInteractiveRestoreExact || status == tuiRuntimeInteractiveRestoreReplyAnchor || status == tuiRuntimeInteractiveRestoreCompanion {
+			saved, since, status = b.restoreInteractiveSession(owner, outerSession, req)
+		}
+		legacy := status == tuiRuntimeInteractiveRestoreExact || status == tuiRuntimeInteractiveRestoreReplyAnchor || status == tuiRuntimeInteractiveRestoreCompanion
+		// The deeper of the two goes on; a point also when they are level,
+		// since it can be forked if its session is busy.
+		if havePoint && (!legacy || status != tuiRuntimeInteractiveRestoreCompanion && len(pointSince) <= len(since)) {
+			if run, events, err, ok := b.startLiteAtPoint(ctx, req, model, owner, outerSession, configDir, point, pointSince); ok {
+				b.anchorOuterThread(owner, outerSession, req)
+				return run, events, err
+			}
+		}
+		if legacy {
+			if release, ok := b.claimSession(saved.SessionID); ok {
+				defer release()
 				b.anchorOuterThread(owner, outerSession, req)
 				return b.startInteractiveResumeTurn(ctx, req, model, configDir, owner, outerSession, saved, since)
-			} else {
-				log.Printf("Claude interactive rebuilding native session from the request: checkpoint %s", status)
 			}
-		} else if savedOK {
+			log.Printf("Claude interactive rebuilding native session from the request: its checkpointed session is busy")
+		} else if savedOK && (saved.Dirty || saved.Model != "" && saved.Model != model) {
 			log.Printf("Claude interactive rebuilding native session from the request: checkpoint dirty=%t model_match=%t", saved.Dirty, saved.Model == "" || saved.Model == model)
+		} else if savedOK {
+			log.Printf("Claude interactive rebuilding native session from the request: checkpoint %s", status)
 		}
 		b.anchorOuterThread(owner, outerSession, req)
 	}
 	return b.startInteractiveRebuild(ctx, req, model, owner, outerSession, configDir)
+}
+
+// startLiteAtPoint goes on from point with since, the messages after it:
+// in its session when no run writes it and nothing was said in it after
+// the point, else in a copy of the session up to the point. Changed
+// instructions rebuild: the old ones are in the session's first prompt.
+// It reports false, starting nothing, when the session can't be read.
+func (b *tuiRuntimeSubscriptionBridge) startLiteAtPoint(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string, point tuiRuntimeInteractivePoint, since []Message) (*tuiRuntimeSubscriptionRun, <-chan Event, error, bool) {
+	if point.InstructionKey != tuiRuntimeInstructionKey(req) {
+		log.Printf("Claude interactive rebuilding native session: external instructions changed")
+		run, events, err := b.startInteractiveRebuild(ctx, req, model, owner, outerSession, configDir)
+		return run, events, err, true
+	}
+	work, err := tuiRuntimeInteractiveWorkDirForKey(point.Work)
+	if err != nil {
+		return nil, nil, err, true
+	}
+	prompt, images, err := tuiRuntimeRenderInteractiveTurnPromptWithImages(since)
+	if err != nil {
+		return nil, nil, err, true
+	}
+	prompt = tuiRuntimeRenderInteractiveTurnConstraint(req) + prompt
+	copied := *req
+	copied.workKey = point.Work
+	if release, ok := b.claimSession(point.SessionID); ok {
+		defer release()
+		if tuiRuntimeTranscriptEndsAt(configDir, work, point.SessionID, point.Row) {
+			log.Printf("Claude interactive resuming the native session at the reply the request goes on from")
+			copied.pointResume = true
+			run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, point.SessionID, images, false)
+			return run, events, err, true
+		}
+	}
+	id, err := tuiRuntimeForkTranscript(configDir, work, point.SessionID, point.Row)
+	if err != nil {
+		log.Printf("Claude interactive could not fork the native session at the reply the request goes on from: %v", err)
+		return nil, nil, nil, false
+	}
+	log.Printf("Claude interactive forking the native session at the reply the request goes on from")
+	copied.resumedCopy = true
+	run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
+	return run, events, err, true
 }
 
 // Rebuild from the caller's current history, never from an old transcript
@@ -544,13 +659,18 @@ func tuiRuntimeLiteTurnPrompt(req *tuiRuntimeRequest, turn []Message) (string, m
 	return tuiRuntimeRenderInteractiveFirstPromptWithImages(&turnReq)
 }
 
-// noteLiteParked keeps r, a conversation's run now waiting on its tool
-// calls, for liteParkedBranch.
+// noteLiteParked keeps r, a run now waiting on its tool calls, under each
+// of their ids for liteParkedBranch.
 func (b *tuiRuntimeSubscriptionBridge) noteLiteParked(r *tuiRuntimeSubscriptionRun) {
 	if b == nil || !r.interactive || r.outerSession == "" {
 		return
 	}
-	key := tuiRuntimeInteractiveSessionStateKey(r.owner, r.outerSession)
+	r.mu.Lock()
+	ids := make([]string, 0, len(r.shown))
+	for _, c := range r.shown {
+		ids = append(ids, c.id)
+	}
+	r.mu.Unlock()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.liteParked == nil {
@@ -564,36 +684,22 @@ func (b *tuiRuntimeSubscriptionBridge) noteLiteParked(r *tuiRuntimeSubscriptionR
 			delete(b.liteParked, k)
 		}
 	}
-	b.liteParked[key] = r
+	for _, id := range ids {
+		b.liteParked[id] = r
+	}
 }
 
-// liteParkedBranch serves the results of a conversation's tool calls whose
-// run was let go while it waited on them (interactiveParkLongest). Its own
-// session is copied up to those calls, the results are appended, and the
-// copy resumed: Anthropic is asked what the run would have asked, a prefix
-// it has cached, where a session rebuilt from the request (liteSeed) would
-// write the whole conversation again. It returns the copy's id and the
-// turn's prompt, or false when req is not exactly those results.
-func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, model, configDir string, req *tuiRuntimeRequest) (string, string, map[string]Part, bool) {
-	key := tuiRuntimeInteractiveSessionStateKey(owner, outerSession)
-	b.mu.Lock()
-	run := b.liteParked[key]
-	delete(b.liteParked, key)
-	b.mu.Unlock()
-	if run == nil {
-		return "", "", nil, false
-	}
-	run.mu.Lock()
-	closed, sid, runModel := run.closed, run.sessionID, run.model
-	calls := make([]string, 0, len(run.shown))
-	for _, c := range run.shown {
-		calls = append(calls, c.id)
-	}
-	run.mu.Unlock()
-	if !closed || sid == "" || runModel != model || len(calls) == 0 ||
-		!run.interactiveEquivalentContext(req) || !run.follows(req.Messages) {
-		return "", "", nil, false
-	}
+// liteParkedBranch serves the results of a run's tool calls that the live
+// run did not take: the run was let go while it waited on them
+// (interactiveParkLongest), or the results came with other tools or
+// settings. The run is stopped if it still waits, its own session is
+// copied up to those calls, the results are appended, and the copy
+// resumed: Anthropic is asked what the run would have asked, a prefix it
+// has cached, where a session rebuilt from the request (liteSeed) would
+// write the whole conversation again. It returns the copy's id, the turn's
+// prompt and the state key of the session's cwd, or false when req is not
+// exactly those results. Other conversations' parked runs are not touched.
+func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, model, configDir string, req *tuiRuntimeRequest) (string, string, map[string]Part, string, bool) {
 	_, results, turn := tuiRuntimeLiteTail(req.Messages)
 	answered := map[string]bool{}
 	for _, m := range results {
@@ -601,32 +707,61 @@ func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, mod
 			answered[p.CallID] = true
 		}
 	}
-	if len(answered) != len(calls) {
-		return "", "", nil, false
+	var run *tuiRuntimeSubscriptionRun
+	b.mu.Lock()
+	for id := range answered {
+		if r := b.liteParked[id]; r != nil {
+			run = r
+			break
+		}
+	}
+	b.mu.Unlock()
+	if run == nil {
+		return "", "", nil, "", false
+	}
+	run.mu.Lock()
+	sid, runModel, work, runOwner := run.sessionID, run.model, run.workKey, run.owner
+	calls := make([]string, 0, len(run.shown))
+	for _, c := range run.shown {
+		calls = append(calls, c.id)
+	}
+	run.mu.Unlock()
+	if sid == "" || runOwner != owner || runModel != model || work == "" || len(calls) == 0 || len(answered) != len(calls) ||
+		!run.interactiveEquivalentContext(req) || !run.follows(req.Messages) {
+		return "", "", nil, "", false
 	}
 	for _, id := range calls {
 		if !answered[id] {
-			return "", "", nil, false
+			return "", "", nil, "", false
 		}
 	}
-	work, err := tuiRuntimeInteractiveSessionWorkDir(owner, outerSession)
+	b.mu.Lock()
+	for _, id := range calls {
+		if b.liteParked[id] == run {
+			delete(b.liteParked, id)
+		}
+	}
+	b.mu.Unlock()
+	// Whatever still runs in its session stops before it is copied.
+	run.abort()
+	dir, err := tuiRuntimeInteractiveWorkDirForKey(work)
 	if err != nil {
-		return "", "", nil, false
+		return "", "", nil, "", false
 	}
 	if !tuiRuntimeHasUserText(turn) {
 		turn = append(turn, Message{Role: "user", Parts: []Part{{Kind: Text, Text: tuiRuntimeLiteContinueText}}})
 	}
 	prompt, images, err := tuiRuntimeRenderInteractiveTurnPromptWithImages(turn)
 	if err != nil {
-		return "", "", nil, false
+		return "", "", nil, "", false
 	}
 	prompt = tuiRuntimeRenderInteractiveTurnConstraint(req) + prompt
-	id, err := tuiRuntimeLiteBranchTranscript(work, configDir, model, sid, calls, results)
+	id, err := tuiRuntimeLiteBranchTranscript(dir, configDir, model, sid, calls, results)
 	if err != nil {
 		log.Printf("Claude interactive could not resume the conversation's own session with its tool results: %v", err)
-		return "", "", nil, false
+		return "", "", nil, "", false
 	}
-	return id, prompt, images, true
+	return id, prompt, images, work, true
 }
 
 // liteBranchTranscript copies session sid's rows up to the last of its
@@ -634,15 +769,7 @@ func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, mod
 // appends results and liteResultsReceived. What the session wrote after the
 // calls (an interruption, as its run was let go) is left out.
 func tuiRuntimeLiteBranchTranscript(work, configDir, model, sid string, calls []string, results []Message) (string, error) {
-	var dir string
-	var data []byte
-	err := os.ErrNotExist
-	for _, d := range tuiRuntimeClaudeSessions(configDir, work) {
-		if data, err = os.ReadFile(filepath.Join(d, sid+".jsonl")); err == nil {
-			dir = d
-			break
-		}
-	}
+	data, dir, err := tuiRuntimeReadTranscript(configDir, work, sid)
 	if err != nil {
 		return "", err
 	}
@@ -673,27 +800,13 @@ func tuiRuntimeLiteBranchTranscript(work, configDir, model, sid string, calls []
 	if cut < 0 || parent == "" || len(found) != len(want) {
 		return "", fmt.Errorf("session %s does not hold the calls", sid)
 	}
-	id := tuiRuntimeRandomToken()[:32]
-	id = id[:8] + "-" + id[8:12] + "-4" + id[13:16] + "-a" + id[17:20] + "-" + id[20:]
-	path := filepath.Join(dir, id+".jsonl")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	id, f, err := tuiRuntimeCopyTranscript(dir, sid, lines[:cut+1])
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	from, to := []byte(`"sessionId":"`+sid+`"`), []byte(`"sessionId":"`+id+`"`)
-	for _, line := range lines[:cut+1] {
-		line = bytes.ReplaceAll(line, from, to)
-		if !bytes.HasSuffix(line, []byte("\n")) {
-			line = append(line, '\n')
-		}
-		if _, err := f.Write(line); err != nil {
-			_ = os.Remove(path)
-			return "", err
-		}
-	}
 	if err := tuiRuntimeAppendClaudeTranscript(f, id, parent, work, model, nil, results, "", tuiRuntimeLiteResultsReceived); err != nil {
-		_ = os.Remove(path)
+		_ = os.Remove(filepath.Join(dir, id+".jsonl"))
 		return "", err
 	}
 	return id, nil
