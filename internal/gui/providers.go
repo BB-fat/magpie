@@ -499,9 +499,6 @@ type providersJSON struct {
 	// after Codex was switched to another, until it is quit and opened
 	// again (provider.CodexAppStale)
 	CodexApp string `json:"codexApp,omitempty"`
-	// CodexAppOut is a Codex app left unable to send on its used-up
-	// ChatGPT account until it is opened again (codexAppOutState)
-	CodexAppOut *codexAppOutJSON `json:"codexAppOut,omitempty"`
 	// Plugins are the providers the plugins sign in to, for the add sheet
 	Plugins []pluginSubJSON `json:"plugins"`
 	// OnPlugins are the built-in subscriptions moved onto their plugins,
@@ -985,7 +982,6 @@ func providersState() providersJSON {
 	s.Gateway.Archive = archiveState()
 	s.CodexDaemon = provider.CodexDaemonStale()
 	s.CodexApp = provider.CodexAppStale()
-	s.CodexAppOut = codexAppOutState()
 	s.Plugins = pluginSubs()
 	s.Fetching = provider.FetchingNew()
 	return s
@@ -1175,10 +1171,14 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		writeJSON(rw, map[string]string{"icon": icon})
 	})
 	mux.HandleFunc("GET /api/icons/{name}", func(rw http.ResponseWriter, r *http.Request) {
-		f := provider.IconFile(r.PathValue("name"))
+		// a big picture comes scaled to what the window draws (#909)
+		f, ctype := provider.IconServed(r.PathValue("name"))
 		if f == "" {
 			http.NotFound(rw, r)
 			return
+		}
+		if ctype != "" {
+			rw.Header().Set("Content-Type", ctype)
 		}
 		// an SVG is only ever drawn as an image, never run
 		rw.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
@@ -1596,10 +1596,20 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if !in.CodexAsSent && old != nil {
 					in.CodexAsSent = old.CodexAsSent
 				}
+				// and Antigravity's prompt as written, set with `magpie
+				// provider set antigravity prompt=as-written`
+				if !in.PromptAsWritten && old != nil {
+					in.PromptAsWritten = old.PromptAsWritten
+				}
 				// and additional_tools taken, set with `magpie provider
 				// set <id> additional-tools=on` (#2660)
 				if !in.AdditionalTools && old != nil {
 					in.AdditionalTools = old.AdditionalTools
+				}
+				// and how long a request to it alone is kept while it is
+				// busy, set with `magpie provider set <id> patience=`
+				if in.Patience == 0 && old != nil {
+					in.Patience = old.Patience
 				}
 				// each account's own proxy likewise: {} clears them
 				if in.AccountProxies == nil && old != nil {
@@ -1680,7 +1690,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 						in.Contexts = old.Contexts // a save that doesn't say
 					}
 					if in.Key == old.Key {
-						in.KeyName, in.KeyProtocol, in.KeyWeight = old.KeyName, old.KeyProtocol, old.KeyWeight
+						in.KeyName, in.KeyProtocol, in.KeyWeight, in.KeyPlan = old.KeyName, old.KeyProtocol, old.KeyWeight, old.KeyPlan
 					}
 					// what the editor doesn't show, set from the CLI or the
 					// TUI, is kept: its tag, website and key page, and on a
@@ -2158,6 +2168,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			Refs               []string
 			Protocol           provider.Protocol
 			Weight             int
+			Plan               string
 		}
 		var added, had, removed int
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -2176,6 +2187,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			err = provider.SetKeyProtocol(in.ID, in.Ref, in.Protocol)
 		case "weight":
 			err = provider.SetKeyWeight(in.ID, in.Ref, in.Weight)
+		case "plan":
+			// the plan a key is for (KeyAccount.Plan): its endpoints and
+			// its models are that plan's
+			err = provider.SetKeyPlan(in.ID, in.Ref, in.Plan)
 		case "use":
 			err = provider.UseKey(in.ID, in.Ref)
 		case "remove":
@@ -2202,8 +2217,8 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		// models a key sees is known only from its own list, and an off
 		// key's isn't asked (#76), so until then a relay that hands out a
 		// key per group would send the key nothing, or everything
-		if a := r.PathValue("action"); a == "add" || a == "import" || a == "on" {
-			if p, err := provider.Find(in.ID); err == nil && p.Ready() && len(p.KeysOn()) > 1 {
+		if a := r.PathValue("action"); a == "add" || a == "import" || a == "on" || a == "plan" {
+			if p, err := provider.Find(in.ID); err == nil && p.Ready() && (len(p.KeysOn()) > 1 || a == "plan") {
 				ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 				p.Fetch(ctx)
 				cancel()
@@ -2286,10 +2301,20 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				return provider.ImportFactoryKeys(ctx, files)
 			}
 		}
-		res, err := imp(ctx, in.Agent, in.Files)
-		if err != nil {
-			fail(rw, err)
-			return
+		// the address a sign-in's browser ended on, pasted here rather than
+		// in the sign-in's Callback URL field, finishes that sign-in: it is
+		// no account file, and never goes to the vendor as a token
+		res, rest := provider.PastedSignIns(in.Files)
+		if len(rest) > 0 {
+			more, err := imp(ctx, in.Agent, rest)
+			if err != nil && len(res) == 0 {
+				fail(rw, err)
+				return
+			}
+			if err != nil {
+				more = []provider.ImportedAccount{{Status: "failed", Error: err.Error()}}
+			}
+			res = append(res, more...)
 		}
 		agent.SyncCatalogSoon()
 		writeJSON(rw, struct {
@@ -2397,7 +2422,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 // project is.
 func typed(p, in provider.Provider, proxy *string, insecureTLS *bool) provider.Provider {
 	if k := strings.TrimSpace(in.Key); k != "" && k != p.Key {
-		p.Key, p.KeyName, p.KeyProtocol, p.KeyWeight = k, "", "", 0
+		p.Key, p.KeyName, p.KeyProtocol, p.KeyWeight, p.KeyPlan = k, "", "", 0, ""
 	}
 	if v := in.Vertex.Normal(); v != nil && p.IsVertex() && v.Project != "" {
 		p.Vertex = v

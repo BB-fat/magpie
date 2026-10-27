@@ -173,6 +173,7 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 	}
 	tries = probeOne(tries) // of those resting, only the one back soonest (#1799)
 	var skipped []string
+	went := asked // the model the last try asked for
 	// unless every try is on this machine or the local network, set
 	// to go unmasked (provider.SkipsRedaction)
 	if slices.ContainsFunc(tries, func(c candidate) bool { return !c.p.SkipsRedaction() }) {
@@ -192,11 +193,14 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		if _, audio := req.(*audioForm); audio {
 			what = "audio"
 		}
-		noteMasked(r, what, hits, sent, 0, tries[0].p.ID, asked)
+		// the record names the try that had it last, not the first
+		// planned (noteMaskedUntil)
+		_, noted := noteMaskedUntil(r, what, hits, sent, 0, tries[0].p.ID, asked)
+		defer func() { noted(call.Provider, went) }()
 	}
 	for i, c := range tries {
 		last := i == len(tries)-1
-		call.Provider = c.p.ID
+		call.Provider, went = c.p.ID, c.model
 		base := strings.TrimRight(c.p.Base(provider.Chat), "/")
 		if base == "" {
 			msg := fmt.Sprintf("%s has no OpenAI-style API for %s", c.p.Name, path)
@@ -322,7 +326,7 @@ func (s *Server) retrieveAs(ctx context.Context, p provider.Provider, url, ctype
 		if res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusMethodNotAllowed {
 			hint = " — " + p.Name + " may not serve this API"
 		}
-		return b, got, res.StatusCode, fmt.Errorf("%s: %d %s%s%s", provider.HostOf(url), res.StatusCode, http.StatusText(res.StatusCode), vendorSaid(vendorMessage(b)), hint)
+		return b, got, res.StatusCode, fmt.Errorf("%s: %d %s%s%s", provider.HostOf(url), res.StatusCode, http.StatusText(res.StatusCode), errorSaid(b), hint)
 	}
 	return b, got, res.StatusCode, nil
 }

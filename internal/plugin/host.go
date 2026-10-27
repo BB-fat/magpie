@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -152,6 +153,13 @@ var (
 	// under it, and so is any RPC result, so a child that never ends a line
 	// fails the host rather than making it allocate without bound.
 	maxWireLine = 32 << 20
+	// streamWait is how long a fetch waits for a stream's window to come
+	// free when the budget's are all held, while its request lives. Past
+	// the budget a fetch used to fail at once (errTooManyCalls), and the
+	// gateway counted that as a 502 and tried again: 192 streams at once
+	// through one plugin gave 298 local refusals that never reached the
+	// vendor (#3890).
+	streamWait = time.Minute
 	// maxHeadBytes and maxHeadEntries are magpie's own head-envelope policy,
 	// not HTTP's: a fetch's head carries at most maxHeadBytes of header bytes
 	// (the UTF-8 bytes of every name and value, plus headEntryCost an entry)
@@ -1196,7 +1204,39 @@ func (h *host) enqueueOwned(ctx context.Context, v any, done chan error, c *call
 	if err != nil {
 		return err
 	}
-	req := writeReq{b: append(b, '\n'), done: done}
+	return h.enqueueLine(ctx, append(b, '\n'), done, c, state)
+}
+
+// fetchLine is Fetch's call id for r, as the line the host reads, byte
+// for byte what json.Marshal wrote of it: its body in base64, written
+// once into a line made for it. json.Marshal grew its buffer to the
+// encoded body twice over and copied it out twice more, so a 1 MB request
+// was some 5 MB more before it reached the plugin (#3472).
+func fetchLine(id int64, r FetchRequest) ([]byte, error) {
+	head, err := json.Marshal(map[string]any{"id": id, "method": "fetch", "params": r})
+	if err != nil {
+		return nil, err
+	}
+	// head ends in params' "}" and the call's: body and window go before
+	// them, in the order the params struct gave them
+	tail := `,"window":` + strconv.Itoa(streamWindow) + "}}\n"
+	n := len(head) - 2 + len(tail)
+	if len(r.Body) > 0 {
+		n += len(`,"body":""`) + base64.StdEncoding.EncodedLen(len(r.Body))
+	}
+	b := make([]byte, 0, n)
+	b = append(b, head[:len(head)-2]...)
+	if len(r.Body) > 0 {
+		b = append(b, `,"body":"`...)
+		b = base64.StdEncoding.AppendEncode(b, r.Body)
+		b = append(b, '"')
+	}
+	return append(b, tail...), nil
+}
+
+// enqueueLine is enqueueOwned for a call already a line.
+func (h *host) enqueueLine(ctx context.Context, line []byte, done chan error, c *call, state callState) error {
+	req := writeReq{b: line, done: done}
 	for {
 		h.mu.Lock()
 		if !h.alive() {
@@ -1412,14 +1452,7 @@ func (h *host) dropCtrl() {
 // when the host already holds its limit of live and retiring calls, so a new
 // call fails clearly rather than a legitimate accepted reply being cut short.
 func (h *host) begin(stream bool) (int64, *call, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.alive() {
-		return 0, nil, errHostGone
-	}
-	c := &call{done: make(chan message, 1), stream: stream, wake: make(chan struct{}, 1), state: callSending}
 	if stream {
-		c.window = streamWindow
 		// a stream holds one window of the budget as well as a call slot, so
 		// the RPC reserve is never spent on one more stream
 		select {
@@ -1427,6 +1460,46 @@ func (h *host) begin(stream bool) (int64, *call, error) {
 		default:
 			return 0, nil, errTooManyCalls
 		}
+	}
+	return h.admit(stream)
+}
+
+// beginStream is begin for a fetch: while the budget's windows are all held
+// it waits for one to come free, for streamWait at most and only while ctx
+// lives, rather than failing a request that would have run a moment later.
+// The wait is outside h.mu, which the call that frees a window takes.
+func (h *host) beginStream(ctx context.Context) (int64, *call, error) {
+	select {
+	case h.streams <- struct{}{}:
+	default:
+		t := time.NewTimer(streamWait)
+		defer t.Stop()
+		select {
+		case h.streams <- struct{}{}:
+		case <-ctx.Done():
+			return 0, nil, context.Cause(ctx)
+		case <-h.dead:
+			return 0, nil, errHostGone
+		case <-t.C:
+			return 0, nil, errTooManyCalls
+		}
+	}
+	return h.admit(true)
+}
+
+// admit registers a call whose stream window, if it is a stream, is taken.
+func (h *host) admit(stream bool) (int64, *call, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.alive() {
+		if stream {
+			<-h.streams
+		}
+		return 0, nil, errHostGone
+	}
+	c := &call{done: make(chan message, 1), stream: stream, wake: make(chan struct{}, 1), state: callSending}
+	if stream {
+		c.window = streamWindow
 	}
 	select {
 	case h.slots <- struct{}{}:
@@ -1660,17 +1733,17 @@ func Fetch(ctx context.Context, r FetchRequest) (*http.Response, error) {
 	if r.Proxy == "" {
 		r.Proxy = proxyOf(ctx)
 	}
-	id, c, err := h.begin(true)
+	id, c, err := h.beginStream(ctx)
 	if err != nil {
 		return nil, err
 	}
-	params := struct {
-		FetchRequest
-		Body   []byte `json:"body,omitempty"`
-		Window int    `json:"window"`
-	}{r, r.Body, streamWindow}
+	line, err := fetchLine(id, r)
+	if err != nil {
+		c.settle(err)
+		return nil, err
+	}
 	c.watchCtx(ctx)
-	err = h.enqueueCall(ctx, map[string]any{"id": id, "method": "fetch", "params": params}, nil, c)
+	err = h.enqueueLine(ctx, line, nil, c, callSending)
 	if err != nil {
 		c.settle(err)
 		return nil, err

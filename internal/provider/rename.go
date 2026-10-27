@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/settings"
@@ -168,6 +171,13 @@ type Gave struct {
 type Renames struct {
 	now  map[string]string
 	gave map[string][]gaveTo
+	// hosts are the providers by the host each is on, for magpie's own
+	// requests to a provider being added, which has no id yet (ProbeOf)
+	hosts map[string]string
+	// sites are the providers by the site (SiteOf) of each host they are
+	// on, "" for a site two are on: a model list asked at a provider's
+	// bare domain before it was saved on its api. subdomain (OnSite)
+	sites map[string]string
 }
 
 type gaveTo struct {
@@ -188,6 +198,61 @@ func (r Renames) Of(id string, at time.Time) string {
 		return to
 	}
 	return id
+}
+
+// ProbeOf is Of for one of magpie's own requests (probelog): one sent
+// while a provider was being added, its Detect or Test before it had an
+// id, is recorded under its host, and is the provider's on that host now.
+// yyddbds on Discord: 大灰狼, on dahuilang.best, was listed twice in the
+// Requests page's providers, once as dahuilang.best for the model lists
+// asked while adding it. A host two providers are on, or none, stays as
+// it is.
+func (r Renames) ProbeOf(id string, at time.Time) string {
+	if to := r.hosts[strings.ToLower(id)]; to != "" {
+		return to
+	}
+	return r.Of(id, at)
+}
+
+// OnHost is whether a provider saved now is on host, one or more.
+func (r Renames) OnHost(host string) bool {
+	_, ok := r.hosts[strings.ToLower(host)]
+	return ok
+}
+
+// OnSite is the provider saved now on a host of host's site (SiteOf),
+// for a probe recorded under a host no provider is on: CyberCaius on
+// Discord, Leee's model list was asked at leee.baby before it was saved
+// on another host of that site, and the Usage page listed leee.baby
+// beside it. on is whether any provider is on that site; id is "" when
+// two are, or host has no site.
+func (r Renames) OnSite(host string) (id string, on bool) {
+	site := SiteOf(host)
+	if site == "" {
+		return "", false
+	}
+	id, on = r.sites[site]
+	return id, on
+}
+
+// SiteOf is the registrable domain of host (a URL's host, with or without
+// its port), lowercased: api.leee.baby:443 is leee.baby. A host on a
+// public suffix's own names (a.vercel.app is vercel.app's tenant a), an
+// address or a name with no suffix (localhost) has none, "".
+func SiteOf(host string) string {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if i := strings.LastIndex(h, ":"); i >= 0 && !strings.Contains(h[i+1:], "]") && strings.Count(h, ":") == 1 {
+		h = h[:i]
+	}
+	h = strings.TrimSuffix(h, ".")
+	if h == "" || strings.ContainsAny(h, ":[]") || net.ParseIP(h) != nil || !strings.Contains(h, ".") {
+		return ""
+	}
+	site, err := publicsuffix.EffectiveTLDPlusOne(h)
+	if err != nil {
+		return ""
+	}
+	return site
 }
 
 // Timed is whether the id's calls go to more than one provider by when
@@ -260,6 +325,40 @@ func renamesOf(ps []Provider) Renames {
 	}
 	for _, gs := range r.gave {
 		slices.SortStableFunc(gs, func(a, b gaveTo) int { return a.Until.Compare(b.Until) })
+	}
+	for _, p := range ps {
+		if p.Hidden {
+			continue
+		}
+		for _, u := range []string{p.Chat, p.Responses, p.Anthropic, p.Gemini, p.Decide} {
+			h := HostOf(u)
+			// a provider's id (one stored by hand can have a dot, b.ai)
+			// is that provider's, never a host's
+			if h == "" || held[h] {
+				continue
+			}
+			if r.hosts == nil {
+				r.hosts = map[string]string{}
+			}
+			if to, ok := r.hosts[h]; ok && to != p.ID {
+				r.hosts[h] = "" // two providers on it: which one is unknown
+				continue
+			}
+			r.hosts[h] = p.ID
+		}
+	}
+	for h, id := range r.hosts {
+		site := SiteOf(h)
+		if site == "" {
+			continue
+		}
+		if r.sites == nil {
+			r.sites = map[string]string{}
+		}
+		if to, ok := r.sites[site]; ok && to != id {
+			id = "" // two providers on it, or a host two are on
+		}
+		r.sites[site] = id
 	}
 	return r
 }

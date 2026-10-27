@@ -21,7 +21,9 @@ type Masked struct {
 	Warned   int            `json:"warned,omitempty"` // places a value went as written, the user told
 	Kinds    map[string]int `json:"kinds,omitempty"`  // different values by kind
 	By       map[string]int `json:"by,omitempty"`     // different values by finder
-	Key      int64          `json:"key,omitempty"`
+	// Key is a string in JSON: nanoseconds are past what a JS number
+	// holds exactly, and a rounded key finds no record
+	Key int64 `json:"key,omitempty,string"`
 }
 
 // maskHits are what a masker swapped: each value from a gwmw.Teller, and
@@ -46,18 +48,28 @@ func (h *maskHits) add(o maskHits) {
 // route it is in the trace (0 for none), and the provider and model it
 // went to. It returns its summary, nil when nothing was masked.
 func noteMasked(r *http.Request, what string, h maskHits, sent string, route int64, prov, model string) *Masked {
+	m, done := noteMaskedUntil(r, what, h, sent, route, prov, model)
+	done("", "")
+	return m
+}
+
+// noteMaskedUntil is noteMasked for a request with more than one provider
+// to try: prov and model are the first planned, and done, called once the
+// request is over, names the provider and model that had it last, which
+// the record keeps (maskrec.Hold).
+func noteMaskedUntil(r *http.Request, what string, h maskHits, sent string, route int64, prov, model string) (*Masked, func(prov, model string)) {
 	if h.n == 0 && len(h.hits) == 0 {
-		return nil
+		return nil, func(string, string) {}
 	}
 	rec := maskrec.Record{What: what, Route: route, Provider: prov, Model: model, N: h.n}
 	if r != nil {
-		rec.Agent, rec.Session = agentOf(r), sessionOf(r.Header)
+		rec.Agent, rec.Session = callerOf(r).agent, sessionOf(r.Header)
 	}
 	rec.Values = valuesOf(h.hits)
 	rec.Snips = snipsOf(sent, h.hits)
 	rec.Took = h.took.Microseconds()
 	rec.Sent = sent
-	rec = maskrec.Add(rec)
+	rec, done := maskrec.Hold(rec)
 	if h.key != nil {
 		*h.key = rec.Key
 	}
@@ -74,7 +86,7 @@ func noteMasked(r *http.Request, what string, h maskHits, sent string, route int
 		m.Kinds[v.Kind]++
 		m.By[v.By]++
 	}
-	return m
+	return m, done
 }
 
 // noteBlocked records a request held back for a value the user set to

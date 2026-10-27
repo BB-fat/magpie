@@ -80,6 +80,7 @@
     <a href="#requests">リクエスト</a>
     <a href="#signin-state">サインイン状態</a>
     <a href="#usage">使用量</a>
+    <a href="#checkin">チェックイン</a>
     <a href="#input">プラグインに渡されるもの</a>
     <a href="#ids">プロバイダ id</a>
     <a href="#test">テスト</a>
@@ -106,6 +107,7 @@
         <li><code>provider.models</code> はアカウントごとのモデルを列挙します。</li>
         <li><code>auth.usage</code> はプランをどれだけ使ったかを返します。magpie 独自のフックで、OpenCode は無視します。</li>
         <li><code>auth.refresh</code> はアカウントのトークンを期限切れ前に、一度にひとつずつ更新します。これも magpie 独自のフックです。</li>
+        <li><code>auth.checkin</code> はアカウントのためにベンダーの毎日のチェックインを押します。これも magpie 独自の hook です。</li>
       </ul>
       エージェントはどの API で送ってきても構いません。ゲートウェイはリクエストをモデルが話す API（chat completions、Responses、Anthropic Messages、Gemini）に変換し、プラグインの <code>fetch</code> に渡して、応答をストリームで返します。</div>
 
@@ -363,7 +365,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     <p>失敗の原因がサインインなら、<code>signIn: "expired"</code> を付けたエラーを投げてください。するとアカウントは再サインインが必要と記録されます（<a href="#signin-state">サインイン状態</a>を参照）。</p>
 
     <h2 id="signin"><a class="anchor" href="#signin">サインイン</a></h2>
-    <p><code>auth</code> フックは <code>{ provider, methods, loader, usage?, refresh?, refreshLead?, icon?, maxConcurrency? }</code> です。各メソッドはユーザーが選べるサインイン方法です。アプリではメソッドがボタンになり、ターミナルでは <code>magpie plugin login &lt;id&gt; [&lt;method&gt;]</code> がどれを使うか尋ねます。</p>
+    <p><code>auth</code> フックは <code>{ provider, methods, loader, usage?, refresh?, refreshLead?, checkin?, icon?, maxConcurrency? }</code> です。各メソッドはユーザーが選べるサインイン方法です。アプリではメソッドがボタンになり、ターミナルでは <code>magpie plugin login &lt;id&gt; [&lt;method&gt;]</code> がどれを使うか尋ねます。</p>
     <h3>API キー</h3>
     <div class="code">
       <span class="lang">api メソッド</span>
@@ -539,6 +541,32 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     </div>
     <p>時刻は ISO 文字列か、秒またはミリ秒のエポック数値です。<code>signIn</code> がない場合、再サインインを求める <code>error</code> はアカウントに記録を付け、問題なく読み取れれば記録は消えます。</p>
 
+    <h2 id="checkin"><a class="anchor" href="#checkin">チェックイン</a></h2>
+    <p>毎日のチェックインでクレジットをくれるベンダーなら、プラグインが <code>auth.checkin</code> で押せます。magpie 独自の hook です（OpenCode は無視します）。ユーザーがそのプロバイダーのチェックインをオンにしている間、magpie はサインイン済みの各アカウントについて北京時間の 1 日に 1 回呼び、結果をアカウントの使用量カードと設定に表示します。</p>
+    <div class="code">
+      <span class="lang">auth hook</span>
+      <pre>auth: {
+  provider: <span class="s">"acme"</span>,
+  <span class="k">async</span> checkin(getAuth, provider) {
+    <span class="k">const</span> auth = <span class="k">await</span> getAuth()
+    <span class="k">const</span> r = <span class="k">await</span> claim(auth.access)
+    <span class="k">if</span> (r.already) <span class="k">return</span> { outcome: <span class="s">"done"</span> }
+    <span class="k">return</span> { outcome: <span class="s">"claimed"</span>, credit: r.points, streak: r.days, message: r.text }
+  },
+}</pre>
+    </div>
+    <p>返すのは <code>{ outcome, credit?, streak?, message? }</code> です：</p>
+    <div class="table-wrap"><table>
+      <tr><th><code>outcome</code></th><th>意味</th></tr>
+      <tr><td><code>claimed</code></td><td>今チェックインした。<code>credit</code> はもらえた量。</td></tr>
+      <tr><td><code>done</code></td><td>今日はチェックイン済み。受け取るものがなく 2xx を返すベンダーは <code>failed</code> ではなく <code>done</code> です。</td></tr>
+      <tr><td><code>ineligible</code></td><td>このアカウントは参加できない。</td></tr>
+      <tr><td><code>inactive</code></td><td>チェックインが実施されていない。</td></tr>
+      <tr><td><code>captcha</code></td><td>ベンダーが CAPTCHA を求めている。解かないでください：ユーザーがベンダー自身のアプリでチェックインします。</td></tr>
+      <tr><td><code>failed</code></td><td>うまくいかなかった。magpie はその日のうちにもう一度試します。</td></tr>
+    </table></div>
+    <p><code>streak</code> は連続日数、<code>message</code> はそのまま表示されます。例外を投げた hook や、上の表にない outcome を返したものは <code>failed</code> です。アカウントのスコープで実行されるので、<code>client.auth.set</code> で更新したトークンはそのアカウントに保存されます。</p>
+
     <h2 id="input"><a class="anchor" href="#input">プラグインに渡されるもの</a></h2>
     <p>magpie は OpenCode の <code>PluginInput</code> の内容を、OpenCode サーバーなしで意味をなす範囲でプラグインに渡します：</p>
     <div class="table-wrap"><table>
@@ -553,7 +581,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <tr><td><code>$</code></td><td>Bun のシェル。</td></tr>
       <tr><td><code>serverUrl</code></td><td>プレースホルダーです。背後に OpenCode サーバーはありません。</td></tr>
     </table></div>
-    <p>magpie が呼び出すフックは <code>config</code>、<code>auth</code>（そのメソッド、<code>loader</code>、<code>usage</code>）、<code>provider.models</code>、<code>chat.headers</code> です。プラグインのほかのフック（<code>tool</code>、<code>event</code>、<code>chat.params</code>、…）は呼び出されません。ツールはエージェント自身が実行します。</p>
+    <p>magpie が呼び出すフックは <code>config</code>、<code>auth</code>（そのメソッド、<code>loader</code>、<code>usage</code>、<code>refresh</code>、<code>checkin</code>）、<code>provider.models</code>、<code>chat.headers</code> です。プラグインのほかのフック（<code>tool</code>、<code>event</code>、<code>chat.params</code>、…）は呼び出されません。ツールはエージェント自身が実行します。</p>
 
     <h2 id="ids"><a class="anchor" href="#ids">プロバイダ id</a></h2>
     <ul>
@@ -682,7 +710,7 @@ magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}
     <p><code>export const events = ["content_block_delta"]</code> と書くと、<code>onEvent</code> はその名前のイベントだけで呼ばれます（Anthropic Messages と Responses のイベントには名前があります）。Chat Completions と Gemini のイベントには名前がないので、それらでは <code>events</code> を書かないでください。1 つのイベントは応答の一部なので、1 つの単語が 2 つのイベントに分かれることがあります。<code>data: [DONE]</code> の行とコメントはフックを通らずにそのまま流れます。圧縮された応答もそのまま流れます。</p>
     <p><code>ctx</code> には次のものがあります：<code>protocol</code>（<code>anthropic</code>・<code>chat</code>・<code>responses</code>・<code>gemini</code>）、エージェントが指定した <code>model</code> と <code>stream</code>、<code>path</code>、magpie が把握している場合の <code>agent</code>、<code>options</code>（そのプラグインの<a href="#middleware-options">オプション</a>）、そしてリクエストごとのオブジェクト <code>state</code>。</p>
     <h3>フックが失敗したとき</h3>
-    <p>フックの持ち時間は、リクエスト、プロバイダへの 1 回の試行、または応答全体で 250 ms、1 イベントで 50 ms、読み込みで 1 秒です。例外を投げたフック、時間切れになったフック、想定外の値を返したフックは、なかったものとして扱われます。つまりリクエストやイベントは元のまま送られます。設定 → プラグインには、ミドルウェアごとのフック、呼び出し回数、1 回あたりの平均時間、失敗回数と直近のエラーが表示されます。フックが見るのは、エージェントが送ったものと受け取るものそのものです。送信時は magpie のマスキングより前、受信時はマスク解除の後です。magpie 自身のリクエスト（スレッドのタイトル、ルーターの分類器）はミドルウェアを通りません。</p>
+    <p>フックの持ち時間は、リクエスト、プロバイダへの 1 回の試行、または応答全体で 250 ms、1 イベントで 50 ms、読み込みで 1 秒です。例外を投げたフック、時間切れになったフック、想定外の値を返したフックは、なかったものとして扱われます。つまりリクエストやイベントは元のまま送られます。設定 → プラグインには、ミドルウェアごとのフック、呼び出し回数、1 回あたりの平均時間、失敗回数と直近のエラーが表示されます。フックが見るのは、エージェントが送ったものと受け取るものそのものです。送信時は magpie のマスキングより前、受信時はマスク解除の後です。magpie 自身のリクエスト（スレッドのタイトル、ルーターの分類器、エージェントのリクエストのために行うウェブ検索と画像の説明）はミドルウェアを通りません。</p>
 
     <h3 id="gateway-points"><a class="anchor" href="#gateway-points">ルーティングと使用量の行</a></h3>
     <p>同じモジュールは <code>strategies</code> と <code>onUsage</code> もエクスポートできます。そのファイルは <code>*.gateway.js</code> と名付けてもよく、パッケージなら <code>"magpie": { "gateway": "./gw.js" }</code> と書けます。</p>

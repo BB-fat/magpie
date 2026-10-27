@@ -80,6 +80,7 @@
     <a href="#requests">请求</a>
     <a href="#signin-state">登录状态</a>
     <a href="#usage">用量</a>
+    <a href="#checkin">签到</a>
     <a href="#input">插件能拿到什么</a>
     <a href="#ids">供应商 id</a>
     <a href="#test">测试</a>
@@ -106,6 +107,7 @@
         <li><code>provider.models</code> 列出某个账号有哪些模型。</li>
         <li><code>auth.usage</code> 说明套餐用了多少。这是 magpie 自己的钩子，OpenCode 会忽略它。</li>
         <li><code>auth.refresh</code> 在账号的 token 过期前续期，同一时间只续一次。它也是 magpie 自己的钩子。</li>
+        <li><code>auth.checkin</code> 替账号按下供应商的每日签到。它也是 magpie 自己的 hook。</li>
       </ul>
       agent 用什么 API 发来都可以。网关把请求转成模型使用的 API（chat completions、Responses、Anthropic Messages 或 Gemini），交给插件的 <code>fetch</code>，再把回答流式传回去。</div>
 
@@ -363,7 +365,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     <p>如果失败的原因是登录失效，就抛出带 <code>signIn: "expired"</code> 的错误，这个账号会被标记为需要重新登录（见<a href="#signin-state">登录状态</a>）。</p>
 
     <h2 id="signin"><a class="anchor" href="#signin">登录</a></h2>
-    <p><code>auth</code> 钩子的形式是 <code>{ provider, methods, loader, usage?, refresh?, refreshLead?, icon?, maxConcurrency? }</code>。每个 method 是用户可选的一种登录方式。在应用里它们是按钮；在终端里，<code>magpie plugin login &lt;id&gt; [&lt;method&gt;]</code> 会询问选哪个。</p>
+    <p><code>auth</code> 钩子的形式是 <code>{ provider, methods, loader, usage?, refresh?, refreshLead?, checkin?, icon?, maxConcurrency? }</code>。每个 method 是用户可选的一种登录方式。在应用里它们是按钮；在终端里，<code>magpie plugin login &lt;id&gt; [&lt;method&gt;]</code> 会询问选哪个。</p>
     <h3>API key</h3>
     <div class="code">
       <span class="lang">api 方式</span>
@@ -539,6 +541,32 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     </div>
     <p>时间可以是 ISO 字符串，也可以是以秒或毫秒为单位的时间戳。没有 <code>signIn</code> 时，提示要重新登录的 <code>error</code> 会标记账号，一次正常读取会清除标记。</p>
 
+    <h2 id="checkin"><a class="anchor" href="#checkin">签到</a></h2>
+    <p>每日签到送额度的供应商，可以让插件用 <code>auth.checkin</code> 去签，这是 magpie 自己的 hook（OpenCode 会忽略）。用户为这个供应商开着签到时，magpie 每个北京日为每个已登录账号调用一次，结果显示在账号的用量卡片和设置里。</p>
+    <div class="code">
+      <span class="lang">auth hook</span>
+      <pre>auth: {
+  provider: <span class="s">"acme"</span>,
+  <span class="k">async</span> checkin(getAuth, provider) {
+    <span class="k">const</span> auth = <span class="k">await</span> getAuth()
+    <span class="k">const</span> r = <span class="k">await</span> claim(auth.access)
+    <span class="k">if</span> (r.already) <span class="k">return</span> { outcome: <span class="s">"done"</span> }
+    <span class="k">return</span> { outcome: <span class="s">"claimed"</span>, credit: r.points, streak: r.days, message: r.text }
+  },
+}</pre>
+    </div>
+    <p>它返回 <code>{ outcome, credit?, streak?, message? }</code>：</p>
+    <div class="table-wrap"><table>
+      <tr><th><code>outcome</code></th><th>含义</th></tr>
+      <tr><td><code>claimed</code></td><td>刚签到成功。<code>credit</code> 是这次给的额度。</td></tr>
+      <tr><td><code>done</code></td><td>今天已经签过。供应商返回 2xx 但没有可领的，是 <code>done</code>，不是 <code>failed</code>。</td></tr>
+      <tr><td><code>ineligible</code></td><td>这个账号不能参加。</td></tr>
+      <tr><td><code>inactive</code></td><td>当前没有签到活动。</td></tr>
+      <tr><td><code>captcha</code></td><td>供应商要求验证码。不要去解：用户在供应商自己的应用里签到。</td></tr>
+      <tr><td><code>failed</code></td><td>没成功。magpie 当天稍后会再试。</td></tr>
+    </table></div>
+    <p><code>streak</code> 是连续天数，<code>message</code> 原样显示。抛出异常，或返回的 outcome 不在上表里，都算 <code>failed</code>。它在账号的作用域里运行，所以用 <code>client.auth.set</code> 续期的 token 会存到这个账号。</p>
+
     <h2 id="input"><a class="anchor" href="#input">插件能拿到什么</a></h2>
     <p>magpie 交给插件的是 OpenCode <code>PluginInput</code> 里的内容，只要它在没有 OpenCode 服务端时还有意义：</p>
     <div class="table-wrap"><table>
@@ -553,7 +581,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <tr><td><code>$</code></td><td>Bun 的 shell。</td></tr>
       <tr><td><code>serverUrl</code></td><td>占位值，后面没有 OpenCode 服务端。</td></tr>
     </table></div>
-    <p>magpie 调用的钩子是 <code>config</code>、<code>auth</code>（它的 methods、<code>loader</code> 和 <code>usage</code>）、<code>provider.models</code> 和 <code>chat.headers</code>。插件的其他钩子（<code>tool</code>、<code>event</code>、<code>chat.params</code> 等）不会被调用，工具由 agent 自己运行。</p>
+    <p>magpie 调用的钩子是 <code>config</code>、<code>auth</code>（它的 methods、<code>loader</code>、<code>usage</code>、<code>refresh</code> 和 <code>checkin</code>）、<code>provider.models</code> 和 <code>chat.headers</code>。插件的其他钩子（<code>tool</code>、<code>event</code>、<code>chat.params</code> 等）不会被调用，工具由 agent 自己运行。</p>
 
     <h2 id="ids"><a class="anchor" href="#ids">供应商 id</a></h2>
     <ul>
@@ -682,7 +710,7 @@ magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}
     <p><code>export const events = ["content_block_delta"]</code> 让 <code>onEvent</code> 只处理这些名字的事件（Anthropic Messages 和 Responses 的事件有名字）。Chat Completions 和 Gemini 的事件没有名字，处理它们时不要写 <code>events</code>。一个事件只是回复的一小段，一个词可能被拆在两个事件里。<code>data: [DONE]</code> 行和注释直接放行，不经过钩子。压缩过的回复原样放行。</p>
     <p><code>ctx</code> 里有 <code>protocol</code>（<code>anthropic</code>、<code>chat</code>、<code>responses</code> 或 <code>gemini</code>）、agent 请求的 <code>model</code> 和 <code>stream</code>、<code>path</code>、magpie 知道时的 <code>agent</code>、<code>options</code>（这个插件的<a href="#middleware-options">选项</a>），以及 <code>state</code>：每个请求独有的对象。</p>
     <h3>钩子出错时</h3>
-    <p>处理请求、一次供应商尝试或完整回复时，钩子有 250 毫秒；处理一个事件时有 50 毫秒；加载有 1 秒。钩子抛出异常、超时或返回了别的东西，都当作它不存在：请求或事件按原样发送。设置 → 插件会显示每个中间件的钩子、调用次数、平均每次耗时和失败次数，以及最近一次错误。钩子看到的是 agent 发出和收到的原始内容：发出时在 magpie 脱敏之前，返回时在还原之后。magpie 自己的请求（会话标题、路由分类器）不经过中间件。</p>
+    <p>处理请求、一次供应商尝试或完整回复时，钩子有 250 毫秒；处理一个事件时有 50 毫秒；加载有 1 秒。钩子抛出异常、超时或返回了别的东西，都当作它不存在：请求或事件按原样发送。设置 → 插件会显示每个中间件的钩子、调用次数、平均每次耗时和失败次数，以及最近一次错误。钩子看到的是 agent 发出和收到的原始内容：发出时在 magpie 脱敏之前，返回时在还原之后。magpie 自己的请求（会话标题、路由分类器，以及它为 agent 的请求做的网页搜索和图片描述）不经过中间件。</p>
 
     <h3 id="gateway-points"><a class="anchor" href="#gateway-points">路由与用量记录</a></h3>
     <p>同一个模块还可以导出 <code>strategies</code> 和 <code>onUsage</code>。这样的文件可以命名为 <code>*.gateway.js</code>，包里也可以写 <code>"magpie": { "gateway": "./gw.js" }</code>。</p>

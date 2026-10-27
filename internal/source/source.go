@@ -40,7 +40,7 @@ var China = func() bool { return settings.Load().ChinaMirror }
 // "" when there is none. Only mirrors that serve the same bytes as the
 // official address: npmmirror for npm's registry and Bun's releases (whose
 // zips are checked against Bun's checksums all the same), jsDelivr for the
-// community repo's plugin list, hf-mirror for the masking model. Never a proxy such as gh-proxy, which
+// community repo's plugin list, hf-mirror for the masking models. Never a proxy such as gh-proxy, which
 // would hand magpie whatever it liked.
 func chinaFirst(raw string) string {
 	u, err := url.Parse(raw)
@@ -55,18 +55,32 @@ func chinaFirst(raw string) string {
 			return bunMirror + "/" + rest
 		}
 	case "huggingface.co":
-		// the local masking model (internal/pii), at the revision its
-		// sha256 was pinned at: hf-mirror serves Hugging Face's files,
-		// and what it serves is checked against that pin
-		if strings.HasPrefix(u.EscapedPath(), "/LocalAI-io/privacy-filter-GGUF/resolve/") && u.RawQuery == "" {
-			return hfMirror + u.EscapedPath()
-		}
+		return modelMirror(u)
 	case "raw.githubusercontent.com":
 		// /magpie-community/plugins/<branch>/<path>
 		if rest, ok := strings.CutPrefix(u.EscapedPath(), "/magpie-community/plugins/"); ok {
 			if ref, path, ok := strings.Cut(rest, "/"); ok && ref != "" && path != "" && u.RawQuery == "" {
 				return listMirror + ref + "/" + path
 			}
+		}
+	}
+	return ""
+}
+
+// modelMirror is hf-mirror's copy of one of the local masking models'
+// files (internal/pii), "" for anything else of Hugging Face's. Those
+// files are fetched at the revision their sha256 were pinned at, and what
+// hf-mirror serves is checked against those pins, so it is asked with the
+// switch off too, after Hugging Face: where huggingface.co is blocked or
+// poisoned (a *.facebook.com certificate, EOF, a handshake that times out;
+// hh0592821 on Discord) the model still comes.
+func modelMirror(u *url.URL) string {
+	if u.Scheme != "https" || !strings.EqualFold(u.Hostname(), "huggingface.co") || u.RawQuery != "" {
+		return ""
+	}
+	for _, repo := range []string{"/LocalAI-io/privacy-filter-GGUF/resolve/", "/QuantumNous/astrlink-guard/resolve/"} {
+		if strings.HasPrefix(u.EscapedPath(), repo) {
+			return hfMirror + u.EscapedPath()
 		}
 	}
 	return ""
@@ -98,14 +112,20 @@ func githubBase() string {
 
 // URLs is the official address followed by its mirrors, or just the
 // official one when there is no mirror for it; with the 「国内镜像」 switch
-// on, a mirror in China comes before it.
+// on, a mirror in China comes before it. A masking model's file has
+// hf-mirror after it with no switch at all (modelMirror); every other
+// fallback mirror waits for MAGPIE_MIRRORS.
 func URLs(raw string) []string {
 	out := faithful(raw)
-	if !Enabled() {
-		return out
-	}
 	u, err := url.Parse(raw)
 	if err != nil {
+		return out
+	}
+	if m := modelMirror(u); m != "" {
+		// pinned by sha256: no switch needed (modelMirror)
+		return distinct(append(out, m)...)
+	}
+	if !Enabled() {
 		return out
 	}
 	switch strings.ToLower(u.Hostname()) {
