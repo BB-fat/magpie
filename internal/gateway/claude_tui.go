@@ -213,6 +213,7 @@ func tuiConfig() *tuiRuntimeConfig {
 		},
 		NoteLimits: provider.NoteClaudeLimits,
 		MovedOff:   provider.ClaudeCodeMovedOff,
+		LeanPrompt: func() bool { return settings.Load().ClaudeLeanPrompt },
 	}
 }
 

@@ -958,6 +958,24 @@ func tuiRuntimeRenderInteractiveExternalInstructions(req *tuiRuntimeRequest) str
 	return "<external_system_instructions>\n" + system + "\n</external_system_instructions>\n"
 }
 
+// leanSystem is a lean run's system prompt (ClaudeLeanPrompt): the caller's
+// instructions without the client Claude Code's billing line. Claude Code
+// still puts its own billing and identity lines before it. The system
+// messages and tool_choice of a turn stay in that turn's prompt.
+func tuiRuntimeLeanSystem(req *tuiRuntimeRequest) string {
+	return strings.TrimSpace(tuiRuntimeWithoutBillingHeader(req.System))
+}
+
+// importInstructions opens a bootstrap prompt: the instructions and the
+// current notices, said to be none when there are neither. A lean run's
+// system prompt holds its instructions, so with no notices it has none.
+func tuiRuntimeImportInstructions(instructions *tuiRuntimeRequest) string {
+	if instructions.leanPrompt && instructions.System == "" {
+		return ""
+	}
+	return tuiRuntimeRenderInteractiveExternalInstructions(instructions)
+}
+
 // tool_choice binds one request only. It is rendered with that request, not
 // with the instructions a resumed session already holds, so it neither stays
 // in force on later turns nor changes the instruction key.
@@ -1000,6 +1018,10 @@ func tuiRuntimeRenderInteractiveFirstPromptWithImages(req *tuiRuntimeRequest) (s
 	clean, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return "", nil, err
+	}
+	if req.leanPrompt {
+		// the run's system prompt holds them (tuiRuntimeLeanSystem)
+		clean.System = ""
 	}
 	for _, m := range req.Messages {
 		if m.Role == "system" {
@@ -1226,6 +1248,9 @@ func tuiRuntimeRenderInteractiveHistoricalBootstrapWithImages(req *tuiRuntimeReq
 	// Only notices in the current user role run are current instructions.
 	// Older environment/token notices must not override the new request.
 	instructions := *req
+	if req.leanPrompt {
+		instructions.System = ""
+	}
 	currentStart := positions[current]
 	for currentStart > 0 && original.Messages[currentStart-1].Role == "system" {
 		currentStart--
@@ -1237,7 +1262,7 @@ func tuiRuntimeRenderInteractiveHistoricalBootstrapWithImages(req *tuiRuntimeReq
 			}
 		}
 	}
-	prefix := tuiRuntimeRenderInteractiveExternalInstructions(&instructions) + importHeader
+	prefix := tuiRuntimeImportInstructions(&instructions) + importHeader
 	fixedBytes := len(prefix) + len(currentBlock)
 	if fixedBytes > tuiRuntimeInteractiveHistoricalBootstrapMaxBytes {
 		return "", nil, errors.New("Claude interactive historical bootstrap current request and instructions exceed the safe PTY transport budget")
@@ -1411,6 +1436,18 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		// Use one argv so older bridge parsers that do not know --thinking's
 		// arity cannot mistake "disabled" for the user's prompt.
 		args = append(args, "--thinking=disabled")
+	}
+	if req.leanPrompt {
+		// in a file of the run's own: instructions can be longer than one
+		// argument or the wrapper's tmux command holds, and a command line
+		// is listed to every user. One argv, as --thinking=disabled: the
+		// wrapper doesn't know the flag's arity.
+		systemPath := filepath.Join(tmp, "system.md")
+		if err := os.WriteFile(systemPath, []byte(tuiRuntimeLeanSystem(req)), 0o600); err != nil {
+			clean()
+			return nil, nil, err
+		}
+		args = append(args, "--system-prompt-file="+systemPath)
 	}
 	if len(req.Format.schema()) > 0 {
 		// in a file of the run's own: one argument holds at most 128 KiB

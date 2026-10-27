@@ -28,10 +28,16 @@ func tuiRuntimeInteractiveCanonicalJSON(raw json.RawMessage) json.RawMessage {
 	return canonical
 }
 
-// Hash exactly the external instructions rendered into the native prompt.
-// tool_choice is a per-turn constraint and settings travel with each launch.
+// Hash exactly the external instructions rendered into the native prompt,
+// or a lean run's system prompt, set apart from any prompt's text: a
+// session holds its instructions in one place or the other. tool_choice is
+// a per-turn constraint and settings travel with each launch.
 func tuiRuntimeInstructionKey(req *tuiRuntimeRequest) string {
-	sum := sha256.Sum256([]byte(tuiRuntimeRenderInteractiveExternalInstructions(req)))
+	text := tuiRuntimeRenderInteractiveExternalInstructions(req)
+	if req.leanPrompt {
+		text = "\x00lean-prompt\x00" + tuiRuntimeLeanSystem(req)
+	}
+	sum := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(sum[:])
 }
 

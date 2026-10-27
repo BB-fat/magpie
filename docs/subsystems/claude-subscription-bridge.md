@@ -191,6 +191,9 @@ the conversation alone. Claude Code still sends its billing block and its
 identity line, so requests come from the real binary. They no longer carry
 Claude Code's prompt, and that is the ban risk the setting names.
 
+A Claude account set to TUI follows the same setting
+([Claude TUI bridge](claude-tui-bridge.md#the-callers-instructions-as-the-system-prompt-claudeleanprompt)).
+
 A request with client cache marks (#1717) is never lean: its system marks
 are placed in the first message. The mode is part of the run's identity
 (`cacheIdentity`, and the tool-results check in `serveSubscription`), so a

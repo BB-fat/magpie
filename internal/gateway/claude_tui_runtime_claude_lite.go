@@ -91,6 +91,7 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 		return out.Fail(http.StatusBadRequest, err.Error())
 	}
 	req.Model = model
+	req.leanPrompt = tuiRuntimeLeanPrompt()
 	// A subagent may share its parent's session header, but must not
 	// replace the parent's checkpoint when its history differs.
 	if subOf(r.Header) != "" {
