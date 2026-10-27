@@ -6,7 +6,9 @@ type tuiRuntimeRequest struct {
 	compactSystem  string
 	seedHistory    []Message
 	replayKey      string
-	resumedCopy    bool
+	resumedCopy    bool   // resumes a session copied for this turn alone
+	pointResume    bool   // resumes a cut point's session in place
+	workKey        string // state key of the cwd of the session it resumes
 	tuiSearchTool  string
 }
 

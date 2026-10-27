@@ -1347,8 +1347,14 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	release := func() {}
 	clean := func() { _ = os.RemoveAll(tmp); release() }
 	var work string
-	if outerSession != "" {
-		work, err = tuiRuntimeInteractiveSessionWorkDir(owner, outerSession)
+	workKey := req.workKey
+	if workKey == "" && outerSession != "" {
+		workKey = tuiRuntimeInteractiveSessionStateKey(owner, outerSession)
+	}
+	if workKey != "" {
+		// a resumed session's own cwd, which its transcript's project and
+		// the cached system prompt name
+		work, err = tuiRuntimeInteractiveWorkDirForKey(workKey)
 	} else {
 		// Claude Code names its cwd in the system prompt: a stateless run in a
 		// folder of its own would write its whole conversation to the cache
@@ -1467,6 +1473,18 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		}
 	}()
 	var resumeBase *tuiRuntimeInteractiveResumeBase
+	if req.pointResume && outerSession != "" {
+		// A cut point's session resumed in place: the conversation's
+		// checkpoint, when it names that session, goes dirty with it (and
+		// back, rewindCancelledResume). Another branch's or conversation's
+		// session leaves it as it is.
+		if saved, ok, err := b.loadInteractiveSession(owner, outerSession); err != nil {
+			clean()
+			return nil, nil, tuiRuntimeErrInteractiveSessionStoreInvalid
+		} else if !ok || saved.SessionID != resumeID {
+			seeded = true
+		}
+	}
 	if resumeID != "" && outerSession != "" && !seeded {
 		// What the clean checkpoint was, so a turn cancelled before it did
 		// anything can be taken back to it (rewindCancelledResume).
@@ -1541,7 +1559,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 			s := tuiRuntimeInteractiveContextDiagnosticFromRequest(req)
 			return &s
 		}(),
-		outerSession: outerSession, threadKey: firstWords(&req.Request), sessionID: resumeID, images: images,
+		outerSession: outerSession, threadKey: firstWords(&req.Request), sessionID: resumeID, images: images, workKey: workKey,
 		searchName: req.tuiSearchTool, nativeSearch: nativeSearch, schema: len(req.Format.schema()) > 0, readOnlyRecovery: readOnly, tmuxSocket: sock,
 		safeguards: bytes.Clone(req.Safeguards), safeguardBeta: req.SafeguardBeta, resumeBase: resumeBase}
 	if b.toolJournal != nil && os.Getenv("MAGPIE_CLAUDE_FIRST_TURN_ANCHOR") == "1" &&
@@ -1580,7 +1598,11 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		// while the starting request still holds its outerTurns claim — until
 		// its child is reaped and removeRun frees it (liveOuter). A helper
 		// run has outerSession == "" and registers nothing.
-		b.liveOuter[tuiRuntimeInteractiveSessionStateKey(owner, outerSession)] = run
+		// Branches of the conversation run side by side; the first live
+		// one owns it until it is removed.
+		if key := tuiRuntimeInteractiveSessionStateKey(owner, outerSession); b.liveOuter[key] == nil {
+			b.liveOuter[key] = run
+		}
 	}
 	b.mu.Unlock()
 	// The wrapper, its tmux and Claude Code take one place among the
@@ -1919,6 +1941,9 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 			}
 			if msg.UUID != "" {
 				seenRows[msg.UUID] = true
+				r.mu.Lock()
+				r.lastRow = msg.UUID
+				r.mu.Unlock()
 			}
 			id := msg.Message.ID
 			if id == "" { // rows without an Anthropic message id belong to one provisional message
