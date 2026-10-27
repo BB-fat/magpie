@@ -1467,7 +1467,11 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 			tuiRuntimeReleaseInteractiveNativeLease(nativeLease)
 		}
 	}()
+	var resumeBase *tuiRuntimeInteractiveResumeBase
 	if resumeID != "" && outerSession != "" && !seeded {
+		// What the clean checkpoint was, so a turn cancelled before it did
+		// anything can be taken back to it (rewindCancelledResume).
+		resumeBase = b.interactiveResumeBase(owner, outerSession, resumeID, tuiRuntimeClaudeSessions(configDir, work))
 		// Before the resume's first possible side effect, the canonical
 		// checkpoint becomes dirty. In ledger mode the lease above prevents
 		// a second Runtime from dirtying another process's clean result.
@@ -1540,7 +1544,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		}(),
 		outerSession: outerSession, threadKey: firstWords(&req.Request), sessionID: resumeID, images: images,
 		searchName: req.tuiSearchTool, nativeSearch: nativeSearch, schema: len(req.Format.schema()) > 0, readOnlyRecovery: readOnly, tmuxSocket: sock,
-		safeguards: bytes.Clone(req.Safeguards), safeguardBeta: req.SafeguardBeta}
+		safeguards: bytes.Clone(req.Safeguards), safeguardBeta: req.SafeguardBeta, resumeBase: resumeBase}
 	if b.toolJournal != nil && os.Getenv("MAGPIE_CLAUDE_FIRST_TURN_ANCHOR") == "1" &&
 		outerSession != "" && resumeID == "" && !readOnly && len(req.Messages) == 1 && req.Messages[0].Role == "user" {
 		// conversationKeys deliberately emits keys only at *assistant*
@@ -2052,6 +2056,7 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 				default:
 					r.emit(Event{Kind: KText, Text: string(msg.StructuredOutput)})
 					r.emit(Event{Kind: KStop, Stop: "stop"})
+					r.noteReplied()
 				}
 			} else if msg.IsError || !started || !sawText || stopFromAnthropic(msg.StopReason) != "stop" {
 				why := tuiRuntimeNativeErrorResultText(msg.Result, msg.APIErrorStatus, msg.ErrorKind)
@@ -2061,6 +2066,7 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 				r.emit(Event{Kind: KError, Text: why, Status: msg.APIErrorStatus})
 			} else {
 				r.emit(Event{Kind: KStop, Stop: "stop"})
+				r.noteReplied()
 			}
 			toolStopped = false
 			r.endSegment()

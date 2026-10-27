@@ -250,6 +250,14 @@ read is refused, never taken for none, and those not used for 30 days go.
 The safeguards beta is resolved before matching a live run, so unchanged
 safeguards continue the same tool call.
 
+A resume marks its checkpoint dirty before it starts. When it ends with no
+answer and no tool call (its client went away, its start failed), the run,
+once reaped, takes it back (`rewindCancelledResume`): the session's
+transcript is cut to its length at the start, if it still begins with the
+same bytes, and the checkpoint is clean again. The resend resumes the same
+session, with its message in it once, instead of rebuilding the history.
+A turn that answered, called a tool or had any MCP callback stays dirty.
+
 A completed reply is reused only for the same request semantics: canonical
 tool arguments, result error flags, media contents, safeguards and generation
 settings participate in its replay key. This strict replay identity is separate

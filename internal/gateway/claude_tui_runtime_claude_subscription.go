@@ -265,6 +265,12 @@ type tuiRuntimeSubscriptionRun struct {
 	// still-executing one. Never set on a parked, failed, cancelled or
 	// read-only-signaled run.
 	terminalDelivered bool
+	// resumeBase is the clean checkpoint a resume started from, nil for
+	// any other run; replied says Claude Code gave the turn a whole
+	// answer. A resume that ended with neither an answer nor a tool call
+	// is taken back to its base (rewindCancelledResume).
+	resumeBase *tuiRuntimeInteractiveResumeBase
+	replied    bool
 
 	// Only one settings update is in flight; it must be acknowledged before
 	// a tool result or a new user turn can trigger the next model request.
@@ -3178,6 +3184,11 @@ func (b *tuiRuntimeSubscriptionBridge) removeRun(run *tuiRuntimeSubscriptionRun)
 	// tree nor done and skips the wait.
 	if interactive && tree != nil && done != nil {
 		<-done
+	}
+	if interactive {
+		// still holding the lease and the conversation: no next turn
+		// reads the checkpoint until it is taken back
+		run.rewindCancelledResume()
 	}
 	// Do not release the per-outer process lease until the wrapper has been
 	// reaped. The wrapper also inherits the FD, so Runtime death alone cannot
