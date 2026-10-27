@@ -317,6 +317,85 @@ func (b *tuiRuntimeSubscriptionBridge) markInteractiveSessionDirty(owner, outerS
 	return nil
 }
 
+// tuiRuntimeInteractiveResumeBase is a clean checkpoint as a resume of it
+// started: its entry, and its session's transcript as it was then.
+type tuiRuntimeInteractiveResumeBase struct {
+	entry tuiRuntimeInteractiveSessionEntry
+	path  string
+	size  int64
+	sum   [32]byte
+}
+
+// interactiveResumeBase notes the clean checkpoint a resume of sid starts
+// from, before the resume marks it dirty. nil when it isn't clean, isn't
+// sid's, or its transcript doesn't read: that turn stays dirty if cut off.
+func (b *tuiRuntimeSubscriptionBridge) interactiveResumeBase(owner, outerSession, sid string, dirs []string) *tuiRuntimeInteractiveResumeBase {
+	saved, ok, err := b.loadInteractiveSession(owner, outerSession)
+	if err != nil || !ok || saved.Dirty || saved.SessionID != sid {
+		return nil
+	}
+	for _, d := range dirs {
+		path := filepath.Join(d, sid+".jsonl")
+		if data, err := os.ReadFile(path); err == nil {
+			return &tuiRuntimeInteractiveResumeBase{entry: saved, path: path, size: int64(len(data)), sum: sha256.Sum256(data)}
+		}
+	}
+	return nil
+}
+
+// rewindCancelledResume takes a resumed turn that ended with no answer and
+// no tool call (its client went away, its start failed) back to the clean
+// checkpoint it started from: the session's transcript is cut to what it
+// was and the checkpoint is clean again. The client's resend then resumes
+// the same session from the prefix Anthropic cached, and its message is in
+// it once. Left dirty, the next turn rebuilt the whole history (a fresh
+// cache write of all of it). Run once the run's child is reaped.
+func (r *tuiRuntimeSubscriptionRun) rewindCancelledResume() {
+	r.mu.Lock()
+	base := r.resumeBase
+	r.resumeBase = nil
+	untouched := !r.replied && !r.terminalDelivered && len(r.asked) == 0 && len(r.seenMCPCallIDs) == 0
+	owner, outerSession := r.owner, r.outerSession
+	r.mu.Unlock()
+	if base == nil || !untouched || r.bridge == nil || outerSession == "" {
+		return
+	}
+	b := r.bridge
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+	state, err := tuiRuntimeLoadInteractiveSessionStateStrict()
+	if err != nil {
+		return
+	}
+	key := tuiRuntimeInteractiveSessionStateKey(owner, outerSession)
+	if e, ok := state.Sessions[key]; !ok || !e.Dirty || e.SessionID != base.entry.SessionID {
+		return // another turn's checkpoint since
+	}
+	data, err := os.ReadFile(base.path)
+	if err != nil || int64(len(data)) < base.size || sha256.Sum256(data[:base.size]) != base.sum {
+		log.Printf("Claude interactive cut-off turn left dirty: its session no longer begins with the checkpoint's")
+		return
+	}
+	if err := os.Truncate(base.path, base.size); err != nil {
+		log.Printf("Claude interactive cut-off turn left dirty: %v", err)
+		return
+	}
+	e := base.entry
+	e.UpdatedAt = time.Now().UTC()
+	state.Sessions[key] = e
+	if err := tuiRuntimeWriteInteractiveSessionState(state); err != nil {
+		log.Printf("Claude interactive cut-off turn left dirty: %v", err)
+		return
+	}
+	log.Printf("Claude interactive cut-off turn taken back to its checkpoint; the next turn resumes the same session")
+}
+
+func (r *tuiRuntimeSubscriptionRun) noteReplied() {
+	r.mu.Lock()
+	r.replied = true
+	r.mu.Unlock()
+}
+
 // claimInteractiveOuterTurn gives one in-flight interactive turn per
 // (owner, outerSession). Desktop retries can deliver two requests for the
 // same outer conversation concurrently; only the first may start a run,
