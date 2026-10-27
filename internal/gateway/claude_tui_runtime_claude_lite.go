@@ -108,6 +108,15 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	if tuiRuntimeClaudeDesktopCompaction(req) || tuiRuntimeClaudeDesktopSuggestion(req) {
 		return upstream()
 	}
+	// Compare the same effective tools that the native run was started with.
+	// Adding the private search tool only after matching makes every search-
+	// enabled continuation appear to have changed its tool definitions.
+	var search Tool
+	if req.WebSearch && !searching(r.Context()) && tuiRuntimeCanSearch() {
+		search = searchTool(req.Tools)
+		req.Tools = append(slices.Clone(req.Tools), search)
+		req.tuiSearchTool = search.Name
+	}
 	// The exact continuation of a live run — its tool results, perhaps with
 	// what the user said meanwhile — goes on in that native session.
 	if run, results, how := rt.bridge.match(req); run != nil && tuiRuntimeLiteContinues(owner, model, req, run, results, how) {
@@ -130,12 +139,6 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 			return out.Fail(http.StatusServiceUnavailable, msg)
 		}
 		defer rt.bridge.releaseInteractiveOuterTurn(owner, outerSession)
-	}
-	var search Tool
-	if req.WebSearch && !searching(r.Context()) && tuiRuntimeCanSearch() {
-		search = searchTool(req.Tools)
-		req.Tools = append(slices.Clone(req.Tools), search)
-		req.tuiSearchTool = search.Name
 	}
 	run, events, err := rt.bridge.startLite(r.Context(), req, model, owner, outerSession, configDir)
 	if err != nil {
