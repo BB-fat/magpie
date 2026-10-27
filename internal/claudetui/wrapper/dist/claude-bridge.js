@@ -326,8 +326,8 @@ __export(exports_coerce, {
 // src/cli.ts
 import { spawn, spawnSync } from "child_process";
 import { createInterface } from "readline";
-import { chmodSync as chmodSync2, existsSync as existsSync6, mkdirSync as mkdirSync4, readFileSync as readFileSync9, statSync as statSync2, writeFileSync as writeFileSync4 } from "fs";
-import { join as join8, resolve as resolve6, dirname as dirname7 } from "path";
+import { chmodSync, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync7, statSync as statSync2, writeFileSync as writeFileSync3 } from "fs";
+import { join as join6, resolve as resolve5, dirname as dirname6 } from "path";
 import { fileURLToPath } from "url";
 import { randomUUID as randomUUID3 } from "crypto";
 
@@ -10586,15 +10586,14 @@ function shellQuote2(value) {
     return "''";
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
-function claudeLaunchArgv(opts) {
-  if (opts.extraBodyPreloadPath && opts.claudeNodeLaunch) {
-    const { interpreter, entryScript } = opts.claudeNodeLaunch;
-    return [interpreter, "-r", opts.extraBodyPreloadPath, entryScript, ...opts.claudeArgs];
-  }
-  return [opts.claudePath, ...opts.claudeArgs];
-}
 function buildClaudeLaunchCommand(opts) {
-  const envCommand = ["env", ...opts.unsetEnvArgs, ...opts.envArgs, ...claudeLaunchArgv(opts)].map(shellQuote2).join(" ");
+  const envCommand = [
+    "env",
+    ...opts.unsetEnvArgs,
+    ...opts.envArgs,
+    opts.claudePath,
+    ...opts.claudeArgs
+  ].map(shellQuote2).join(" ");
   const holdSeconds = Math.max(1, Math.ceil(opts.holdMs / 1000));
   const script = [
     envCommand,
@@ -10608,89 +10607,9 @@ function buildClaudeLaunchCommand(opts) {
   return `/bin/sh -lc ${shellQuote2(script)}`;
 }
 
-// src/extra-body-launch.ts
-import { chmodSync, readFileSync as readFileSync8, writeFileSync as writeFileSync3 } from "fs";
-import { join as join6 } from "path";
-
-// src/claude-node-entry.ts
-import { existsSync as existsSync5, readFileSync as readFileSync7 } from "fs";
-import { dirname as dirname5, resolve as resolve5 } from "path";
-function resolveClaudeNodeLaunch(claudePath) {
-  const abs = resolve5(claudePath);
-  if (!existsSync5(abs))
-    return null;
-  let text;
-  try {
-    text = readFileSync7(abs, "utf8").slice(0, 16384);
-  } catch {
-    return null;
-  }
-  if (!text.startsWith("#!"))
-    return null;
-  const interpreter = shebangInterpreter(text);
-  if (!interpreter.includes("node"))
-    return null;
-  const entry = findClaudeEntryScript(text, dirname5(abs));
-  if (!entry)
-    return null;
-  return { interpreter, entryScript: entry };
-}
-function shebangInterpreter(firstLines) {
-  const line = firstLines.split(`
-`, 1)[0] ?? "";
-  const match = line.match(/^#!\s*(?:\/usr\/bin\/env\s+(\S+)|(\S+))/);
-  if (!match)
-    return "node";
-  return match[1] ?? match[2] ?? "node";
-}
-function findClaudeEntryScript(text, binDir) {
-  const patterns = [
-    /require\s*\(\s*['"]([^'"]+\.(?:cjs|js|mjs))['"]\s*\)/,
-    /import\s+['"]([^'"]+\.(?:cjs|js|mjs))['"]/,
-    /import\s*\(\s*['"]([^'"]+\.(?:cjs|js|mjs))['"]\s*\)/
-  ];
-  for (const re of patterns) {
-    const hit = text.match(re);
-    if (!hit?.[1])
-      continue;
-    const candidate = resolve5(binDir, hit[1]);
-    if (existsSync5(candidate))
-      return candidate;
-  }
-  return null;
-}
-
-// src/extra-body-launch.ts
-var NATIVE_INLINE_EXTRA_BODY_MAX = 120 * 1024;
-function nativeExtraBodyTooLargeMessage(byteLength) {
-  return `[claude-bridge] Claude Code is a native binary (not a Node launcher); ` + `safeguards are ${byteLength} bytes but inline CLAUDE_CODE_EXTRA_BODY is limited to ` + `${NATIVE_INLINE_EXTRA_BODY_MAX} bytes on this install. Shorten classifier context or use a Node-based Claude install.
-`;
-}
-function planExtraBodyLaunch(opts) {
-  const claudeNodeLaunch = resolveClaudeNodeLaunch(opts.claudePath);
-  if (claudeNodeLaunch) {
-    const extraBodyPreloadPath = join6(opts.runDir, "extra-body-preload.cjs");
-    writeFileSync3(extraBodyPreloadPath, readFileSync8(opts.preloadSourcePath));
-    chmodSync(extraBodyPreloadPath, 384);
-    return { kind: "node-preload", extraBodyPreloadPath, claudeNodeLaunch };
-  }
-  let inlineExtraBody;
-  try {
-    inlineExtraBody = readFileSync8(opts.extraBodyFile, "utf8");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { error: `[claude-bridge] CLAUDE_CODE_EXTRA_BODY_FILE read failed: ${message}
-` };
-  }
-  if (inlineExtraBody.length > NATIVE_INLINE_EXTRA_BODY_MAX) {
-    return { error: nativeExtraBodyTooLargeMessage(inlineExtraBody.length) };
-  }
-  return { kind: "native-inline", inlineExtraBody };
-}
-
 // src/native-tmux-guard.ts
 import { closeSync as closeSync2, fsyncSync as fsyncSync2, openSync as openSync2, renameSync as renameSync3, unlinkSync as unlinkSync2, writeSync as writeSync2 } from "fs";
-import { dirname as dirname6, isAbsolute, join as join7 } from "path";
+import { dirname as dirname5, isAbsolute, join as join5 } from "path";
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 function socketEnvironmentDigest() {
   return createHash("sha256").update(`${process.env.TMUX_TMPDIR ?? ""}\x00${process.env.TMUX ?? ""}`).digest("hex");
@@ -10699,8 +10618,8 @@ function writeNativeTmuxGuard(path, session, socket = "") {
   if (!isAbsolute(path) || !/^claude-bridge-[a-fA-F0-9]{8}$/.test(session)) {
     throw new Error("invalid native tmux ownership marker path/session");
   }
-  const folder = dirname6(path);
-  const tmp = join7(folder, `.native-tmux-${randomUUID2()}.tmp`);
+  const folder = dirname5(path);
+  const tmp = join5(folder, `.native-tmux-${randomUUID2()}.tmp`);
   let fd;
   try {
     fd = openSync2(tmp, "wx", 384);
@@ -11046,8 +10965,8 @@ function makeClaudeErrorResultEvent(opts) {
 }
 
 // src/cli.ts
-var HERE = dirname7(fileURLToPath(import.meta.url));
-var REPO = resolve6(HERE, "..");
+var HERE = dirname6(fileURLToPath(import.meta.url));
+var REPO = resolve5(HERE, "..");
 var parsedArgs = parseCliArgs(process.argv.slice(2));
 if (!parsedArgs.ok) {
   process.stderr.write(`claude-bridge: ${parsedArgs.error.message}
@@ -11112,25 +11031,25 @@ if (resumedSessionId && !forkedSession) {
   } catch {}
 }
 var runId = new Date().toISOString().replace(/[:.]/g, "-") + "-" + randomUUID3().slice(0, 8);
-var runDir = join8(resolveRunRoot(targetCwd), runId);
+var runDir = join6(resolveRunRoot(targetCwd), runId);
 mkdirSync4(runDir, { recursive: true });
 var traceAPI = process.env.MAGPIE_CLAUDE_TUI_DEBUG_API === "1";
 if (traceAPI)
-  chmodSync2(runDir, 448);
-var jsonSchemaPath = jsonSchema ? join8(runDir, "json-schema.json") : undefined;
-var claudeExitStatusPath = join8(runDir, "claude-exit-status");
+  chmodSync(runDir, 448);
+var jsonSchemaPath = jsonSchema ? join6(runDir, "json-schema.json") : undefined;
+var claudeExitStatusPath = join6(runDir, "claude-exit-status");
 var sessionName = `claude-bridge-${runId.slice(-8)}`;
 var CLAUDE_READY_TIMEOUT_MS = envDurationMs("CLAUDE_BRIDGE_CLAUDE_READY_TIMEOUT_MS", 180000);
 var TMUX_SUBMIT_DELAY_MS = envDurationMs("CLAUDE_BRIDGE_TMUX_SUBMIT_DELAY_MS", 1000);
 var TMUX_EXIT_HOLD_MS = envDurationMs("CLAUDE_BRIDGE_TMUX_EXIT_HOLD_MS", 30000);
 var MAX_SESSION_MS = envDurationMs("CLAUDE_BRIDGE_MAX_SESSION_MS", 12 * 60 * 60000);
 var TURN_END_FLUSH_TIMEOUT_MS = envDurationMs("CLAUDE_BRIDGE_TURN_END_FLUSH_TIMEOUT_MS", 5000);
-var stopEventPath = join8(runDir, "stop-event.json");
-var messageDisplayPath = join8(runDir, "message-display.jsonl");
-var transcriptEventPath = join8(runDir, "transcript-event.json");
-var localSettings = join8(targetCwd, ".claude", "settings.local.json");
+var stopEventPath = join6(runDir, "stop-event.json");
+var messageDisplayPath = join6(runDir, "message-display.jsonl");
+var transcriptEventPath = join6(runDir, "transcript-event.json");
+var localSettings = join6(targetCwd, ".claude", "settings.local.json");
 if (jsonSchemaPath && jsonSchema) {
-  writeFileSync4(jsonSchemaPath, jsonSchema.compact + `
+  writeFileSync3(jsonSchemaPath, jsonSchema.compact + `
 `);
   installJsonSchemaStopHook({ settingsPath: localSettings, command: buildJsonSchemaStopHookCommand() });
 }
@@ -11138,7 +11057,7 @@ var userContextPath = process.env.CLAUDE_BRIDGE_USER_CONTEXT_PATH;
 installRuntimeHooks({ settingsPath: localSettings, command: buildRuntimeHookCommand() });
 if (userContextPath) {
   installUserContextHooks({ settingsPath: localSettings, command: buildRuntimeHookCommand() });
-  writeFileSync4(userContextPath + ".ready", `1
+  writeFileSync3(userContextPath + ".ready", `1
 `, { mode: 384 });
 }
 if (process.env.CLAUDE_BRIDGE_TMUX_SOCKET && !process.env.CLAUDE_CONFIG_DIR) {
@@ -11231,7 +11150,7 @@ desplegaDebug("parsed arguments", {
   jsonSchema: jsonSchema ? { estimatedTokens: jsonSchema.estimatedTokens, maxTokens: jsonSchema.maxTokens } : undefined
 });
 function formatVersionInfo() {
-  const pkg = JSON.parse(readFileSync9(join8(REPO, "package.json"), "utf8"));
+  const pkg = JSON.parse(readFileSync7(join6(REPO, "package.json"), "utf8"));
   const whichClaude = spawnSync("which", ["claude"], { encoding: "utf8" });
   const claudePath = whichClaude.status === 0 ? whichClaude.stdout.trim() : whichClaude.stderr.trim() || "not found";
   const claudeVersion = whichClaude.status === 0 ? commandOutput("claude", ["-v"]) || "unknown" : "unavailable";
@@ -11269,8 +11188,8 @@ function loadPrintJsonSchema() {
 function resolveTargetCwd() {
   const value = desplegaValue("cwd");
   const cwd = value === undefined || value === true ? process.cwd() : String(value);
-  const resolved = resolve6(process.cwd(), cwd);
-  if (!existsSync6(resolved) || !statSync2(resolved).isDirectory()) {
+  const resolved = resolve5(process.cwd(), cwd);
+  if (!existsSync5(resolved) || !statSync2(resolved).isDirectory()) {
     process.stderr.write(`claude-bridge: --desplega-cwd must point to an existing directory: ${resolved}
 `);
     process.exit(2);
@@ -11280,8 +11199,8 @@ function resolveTargetCwd() {
 function resolveRunRoot(cwd) {
   const value = desplegaValue("run-dir") ?? desplegaValue("state-dir");
   if (value !== undefined && value !== true)
-    return resolve6(process.cwd(), String(value));
-  return join8(cwd, ".claude-bridge", "runs");
+    return resolve5(process.cwd(), String(value));
+  return join6(cwd, ".claude-bridge", "runs");
 }
 function hasDesplegaFlag(name) {
   const arg = desplegaArgs.find((arg) => arg.name === name);
@@ -11502,7 +11421,7 @@ ${details.rawResponse}
     let stderrLog;
     if (printMode) {
       try {
-        stderrLog = readFileSync9(join8(runDir, "stdout.stderr.log"), "utf8").trim() || undefined;
+        stderrLog = readFileSync7(join6(runDir, "stdout.stderr.log"), "utf8").trim() || undefined;
       } catch {}
     }
     const result = makePrintErrorResult(messageWithPaneTail, {
@@ -11539,30 +11458,9 @@ ${details.rawResponse}
 function startTmux() {
   const claudeArgs = [
     ...bypassPermissions ? ["--dangerously-skip-permissions"] : [],
-    ...traceAPI ? ["--debug", "api", "--debug-file", join8(runDir, "claude-api.log")] : [],
+    ...traceAPI ? ["--debug", "api", "--debug-file", join6(runDir, "claude-api.log")] : [],
     ...forwardedClaudeArgs
   ];
-  let extraBodyPreloadPath;
-  let claudeNodeLaunch;
-  let nativeInlineExtraBody;
-  if (process.env.CLAUDE_CODE_EXTRA_BODY_FILE) {
-    const planned = planExtraBodyLaunch({
-      extraBodyFile: process.env.CLAUDE_CODE_EXTRA_BODY_FILE,
-      claudePath,
-      runDir,
-      preloadSourcePath: join8(HERE, "extra-body-preload.cjs")
-    });
-    if ("error" in planned) {
-      process.stderr.write(planned.error);
-      process.exit(1);
-    }
-    if (planned.kind === "node-preload") {
-      extraBodyPreloadPath = planned.extraBodyPreloadPath;
-      claudeNodeLaunch = planned.claudeNodeLaunch;
-    } else {
-      nativeInlineExtraBody = planned.inlineExtraBody;
-    }
-  }
   const envArgs = [
     ...interactiveMcpBackgroundEnvArgs(),
     ...nativeAutoCompactionLaunchEnv(process.env).envArgs,
@@ -11575,24 +11473,15 @@ function startTmux() {
       "CLAUDE_BRIDGE_SCHEMA_STOP_HOOK=1",
       `CLAUDE_BRIDGE_JSON_SCHEMA_PATH=${jsonSchemaPath}`,
       `CLAUDE_BRIDGE_RUN_ID=${runId}`
-    ] : [],
-    ...nativeInlineExtraBody !== undefined ? [`CLAUDE_CODE_EXTRA_BODY=${nativeInlineExtraBody}`] : []
+    ] : []
   ];
-  const unsetEnvArgs = [...claudeUnsetEnvArgs(), ...nativeAutoCompactionLaunchEnv(process.env).unsetEnvArgs];
-  if (extraBodyPreloadPath) {
-    unsetEnvArgs.push("-u", "CLAUDE_CODE_EXTRA_BODY");
-  } else if (nativeInlineExtraBody !== undefined) {
-    unsetEnvArgs.push("-u", "CLAUDE_CODE_EXTRA_BODY_FILE");
-  }
   const launchCommand = buildClaudeLaunchCommand({
     claudePath,
     claudeArgs,
-    unsetEnvArgs,
+    unsetEnvArgs: [...claudeUnsetEnvArgs(), ...nativeAutoCompactionLaunchEnv(process.env).unsetEnvArgs],
     envArgs,
     exitStatusPath: claudeExitStatusPath,
-    holdMs: TMUX_EXIT_HOLD_MS,
-    extraBodyPreloadPath,
-    claudeNodeLaunch
+    holdMs: TMUX_EXIT_HOLD_MS
   });
   const nativeGuardPath = process.env.MAGPIE_CLAUDE_NATIVE_TMUX_GUARD_PATH;
   if (nativeGuardPath) {
@@ -11721,10 +11610,10 @@ function failCompletedNativeApiTurn() {
   return true;
 }
 function readRuntimeStopEvent() {
-  if (!existsSync6(stopEventPath))
+  if (!existsSync5(stopEventPath))
     return null;
   try {
-    const event = JSON.parse(readFileSync9(stopEventPath, "utf8"));
+    const event = JSON.parse(readFileSync7(stopEventPath, "utf8"));
     return event.hook_event_name === "Stop" || event.hook_event_name === "StopFailure" ? event : null;
   } catch {
     return null;
@@ -11792,7 +11681,7 @@ function ensureClaudeInit(model) {
     uuid: randomUUID3(),
     permissionMode: bypassPermissions ? "bypassPermissions" : "default",
     apiKeySource: hasDesplegaFlag("local-auth") ? "ANTHROPIC_API_KEY" : "none",
-    memoryPaths: transcriptProjectFolder ? { auto: join8(transcriptProjectFolder, "memory") + "/" } : {}
+    memoryPaths: transcriptProjectFolder ? { auto: join6(transcriptProjectFolder, "memory") + "/" } : {}
   })) + `
 `);
 }
@@ -11854,11 +11743,11 @@ async function emitClaudeStreamResult(stopEvent, resultText) {
   return true;
 }
 function emitMessageDisplayEvents() {
-  if (!existsSync6(messageDisplayPath))
+  if (!existsSync5(messageDisplayPath))
     return;
   let text = "";
   try {
-    text = readFileSync9(messageDisplayPath, "utf8");
+    text = readFileSync7(messageDisplayPath, "utf8");
   } catch {
     return;
   }
@@ -11893,13 +11782,13 @@ function capturePane() {
 }
 function captureFailurePane() {
   paneCaptured = true;
-  const path = join8(runDir, "tmux-pane-final.txt");
+  const path = join6(runDir, "tmux-pane-final.txt");
   const r = spawnSync(tmuxPath, [...tmuxBase, "capture-pane", "-pt", sessionName, "-S", "-"], {
     encoding: "utf8"
   });
   const pane = ((r.stdout ?? "") + (r.stderr ?? "")).trimEnd();
   try {
-    writeFileSync4(path, pane ? pane + `
+    writeFileSync3(path, pane ? pane + `
 ` : "");
   } catch (err) {
     desplegaDebug("failed to write final tmux pane capture", {
@@ -11909,9 +11798,9 @@ function captureFailurePane() {
   }
   let paneTail = tailLines(pane, 40);
   if (printMode && !paneTail) {
-    const stderrFile = join8(runDir, "stdout.stderr.log");
+    const stderrFile = join6(runDir, "stdout.stderr.log");
     try {
-      const stderr = readFileSync9(stderrFile, "utf8").trim();
+      const stderr = readFileSync7(stderrFile, "utf8").trim();
       if (stderr)
         paneTail = `[stderr.log] ${tailLines(stderr, 40)}`;
     } catch {}
@@ -12002,7 +11891,7 @@ async function waitForMcpListed() {
   if (!listedPath)
     return;
   const startedAt = Date.now();
-  while (!existsSync6(listedPath)) {
+  while (!existsSync5(listedPath)) {
     if (ctrl.signal.aborted)
       return;
     if (Date.now() - startedAt >= MCP_LISTED_TIMEOUT_MS) {
@@ -12049,9 +11938,9 @@ async function waitForClaudeReady() {
   }
 }
 function readClaudeExitStatus() {
-  if (!existsSync6(claudeExitStatusPath))
+  if (!existsSync5(claudeExitStatusPath))
     return null;
-  return readFileSync9(claudeExitStatusPath, "utf8").trim() || "unknown";
+  return readFileSync7(claudeExitStatusPath, "utf8").trim() || "unknown";
 }
 function tmuxSessionExists() {
   const res = spawnSync(tmuxPath, [...tmuxBase, "has-session", "-t", sessionName], {
@@ -12131,10 +12020,10 @@ async function waitForRuntimeTranscriptPath(timeoutMs) {
   return null;
 }
 function readRuntimeTranscriptPath() {
-  if (!existsSync6(transcriptEventPath))
+  if (!existsSync5(transcriptEventPath))
     return null;
   try {
-    const event = JSON.parse(readFileSync9(transcriptEventPath, "utf8"));
+    const event = JSON.parse(readFileSync7(transcriptEventPath, "utf8"));
     return typeof event.transcript_path === "string" && event.transcript_path ? event.transcript_path : null;
   } catch {
     return null;

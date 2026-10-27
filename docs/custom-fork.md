@@ -44,13 +44,12 @@ stop magpie with an error):
 Example for a 1GB box: `MAGPIE_CLAUDE_IDLE_MAX=1` and/or
 `MAGPIE_CLAUDE_IDLE_TTL=10m`.
 
-## Claude TUI safeguards (large `EXTRA_BODY`)
+## Claude TUI safeguards
 
-TUI runs pass auto-mode `safeguards` via `CLAUDE_CODE_EXTRA_BODY_FILE` and
-`<run-tmp>/extra-body.json` on the Bun wrapper (short path only), not inline
-`CLAUDE_CODE_EXTRA_BODY` on the Go→Bun exec hop. Node launcher Claude uses a
-preload; native ELF Claude gets inline `CLAUDE_CODE_EXTRA_BODY` up to 120 KiB.
-See [Claude TUI bridge](subsystems/claude-tui-bridge.md).
+Interactive mode supports serialized safeguards extra-body JSON up to 64 KiB.
+Larger bodies are rejected explicitly before launch, without truncation or
+switching the account to standard mode. See
+[Claude TUI bridge](subsystems/claude-tui-bridge.md#safeguards-size-limit).
 
 ## Claude TUI accounts (Linux)
 

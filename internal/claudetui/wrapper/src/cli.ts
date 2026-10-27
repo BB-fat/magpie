@@ -56,7 +56,6 @@ import { makePrintErrorResult } from "./print-result.ts";
 import { runJsonSchemaStopHook, runRuntimeHook } from "./stop-hook.ts";
 import { NativeApiErrorTurn, type NativeApiFailure } from "./native-api-error.ts";
 import { buildClaudeLaunchCommand, interactiveMcpBackgroundEnvArgs, nativeAutoCompactionLaunchEnv } from "./launch-command.ts";
-import { planExtraBodyLaunch } from "./extra-body-launch.ts";
 import { writeNativeTmuxGuard } from "./native-tmux-guard.ts";
 import {
   apiErrorStatusFromRow,
@@ -658,28 +657,6 @@ function startTmux(): void {
     ...(traceAPI ? ["--debug", "api", "--debug-file", join(runDir, "claude-api.log")] : []),
     ...forwardedClaudeArgs,
   ];
-  let extraBodyPreloadPath: string | undefined;
-  let claudeNodeLaunch: { interpreter: string; entryScript: string } | undefined;
-  let nativeInlineExtraBody: string | undefined;
-  if (process.env.CLAUDE_CODE_EXTRA_BODY_FILE) {
-    const planned = planExtraBodyLaunch({
-      extraBodyFile: process.env.CLAUDE_CODE_EXTRA_BODY_FILE,
-      claudePath,
-      runDir,
-      preloadSourcePath: join(HERE, "extra-body-preload.cjs"),
-    });
-    if ("error" in planned) {
-      process.stderr.write(planned.error);
-      process.exit(1);
-    }
-    if (planned.kind === "node-preload") {
-      extraBodyPreloadPath = planned.extraBodyPreloadPath;
-      claudeNodeLaunch = planned.claudeNodeLaunch;
-    } else {
-      nativeInlineExtraBody = planned.inlineExtraBody;
-    }
-  }
-
   const envArgs = [
     // Keep MCP calls in the foreground until the client handoff completes.
     ...interactiveMcpBackgroundEnvArgs(),
@@ -696,26 +673,15 @@ function startTmux(): void {
           `CLAUDE_BRIDGE_RUN_ID=${runId}`,
         ]
       : []),
-    ...(nativeInlineExtraBody !== undefined ? [`CLAUDE_CODE_EXTRA_BODY=${nativeInlineExtraBody}`] : []),
   ];
 
-  const unsetEnvArgs = [...claudeUnsetEnvArgs(), ...nativeAutoCompactionLaunchEnv(process.env).unsetEnvArgs];
-  if (extraBodyPreloadPath) {
-    // Preload reads the file in-process; never pass a huge inline body through execve.
-    unsetEnvArgs.push("-u", "CLAUDE_CODE_EXTRA_BODY");
-  } else if (nativeInlineExtraBody !== undefined) {
-    // Native Claude reads CLAUDE_CODE_EXTRA_BODY only; FILE is unsupported.
-    unsetEnvArgs.push("-u", "CLAUDE_CODE_EXTRA_BODY_FILE");
-  }
   const launchCommand = buildClaudeLaunchCommand({
     claudePath,
     claudeArgs,
-    unsetEnvArgs,
+    unsetEnvArgs: [...claudeUnsetEnvArgs(), ...nativeAutoCompactionLaunchEnv(process.env).unsetEnvArgs],
     envArgs,
     exitStatusPath: claudeExitStatusPath,
     holdMs: TMUX_EXIT_HOLD_MS,
-    extraBodyPreloadPath,
-    claudeNodeLaunch,
   });
   const nativeGuardPath = process.env.MAGPIE_CLAUDE_NATIVE_TMUX_GUARD_PATH;
   if (nativeGuardPath) {
