@@ -30,9 +30,9 @@ import (
 // tool-free recovery turn. A rebuild cannot run a tool twice: only the
 // client runs tools, and only the calls it is handed.
 //
-// A conversation's helper calls (titles, subagents, other models) keep
-// upstream's routing: they run stateless, beside the conversation's native
-// session and checkpoint. So does a request without a conversation id.
+// Identified helper calls run beside the conversation's native session
+// and checkpoint. A changed history alone is not a helper: it replaces
+// the checkpoint when it cannot resume it.
 
 // liteTurnWait bounds how long a conversation's turn waits for its previous
 // turn to let go of it (a reply still unwinding after its client left, a
@@ -91,6 +91,11 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 		return out.Fail(http.StatusBadRequest, err.Error())
 	}
 	req.Model = model
+	// A subagent may share its parent's session header, but must not
+	// replace the parent's checkpoint when its history differs.
+	if subOf(r.Header) != "" {
+		outerSession = ""
+	}
 	// Auto mode's own classifier: refused before any native run starts.
 	if tuiRuntimeAutoModeClassifier(req) {
 		log.Printf("Claude interactive refused auto mode's local classifier request: a TUI account can't review auto mode's actions")
@@ -369,19 +374,13 @@ func tuiRuntimeLiteContinues(owner, model string, req *tuiRuntimeRequest, run *t
 	return sameSafeguards && (sameContext || run.interactiveEquivalentContext(req) || run.exactInteractiveToolGrowth(owner, req, how))
 }
 
-// liteCanonical is upstream's helper routing: a request on a conversation id
-// is that conversation's own turn unless it is a different thread the
-// checkpoint does not verify, or a one-message call for another model.
+// liteCanonical keeps upstream's one-message, other-model helper routing.
+// A changed first message is not evidence of a helper: client compaction
+// or edits can replace the history while keeping the same conversation id.
 func (b *tuiRuntimeSubscriptionBridge) liteCanonical(owner, outerSession, model string, req *tuiRuntimeRequest) bool {
 	shape, _, err := tuiRuntimeInteractiveRequestWithoutSystem(req)
 	if err != nil {
 		return true
-	}
-	if active := b.outerThread(owner, outerSession); active != "" && active != firstWords(&req.Request) {
-		_, _, status := b.restoreInteractiveSession(owner, outerSession, req)
-		if status != tuiRuntimeInteractiveRestoreExact && status != tuiRuntimeInteractiveRestoreReplyAnchor && status != tuiRuntimeInteractiveRestoreCompanion {
-			return false
-		}
 	}
 	if len(shape.Messages) == 1 {
 		saved, savedOK, _ := b.loadInteractiveSession(owner, outerSession)

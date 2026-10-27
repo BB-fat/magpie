@@ -298,6 +298,18 @@ can still find their run by call ID. Clients that need checkpoint continuity
 should send `X-Magpie-Session` or an agent session header recognized by
 `sessionOf`. Body metadata and `prompt_cache_key` are not checkpoint IDs.
 
+The request's history is authoritative. A changed first user message
+(client compaction or edits) does not remove its session identity. If it
+cannot safely resume, the bridge rebuilds from that request and saves the
+new checkpoint; subsequent turns can resume it, including after a gateway
+restart. No agent-specific summary recognition or branch store is needed.
+There is still one checkpoint per conversation: forks sharing a session
+ID can cause repeated rebuilds and should use separate IDs. Explicit
+`x-claude-code-agent-id` subagents run stateless without changing the parent
+checkpoint; Desktop compaction/suggestion and one-message other-model
+helper routing remain separate. An unmarked helper sharing the parent's
+session ID cannot be distinguished from an edited history by its text.
+
 The cwd remains stable across resumes and stateless slot reuse, auto memory
 is disabled, and the bridge keeps Claude Code's 1-hour cache setting. A model,
 tool definition, system-context or conversation change can still alter the
