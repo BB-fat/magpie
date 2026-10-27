@@ -967,6 +967,8 @@ func tuiRuntimeRenderInteractiveTurnConstraint(req *tuiRuntimeRequest) string {
 		return "<current_turn_constraint>\nYou must call at least one available tool before answering this request.\n</current_turn_constraint>\n\n"
 	case strings.HasPrefix(req.ToolChoice, "name:"):
 		return fmt.Sprintf("<current_turn_constraint>\nYou must call the %s tool before answering this request.\n</current_turn_constraint>\n\n", strings.TrimPrefix(req.ToolChoice, "name:"))
+	case len(req.heldTools) > 0:
+		return tuiRuntimeHeldToolsConstraint
 	}
 	return ""
 }
@@ -1379,6 +1381,19 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	}
 	toolsPath := filepath.Join(tmp, "tools.json")
 	toolBytes, _ := json.Marshal(tuiRuntimeInteractiveTools(req, len(images) > 0))
+	var held map[string]bool
+	if len(req.heldTools) > 0 && len(images) == 0 {
+		// the session's previous definitions, byte for byte: the head of
+		// the prefix Anthropic cached for it (heldTools)
+		var defs []tuiRuntimeBridgeTool
+		if json.Unmarshal(req.heldTools, &defs) == nil {
+			toolBytes, held = req.heldTools, map[string]bool{}
+			for _, d := range defs {
+				held[d.Name] = true
+			}
+		}
+	}
+	toolsHash := tuiRuntimeKeepInteractiveTools(toolBytes)
 	if err := os.WriteFile(toolsPath, toolBytes, 0o600); err != nil {
 		clean()
 		return nil, nil, err
@@ -1560,6 +1575,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 			return &s
 		}(),
 		outerSession: outerSession, threadKey: firstWords(&req.Request), sessionID: resumeID, images: images, workKey: workKey,
+		heldTools: held, toolsHash: toolsHash,
 		searchName: req.tuiSearchTool, nativeSearch: nativeSearch, schema: len(req.Format.schema()) > 0, readOnlyRecovery: readOnly, tmuxSocket: sock,
 		safeguards: bytes.Clone(req.Safeguards), safeguardBeta: req.SafeguardBeta, resumeBase: resumeBase}
 	if b.toolJournal != nil && os.Getenv("MAGPIE_CLAUDE_FIRST_TURN_ANCHOR") == "1" &&
@@ -2020,7 +2036,11 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 					name = r.declaredLocked(name)
 					offered := r.tools[name]
 					internalSearch := r.searchName != "" && name == r.searchName
+					held := r.heldTools[name] && !offered
 					r.mu.Unlock()
+					if ok && held {
+						continue // answered by mcpCall as unavailable, never shown
+					}
 					if !ok || !offered || block.ID == "" || toolStopped {
 						r.emit(Event{Kind: KError, Text: "Claude interactive migration: unsupported or repeated tool call"})
 						r.endSegment()

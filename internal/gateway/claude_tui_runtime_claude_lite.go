@@ -548,9 +548,12 @@ func (b *tuiRuntimeSubscriptionBridge) startLiteAtPoint(ctx context.Context, req
 	if err != nil {
 		return nil, nil, err, true
 	}
-	prompt = tuiRuntimeRenderInteractiveTurnConstraint(req) + prompt
 	copied := *req
 	copied.workKey = point.Work
+	if len(req.Tools) == 0 && len(images) == 0 && point.ToolsHash != "" {
+		copied.heldTools = tuiRuntimeLoadInteractiveTools(point.ToolsHash)
+	}
+	prompt = tuiRuntimeRenderInteractiveTurnConstraint(&copied) + prompt
 	if release, ok := b.claimSession(point.SessionID); ok {
 		defer release()
 		if tuiRuntimeTranscriptEndsAt(configDir, work, point.SessionID, point.Row) {

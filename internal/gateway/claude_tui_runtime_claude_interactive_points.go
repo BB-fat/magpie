@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +34,7 @@ type tuiRuntimeInteractivePoint struct {
 	Model          string    `json:"model,omitempty"`
 	InstructionKey string    `json:"instruction_key"`
 	ReplyKey       string    `json:"reply_key,omitempty"`
+	ToolsHash      string    `json:"tools,omitempty"` // the definitions it ran with (keepInteractiveTools)
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
@@ -360,4 +363,74 @@ func (b *tuiRuntimeSubscriptionBridge) allRuns() []*tuiRuntimeSubscriptionRun {
 		runs = append(runs, run)
 	}
 	return runs
+}
+
+// A request offering no tools, going on from a session that had them
+// (Codex's own compaction request: openai/codex#37305), would change the
+// head of the prefix Anthropic cached — tool definitions come before the
+// system prompt and the messages — and write the whole conversation to
+// the cache again. Its run is given the session's previous definitions
+// instead, byte for byte, held: a call of one is answered as unavailable
+// by mcpCall and never shown to the client, and the turn is told not to
+// call them.
+const tuiRuntimeHeldToolsConstraint = "<current_turn_constraint>\nNo tools are available for this request. Do not call any tool; answer in text only.\n</current_turn_constraint>\n\n"
+
+const tuiRuntimeHeldToolsRefusal = "No tools are available for this request; the tool was NOT executed. Answer in text only."
+
+const tuiRuntimeInteractiveToolsLongest = 30 * 24 * time.Hour
+
+func tuiRuntimeInteractiveToolsDir() string {
+	return filepath.Join(tuiRuntimeMustStateDir(), "claude-interactive-tools")
+}
+
+// keepInteractiveTools keeps a run's MCP tool definitions by their hash,
+// for a later held turn of its session, and returns the hash ("" when they
+// could not be kept). Kept definitions unused for 30 days go.
+func tuiRuntimeKeepInteractiveTools(defs []byte) string {
+	if len(defs) == 0 || string(defs) == "null" || string(defs) == "[]" {
+		return ""
+	}
+	sum := sha256.Sum256(defs)
+	hash := hex.EncodeToString(sum[:])
+	dir := tuiRuntimeInteractiveToolsDir()
+	path := filepath.Join(dir, hash+".json")
+	now := time.Now()
+	if os.Chtimes(path, now, now) == nil {
+		return hash
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	tmp, err := os.CreateTemp(dir, ".tools-*")
+	if err != nil {
+		return ""
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(defs); err != nil {
+		tmp.Close()
+		return ""
+	}
+	if tmp.Close() != nil || os.Rename(tmp.Name(), path) != nil {
+		return ""
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if fi, err := e.Info(); err == nil && now.Sub(fi.ModTime()) > tuiRuntimeInteractiveToolsLongest {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+	return hash
+}
+
+// loadInteractiveTools reads the definitions kept under hash, nil when they
+// are gone or no longer match it.
+func tuiRuntimeLoadInteractiveTools(hash string) []byte {
+	data, err := os.ReadFile(filepath.Join(tuiRuntimeInteractiveToolsDir(), filepath.Base(hash)+".json"))
+	if err != nil {
+		return nil
+	}
+	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != hash {
+		return nil
+	}
+	return data
 }

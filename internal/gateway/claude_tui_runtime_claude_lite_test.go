@@ -56,7 +56,7 @@ printf '%s\n' '{"type":"result","session_id":"'$sid'","stop_reason":"end_turn"}'
 		var runs []map[string]string
 		for _, e := range entries {
 			run := map[string]string{}
-			for _, name := range []string{"argv", "stdin", "resume", "seed.jsonl", "cwd"} {
+			for _, name := range []string{"argv", "stdin", "resume", "seed.jsonl", "cwd", "tools.json"} {
 				if b, err := os.ReadFile(filepath.Join(logs, e.Name(), name)); err == nil {
 					run[name] = strings.TrimSpace(string(b))
 				}

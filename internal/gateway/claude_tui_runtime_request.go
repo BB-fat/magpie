@@ -9,6 +9,7 @@ type tuiRuntimeRequest struct {
 	resumedCopy    bool   // resumes a session copied for this turn alone
 	pointResume    bool   // resumes a cut point's session in place
 	workKey        string // state key of the cwd of the session it resumes
+	heldTools      []byte // tool definitions kept for the cache, not offered (heldTools)
 	tuiSearchTool  string
 }
 
