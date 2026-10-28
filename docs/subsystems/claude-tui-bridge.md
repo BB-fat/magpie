@@ -357,57 +357,27 @@ session header resume rather than rebuild (the au-exit case). Tests:
 apart from a rebuild by the first reply's row uuid) and the real
 `TestClaudeTUIRuntimeRealServe/no_header_after_the_TTL`.
 
-### Cut points
+### Held tools (a compaction offering none)
 
-A cut point (`claude_tui_runtime_claude_interactive_points.go`) is where a
-native transcript holds a complete reply: the conversation's key up to
-that reply (`conversationKeys`, which names the owner) → the session, the
-uuid of the reply's last row, the session's cwd, the model, the
-instruction key and the reply key. `ended` records one for every complete
-reply, beside the checkpoint. Native transcripts only grow, so a point
-never changes. They live in `<config>/claude-tui/claude-interactive-points.json`
-(30 days, 128 per conversation, 4096 in all, the oldest go first); a store
-that doesn't read is not resumed from and not written over.
-
-A request goes on from the deepest point its history extends: by the
-conversation's key (any of the owner's conversations, so the same history
-under another session id is found too), else, in its own conversation, by
-a reply the client kept while it rewrote what came before. It goes on in
-that session itself when no run writes it and nothing was said in it after
-the point (`claimSession`, `transcriptEndsAt`), else in a copy of the
-session up to the point (`forkTranscript`), in the session's own cwd. Both
-send Anthropic the prefix it cached for that reply; only a rebuild writes
-the history again. Changed instructions rebuild. A side question, a
-compaction, an edit of an earlier turn and a retried cut-off turn each
-continue their own transcript; none takes another's place.
-
-A request offering no tools that goes on from a point whose run had them
+A request offering no tools that goes on from a session that had them
 (Codex's own compaction request carries none: openai/codex#37305) is run
-with that run's MCP definitions byte for byte, held: tool definitions are
-the head of the prefix Anthropic cached, so dropping them wrote the whole
-conversation to the cache again (au-exit 10-27: cache_read 0 and 1249,
-~130k written, on both compactions). A point records the hash of its run's
-definitions (`keepInteractiveTools`, kept by hash in
-`<config>/claude-tui/claude-interactive-tools/`, unused for 30 days they
-go). The turn is told no tools are available
-(`tuiRuntimeHeldToolsConstraint`); a call of a held tool is answered as not
-executed by `mcpCall` and its transcript row is never shown to the client.
-A turn with images, or one going on from the checkpoint or a parked copy,
-is not held.
+with that session's MCP definitions byte for byte, held: tool definitions
+are the head of the prefix Anthropic cached, so dropping them wrote the
+whole conversation to the cache again (au-exit 10-27: cache_read 0 and
+1249, ~130k written, on both compactions). A checkpoint records the hash of
+its run's definitions (`keepInteractiveTools`, kept by hash in
+`<config>/claude-tui/claude-interactive-tools/`; unused for 30 days they
+go), and a resumed no-tools turn loads them (`heldTools`). The turn is
+told no tools are available (`tuiRuntimeHeldToolsConstraint`); a call of a
+held tool is answered as not executed by `mcpCall` and its transcript row
+is never shown to the client. A turn with images is not held.
 
-Limits: points are made at complete replies only; a reply that called tools
-is found by call id in memory (`liteParkedBranch`, and `liteEarlierRound`
-for an hour after its round) and not after a restart.
-Each fork is a copy of its transcript's rows; nothing removes interactive
-transcripts yet. With the opt-in durable tool journal
-(`MAGPIE_CLAUDE_DURABLE_TOOL_JOURNAL=1`), the native lease is still one per
-conversation, so a second branch's start is refused while another runs.
-A binary from before points ignores their file: rolling back keeps working
-from the checkpoint.
+### The outer conversation's checkpoint
 
-The conversation's checkpoint (below) is still written and read when no
-point is deeper. A point's session resumed in place makes that checkpoint
-dirty only when it names the same session. Checkpoints live in
+The conversation's checkpoint (below) is still written and read for a
+session with a header when no native checkpoint is deeper. A point's
+session resumed in place makes that checkpoint dirty only when it names
+the same session. Checkpoints live in
 `<config>/claude-tui/claude-interactive-sessions.json`; one that doesn't
 read is refused, never taken for none, and those not used for 30 days go.
 The safeguards beta is resolved before matching a live run, so unchanged

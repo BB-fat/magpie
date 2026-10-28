@@ -1557,7 +1557,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	}()
 	var resumeBase *tuiRuntimeInteractiveResumeBase
 	if req.pointResume && outerSession != "" {
-		// A cut point's session resumed in place: the conversation's
+		// A native checkpoint's session resumed in place: the conversation's
 		// checkpoint, when it names that session, goes dirty with it (and
 		// back, rewindCancelledResume). Another branch's or conversation's
 		// session leaves it as it is.
