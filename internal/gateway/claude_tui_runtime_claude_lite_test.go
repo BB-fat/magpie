@@ -771,6 +771,204 @@ func TestClaudeTUIRuntimeNativeCheckpointResume(t *testing.T) {
 	}
 }
 
+// A no-header compaction (tools=[]) resumes its native checkpoint and holds
+// the session's original tool definitions byte for byte, so the cached
+// prefix still matches, and is told not to call them. A call of a held tool
+// is answered as not executed, never shown to the client.
+func TestClaudeTUIRuntimeNativeCheckpointCompactionHoldsTools(t *testing.T) {
+	runs := tuiRuntimeCpWrapper(t)
+	t.Setenv("SC_PREFIX", tuiRuntimeMcpToolPrefix())
+	rt, b := tuiRuntimeScRuntime(t)
+	withTools := func(body string) string {
+		return strings.Replace(body, `"system":"rules"`, `"system":"rules","tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object","properties":{"cmd":{"type":"string"}}}}]`, 1)
+	}
+	serve := func(body, last string) map[string]string {
+		t.Helper()
+		if code, out := tuiRuntimeScServe(t, rt, "", body); code != 200 || !strings.Contains(out, "ANS") {
+			t.Fatalf("%s: %d %s", last, code, out)
+		}
+		tuiRuntimeScWaitReaped(t, rt)
+		for _, run := range runs() {
+			if strings.Contains(run["stdin"], last) {
+				return run
+			}
+		}
+		t.Fatalf("no run for %s", last)
+		return nil
+	}
+	first := serve(withTools(tuiRuntimeCpBody("q1")), "q1")
+	if !strings.Contains(first["tools.json"], "exec") {
+		t.Fatalf("first run's tools: %q", first["tools.json"])
+	}
+	// a no-header compaction: no tools, but the same conversation prefix
+	compact := serve(tuiRuntimeCpBody("q1", "ANS1", "summarize"), "summarize")
+	if compact["resume"] == "" || compact["tools.json"] != first["tools.json"] {
+		t.Fatalf("no-header compaction did not hold the session's definitions: resume=%q tools=%q", compact["resume"], compact["tools.json"])
+	}
+	if !strings.Contains(compact["stdin"], "No tools are available for this request") {
+		t.Fatalf("compaction not told it has no tools: %q", compact["stdin"])
+	}
+	// a call of a held tool is not shown to the client
+	code, out := tuiRuntimeScServe(t, rt, "", tuiRuntimeCpBody("q1", "ANS1", "summarize", "ANS2", "again CALLHELD"))
+	if code != 200 || !strings.Contains(out, "ANS3") || strings.Contains(out, "tool_use") || strings.Contains(out, "held_1") {
+		t.Fatalf("held call reached the client: %d %s", code, out)
+	}
+	b.abortAll()
+}
+
+// After a compaction replaces the history H with a summary S, S is a new
+// prefix: it must not resume the old H session (the client dropped H), and
+// it builds its own new checkpoint. A later turn on S resumes S's session.
+func TestClaudeTUIRuntimeNativeCheckpointCompactedHistoryIsNewPrefix(t *testing.T) {
+	runs := tuiRuntimeCpWrapper(t)
+	rt, _ := tuiRuntimeScRuntime(t)
+	serve := func(body, last string) map[string]string {
+		t.Helper()
+		if code, out := tuiRuntimeScServe(t, rt, "", body); code != 200 || !strings.Contains(out, "ANS") {
+			t.Fatalf("%s: %d %s", last, code, out)
+		}
+		tuiRuntimeScWaitReaped(t, rt)
+		for _, run := range runs() {
+			if strings.Contains(run["stdin"], last) {
+				return run
+			}
+		}
+		t.Fatalf("no run for %s", last)
+		return nil
+	}
+	// the original conversation: q1 -> ANS1
+	serve(tuiRuntimeCpBody("q1"), "q1")
+	// a later turn on the original history: q1,ANS1,q2
+	onOriginal := serve(tuiRuntimeCpBody("q1", "ANS1", "q2"), "q2")
+	if !strings.Contains(onOriginal["seed.jsonl"], `"uuid":"a-1"`) {
+		t.Fatalf("the original history did not resume its checkpoint: %q", onOriginal["seed.jsonl"])
+	}
+	// the client compacts: H (q1,ANS1,...) is replaced by a summary S. The
+	// first message is now the summary, a new prefix — it must not resume
+	// the old session (which would reintroduce H). The summary turn carries
+	// the summary and its reply, then a new question.
+	summary := serve(`{"model":"claude-opus-5-5","max_tokens":64,"system":"rules","messages":[{"role":"user","content":"SUMMARY of q1 and q2"},{"role":"assistant","content":"ANS9"},{"role":"user","content":"continue"}]}`, "continue")
+	if strings.Contains(summary["seed.jsonl"], `"uuid":"a-1"`) {
+		t.Fatalf("a compacted history resumed the dropped old session: %q", summary["seed.jsonl"])
+	}
+	// a later turn on the summary resumes the summary's own new session
+	onSummary := serve(`{"model":"claude-opus-5-5","max_tokens":64,"system":"rules","messages":[{"role":"user","content":"SUMMARY of q1 and q2"},{"role":"assistant","content":"ANS9"},{"role":"user","content":"continue"},{"role":"assistant","content":"ANS10"},{"role":"user","content":"next"}]}`, "next")
+	if onSummary["resume"] == "" || strings.Contains(onSummary["seed.jsonl"], `"uuid":"a-1"`) {
+		t.Fatalf("the summary's next turn did not resume its own session: %q", onSummary["seed.jsonl"])
+	}
+}
+
+// A checkpoint is resumed only at the request's last assistant reply, where
+// what follows is a fresh turn: a deeper reply the client has since branched
+// away from is not its continuation, a different model is not resumed, and
+// a suffix answering a tool call is not a fresh turn.
+func TestClaudeTUIRuntimeNativeCheckpointMatchRules(t *testing.T) {
+	dir := t.TempDir()
+	old := tuiRuntimeSettings
+	t.Cleanup(func() { tuiRuntimeSettings = old })
+	initTUIRuntime(&tuiRuntimeConfig{StateDir: dir})
+	scope := "scope"
+	// the conversation as it was when the checkpoint was written
+	full := []Message{
+		{Role: "user", Parts: []Part{{Kind: Text, Text: "u1"}}},
+		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "a1"}}},
+		{Role: "user", Parts: []Part{{Kind: Text, Text: "u2"}}},
+		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "a2"}}},
+		{Role: "user", Parts: []Part{{Kind: Text, Text: "u3"}}},
+	}
+	digests := tuiRuntimePrefixDigests(scope, full)
+	save := func(at int, model string) {
+		t.Helper()
+		if err := tuiRuntimeSaveNativeCheckpoint(tuiRuntimeNativeCheckpoint{
+			Prefix: tuiRuntimeNativeCheckpointKey(scope, digests[at])[len(scope)+1:], Scope: scope,
+			SessionID: "sid", Row: "r", Work: "w", Model: model, InstructionKey: "i",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := func(msgs []Message) *tuiRuntimeRequest {
+		r := &tuiRuntimeRequest{}
+		r.scope = scope
+		r.Messages = msgs
+		return r
+	}
+	// checkpoints at a1 and a2
+	save(1, "claude-opus-5-5")
+	save(3, "claude-opus-5-5")
+	// the client branched after a1: its history is u1,a1,u3 (no a2). The
+	// last assistant is a1, whose suffix u3 is a fresh turn: resumed there,
+	// not rebuilt, even though a deeper a2 checkpoint exists.
+	branch := []Message{full[0], full[1], {Role: "user", Parts: []Part{{Kind: Text, Text: "u3"}}}}
+	point, since, ok := tuiRuntimeFindNativeCheckpoint(req(branch), "claude-opus-5-5")
+	if !ok || len(since) != 1 || since[0].Parts[0].Text != "u3" {
+		t.Fatalf("the branch after a1 was not resumed at a1: ok=%v since=%v", ok, since)
+	}
+	_ = point
+	// the same prefix but a different model is not resumed
+	if _, _, ok := tuiRuntimeFindNativeCheckpoint(req(branch), "claude-haiku-5-5"); ok {
+		t.Fatal("resumed a checkpoint of another model")
+	}
+	// a suffix answering a tool call is not a fresh turn
+	withResult := []Message{full[0], full[1], {Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "c1", Text: "out"}}}}
+	if _, _, ok := tuiRuntimeFindNativeCheckpoint(req(withResult), "claude-opus-5-5"); ok {
+		t.Fatal("resumed into a suffix that answers a tool call")
+	}
+	// a history whose last assistant has no checkpoint is not resumed from a
+	// shallower one either: u1,a1,u2,a2,u3 ends at a2, and a2's suffix u3 is
+	// a fresh turn, but a history edited so a2 changed matches no checkpoint
+	edited := []Message{full[0], full[1], full[2], {Role: "assistant", Parts: []Part{{Kind: Text, Text: "a2-edited"}}}, full[4]}
+	if _, _, ok := tuiRuntimeFindNativeCheckpoint(req(edited), "claude-opus-5-5"); ok {
+		t.Fatal("resumed a checkpoint whose reply the client rewrote")
+	}
+}
+
+// A /btw side question while the main task has gone past the reply it asks
+// about forks the native session at that reply, in a copy — the main task's
+// own transcript is not truncated or stopped. Both go on side by side, with
+// no session header.
+func TestClaudeTUIRuntimeNativeCheckpointSideQuestionForks(t *testing.T) {
+	runs := tuiRuntimeCpWrapper(t)
+	rt, _ := tuiRuntimeScRuntime(t)
+	serve := func(body, last string) map[string]string {
+		t.Helper()
+		if code, out := tuiRuntimeScServe(t, rt, "", body); code != 200 || !strings.Contains(out, "ANS") {
+			t.Fatalf("%s: %d %s", last, code, out)
+		}
+		tuiRuntimeScWaitReaped(t, rt)
+		for _, run := range runs() {
+			if strings.Contains(run["stdin"], last) {
+				return run
+			}
+		}
+		t.Fatalf("no run for %s", last)
+		return nil
+	}
+	// the main line: q1 -> ANS1, then q1,ANS1,q2 -> ANS2 (the session goes on)
+	serve(tuiRuntimeCpBody("q1"), "q1")
+	main := serve(tuiRuntimeCpBody("q1", "ANS1", "q2"), "q2")
+	mainSession := main["resume"]
+	// a /btw side question from the first reply: q1,ANS1,q3. The session has
+	// gone on to ANS2 since, so it is forked at ANS1, in a copy — a different
+	// session from the main line, still holding a-1 and not a-2.
+	side := serve(tuiRuntimeCpBody("q1", "ANS1", "q3"), "q3")
+	if side["resume"] == "" || side["resume"] == mainSession {
+		t.Fatalf("the side question did not fork into its own session: main=%q side=%q", mainSession, side["resume"])
+	}
+	if !strings.Contains(side["seed.jsonl"], `"uuid":"a-1"`) || strings.Contains(side["seed.jsonl"], `"uuid":"a-2"`) {
+		t.Fatalf("the fork is not the session up to the first reply:\n%s", side["seed.jsonl"])
+	}
+	// the main line goes on in its own session, unchanged
+	again := serve(tuiRuntimeCpBody("q1", "ANS1", "q2", "ANS2", "q4"), "q4")
+	if again["resume"] != mainSession {
+		t.Fatalf("the main line left its session after the fork: %q want %q", again["resume"], mainSession)
+	}
+	// and the side line goes on in its fork
+	sideAgain := serve(tuiRuntimeCpBody("q1", "ANS1", "q3", "ANS3", "q5"), "q5")
+	if sideAgain["resume"] != side["resume"] {
+		t.Fatalf("the side line left its fork: %q want %q", sideAgain["resume"], side["resume"])
+	}
+}
+
 // A native-checkpoint store that doesn't read is unknown, not empty:
 // nothing resumes from it, and saving never writes over it.
 func TestClaudeTUIRuntimeNativeCheckpointCorruptStore(t *testing.T) {
