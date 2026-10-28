@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -687,40 +686,138 @@ func TestClaudeTUIRuntimeLiteParkedBranchNeedsExactlyItsCalls(t *testing.T) {
 func TestClaudeTUIRuntimeLiteStatelessRunsShareAFixedCwdAndLeaveNoSession(t *testing.T) {
 	_, runs := tuiRuntimeScWrapper(t)
 	rt, _ := tuiRuntimeScRuntime(t)
-	body := `{"model":"claude-opus-5-5","max_tokens":64,"messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b"},{"role":"user","content":"c"}]}`
+	// A one-off ask (a title, a topic, a classifier): one user message, no
+	// history, no tools. Its cwd comes from the conversation's stable root
+	// (its scope plus its first message's digest), so the cwd — part of the
+	// cached system prompt — is the same on every turn of a conversation,
+	// including a first turn that is a single message. The folder is kept,
+	// as a conversation with a history keeps its own for the next turn's
+	// native-checkpoint resume.
+	body := `{"model":"claude-opus-5-5","max_tokens":64,"messages":[{"role":"user","content":"a"}]}`
+	var cwd string
 	for i := 0; i < 2; i++ {
 		if code, out := tuiRuntimeScServe(t, rt, "", body); code != 200 || !strings.Contains(out, "SC_ANSWER") {
-			t.Fatalf("stateless %d: %d %s", i, code, out)
+			t.Fatalf("one-off %d: %d %s", i, code, out)
 		}
-		// the folder is given back once the run's process is reaped
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			tuiRuntimeLiteStateless.Lock()
-			busy := slices.Contains(tuiRuntimeLiteStateless.busy, true)
-			tuiRuntimeLiteStateless.Unlock()
-			if !busy {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("the stateless run's folder was not given back")
-			}
-			time.Sleep(20 * time.Millisecond)
+		tuiRuntimeScWaitReaped(t, rt)
+		got := runs()
+		if len(got) != i+1 {
+			t.Fatalf("runs: %v", got)
+		}
+		if got[i]["cwd"] != cwd && cwd != "" {
+			t.Fatalf("the same conversation changed cwd: %v then %v", cwd, got[i]["cwd"])
+		}
+		cwd = got[i]["cwd"]
+		if !strings.Contains(cwd, "magpie-claude-interactive-") {
+			t.Fatalf("a one-off did not use the conversation's own cwd: %v", cwd)
 		}
 	}
+	// a different first message is a different conversation, another cwd
+	other := `{"model":"claude-opus-5-5","max_tokens":64,"messages":[{"role":"user","content":"b"}]}`
+	if code, out := tuiRuntimeScServe(t, rt, "", other); code != 200 {
+		t.Fatalf("other: %d %s", code, out)
+	}
+	tuiRuntimeScWaitReaped(t, rt)
 	got := runs()
-	if len(got) != 2 || got[0]["cwd"] != got[1]["cwd"] || !strings.Contains(got[0]["cwd"], "magpie-claude-stateless-") {
-		t.Fatalf("stateless runs did not share a fixed cwd: %v / %v", got[0]["cwd"], got[1]["cwd"])
+	if got[len(got)-1]["cwd"] == cwd {
+		t.Fatalf("a different first message shared the cwd: %v", cwd)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+}
+
+// A no-header conversation with a history gets a cwd of its own, kept
+// across turns, so its next turn resumes the native session at the
+// strict-prefix checkpoint instead of rebuilding the whole history.
+// tuiRuntimeCpWrapper writes real transcripts, so the resumed seed can be
+// told apart from a rebuilt one by the first reply's row uuid.
+func TestClaudeTUIRuntimeNativeCheckpointResume(t *testing.T) {
+	runs := tuiRuntimeCpWrapper(t)
+	rt, _ := tuiRuntimeScRuntime(t)
+	// no session header (outer ""): the strict prefix alone finds the session
+	first := `{"model":"claude-opus-5-5","max_tokens":64,"system":"rules","messages":[{"role":"user","content":"q1"}]}`
+	if code, out := tuiRuntimeScServe(t, rt, "", first); code != 200 || !strings.Contains(out, "ANS") {
+		t.Fatalf("first turn: %d %s", code, out)
+	}
+	tuiRuntimeScWaitReaped(t, rt)
+	// the next request carries the history and the reply, then a new turn
+	next := `{"model":"claude-opus-5-5","max_tokens":64,"system":"rules","messages":[{"role":"user","content":"q1"},{"role":"assistant","content":"ANS1"},{"role":"user","content":"q2"}]}`
+	if code, out := tuiRuntimeScServe(t, rt, "", next); code != 200 || !strings.Contains(out, "ANS") {
+		t.Fatalf("next turn: %d %s", code, out)
+	}
+	tuiRuntimeScWaitReaped(t, rt)
+	got := runs()
+	if len(got) != 2 {
+		t.Fatalf("runs: %v", got)
+	}
+	if !strings.Contains(got[0]["cwd"], "magpie-claude-interactive-") || got[0]["cwd"] != got[1]["cwd"] {
+		t.Fatalf("the conversation did not keep one cwd: %v / %v", got[0]["cwd"], got[1]["cwd"])
+	}
+	// resumed from the checkpoint: the seed is the first turn's own
+	// transcript, holding its reply's row uuid a-1; a session rebuilt from
+	// this request would have new row uuids instead
+	if got[1]["resume"] == "" || !strings.Contains(got[1]["seed.jsonl"], `"uuid":"a-1"`) {
+		t.Fatalf("the next turn was not resumed from the first's transcript: resume=%q seed=%q", got[1]["resume"], got[1]["seed.jsonl"])
+	}
+	// a changed history does not resume that transcript: the reply differs,
+	// so the prefix differs and the session is rebuilt from this request's
+	// own history — its seed has no a-1 row
+	edited := `{"model":"claude-opus-5-5","max_tokens":64,"system":"rules","messages":[{"role":"user","content":"q1"},{"role":"assistant","content":"DIFFERENT"},{"role":"user","content":"q2"}]}`
+	if code, out := tuiRuntimeScServe(t, rt, "", edited); code != 200 {
+		t.Fatalf("edited turn: %d %s", code, out)
+	}
+	tuiRuntimeScWaitReaped(t, rt)
+	got = runs()
+	if len(got) != 3 || strings.Contains(got[2]["seed.jsonl"], `"uuid":"a-1"`) {
+		t.Fatalf("an edited history resumed a transcript it does not extend: %+v", got[2:])
+	}
+}
+
+// A native-checkpoint store that doesn't read is unknown, not empty:
+// nothing resumes from it, and saving never writes over it.
+func TestClaudeTUIRuntimeNativeCheckpointCorruptStore(t *testing.T) {
+	dir := t.TempDir()
+	old := tuiRuntimeSettings
+	t.Cleanup(func() { tuiRuntimeSettings = old })
+	initTUIRuntime(&tuiRuntimeConfig{StateDir: dir})
+	if err := os.WriteFile(tuiRuntimeNativeCheckpointPath(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tuiRuntimeLoadNativeCheckpoints(); err == nil {
+		t.Fatal("a corrupt store was read as valid")
+	}
+	req := &tuiRuntimeRequest{}
+	req.scope = "scope"
+	req.Messages = []Message{
+		{Role: "user", Parts: []Part{{Kind: Text, Text: "a"}}},
+		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "b"}}},
+		{Role: "user", Parts: []Part{{Kind: Text, Text: "c"}}},
+	}
+	if _, _, ok := tuiRuntimeFindNativeCheckpoint(req, "m"); ok {
+		t.Fatal("resumed from a corrupt store")
+	}
+	if err := tuiRuntimeSaveNativeCheckpoint(tuiRuntimeNativeCheckpoint{Prefix: "p", Scope: "s", SessionID: "sid", Row: "r", Work: "w", InstructionKey: "i"}); err == nil {
+		t.Fatal("saved over a corrupt store")
+	}
+	data, _ := os.ReadFile(tuiRuntimeNativeCheckpointPath())
+	if string(data) != "{not json" {
+		t.Fatalf("corrupt store was overwritten: %q", data)
+	}
+}
+
+// scWaitReaped waits for every run's process to be reaped.
+func tuiRuntimeScWaitReaped(t *testing.T, rt *tuiRuntime) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
 	for {
-		left, _ := filepath.Glob(filepath.Join(tuiRuntimeClaudeSessions("", got[0]["cwd"])[0], "*.jsonl"))
-		if len(left) == 0 {
-			break
+		rt.bridge.mu.Lock()
+		n := len(rt.bridge.runs)
+		rt.bridge.mu.Unlock()
+		if n == 0 {
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("stateless sessions left: %v", left)
+			t.Fatalf("%d runs not reaped", n)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

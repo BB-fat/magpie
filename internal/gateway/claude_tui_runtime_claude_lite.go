@@ -532,6 +532,13 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 		}
 		return run, events, err
 	}
+	// A native checkpoint keyed by the strict content prefix, not a session
+	// header: the deepest reply the request's history extends, resumed in
+	// place or forked there. With or without a session header, this keeps
+	// the prefix Anthropic cached for that reply instead of rebuilding.
+	if run, events, err, ok := b.startLiteAtNativeCheckpoint(ctx, req, model, owner, outerSession, configDir); ok {
+		return run, events, err
+	}
 	if outerSession != "" {
 		if id, prompt, images, work, ok := b.liteParkedBranch(owner, outerSession, model, configDir, req); ok {
 			log.Printf("Claude interactive resuming the conversation's own session with its tool results")
@@ -584,6 +591,56 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 		b.anchorOuterThread(owner, outerSession, req)
 	}
 	return b.startInteractiveRebuild(ctx, req, model, owner, outerSession, configDir)
+}
+
+// startLiteAtNativeCheckpoint goes on from the deepest native checkpoint the
+// request's history extends, in the request's isolation scope: resumed in
+// its session when no run writes it and nothing was said after the
+// checkpoint's row, else forked there. It needs no session header. Changed
+// instructions rebuild. It reports false, starting nothing, when there is no
+// such checkpoint or its session can't be read.
+func (b *tuiRuntimeSubscriptionBridge) startLiteAtNativeCheckpoint(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, error, bool) {
+	point, since, ok := tuiRuntimeFindNativeCheckpoint(req, model)
+	if !ok {
+		return nil, nil, nil, false
+	}
+	if point.InstructionKey != tuiRuntimeInstructionKey(req) {
+		log.Printf("Claude interactive rebuilding native session: external instructions changed")
+		run, events, err := b.startInteractiveRebuild(ctx, req, model, owner, outerSession, configDir)
+		return run, events, err, true
+	}
+	work, err := tuiRuntimeInteractiveWorkDirForKey(point.Work)
+	if err != nil {
+		return nil, nil, err, true
+	}
+	prompt, images, err := tuiRuntimeRenderInteractiveTurnPromptWithImages(since)
+	if err != nil {
+		return nil, nil, err, true
+	}
+	copied := *req
+	copied.workKey = point.Work
+	if len(req.Tools) == 0 && len(images) == 0 && point.ToolsHash != "" {
+		copied.heldTools = tuiRuntimeLoadInteractiveTools(point.ToolsHash)
+	}
+	prompt = tuiRuntimeRenderInteractiveTurnConstraint(&copied) + prompt
+	if release, ok := b.claimSession(point.SessionID); ok {
+		defer release()
+		if tuiRuntimeTranscriptEndsAt(configDir, work, point.SessionID, point.Row) {
+			log.Printf("Claude interactive resuming the native session at the strict-prefix checkpoint")
+			copied.pointResume = true
+			run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, point.SessionID, images, false)
+			return run, events, err, true
+		}
+	}
+	id, err := tuiRuntimeForkTranscript(configDir, work, point.SessionID, point.Row)
+	if err != nil {
+		log.Printf("Claude interactive could not fork the native session at the strict-prefix checkpoint: %v", err)
+		return nil, nil, nil, false
+	}
+	log.Printf("Claude interactive forking the native session at the strict-prefix checkpoint")
+	copied.resumedCopy = true
+	run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
+	return run, events, err, true
 }
 
 // startLiteAtPoint goes on from point with since, the messages after it:
