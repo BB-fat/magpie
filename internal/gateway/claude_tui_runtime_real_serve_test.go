@@ -25,6 +25,7 @@ func TestClaudeTUIRuntimeRealServe(t *testing.T) {
 	t.Run("next turn", tuiRuntimeRealServeNextTurn)
 	t.Run("tool round", tuiRuntimeRealServeToolRound)
 	t.Run("after the TTL", tuiRuntimeRealServeAfterTTL)
+	t.Run("no header after the TTL", tuiRuntimeRealServeNoHeaderAfterTTL)
 	t.Run("cancelled", tuiRuntimeRealServeCancelled)
 }
 
@@ -223,6 +224,42 @@ func tuiRuntimeRealServeAfterTTL(t *testing.T) {
 	cur := tuiRuntimeRealMain(t, up.all()[len(before):], "and again")
 	if tuiRuntimeRealSession(t, old) != tuiRuntimeRealSession(t, cur) {
 		t.Fatal("the turn after the TTL was rebuilt in a new native session, not resumed")
+	}
+	b.Shutdown()
+	tuiRuntimeWaitGone(t, b, profile)
+}
+
+// A conversation with no session header (outer ""): once the TTL ends its
+// process, the next turn still resumes its native session from the
+// strict-prefix checkpoint — the same upstream session id and message
+// prefix, not a rebuild of the whole history. This is the au-exit case:
+// consecutive requests without a session header were each rebuilt.
+func tuiRuntimeRealServeNoHeaderAfterTTL(t *testing.T) {
+	up, profile, b := tuiRuntimeRealServeSetup(t, 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	first := `{"model":"` + tuiRuntimeRealModel + `","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"say hello"}]}`
+	if out, code, msg := tuiRuntimeRealServe(t, b, ctx, profile, "", first); code != 200 || out.text() != "PONG" {
+		t.Fatalf("first turn: %d %s %q", code, msg, out.text())
+	}
+	tuiRuntimeWaitGone(t, b, profile) // the TTL ends the process
+	before := up.all()
+	next := `{"model":"` + tuiRuntimeRealModel + `","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"say hello"},{"role":"assistant","content":"PONG"},{"role":"user","content":"and again"}]}`
+	if out, code, msg := tuiRuntimeRealServe(t, b, ctx, profile, "", next); code != 200 || out.text() != "PONG" {
+		t.Fatalf("after the TTL: %d %s %q", code, msg, out.text())
+	}
+	old := tuiRuntimeRealMain(t, before, "say hello")
+	cur := tuiRuntimeRealMain(t, up.all()[len(before):], "and again")
+	if tuiRuntimeRealSession(t, old) != tuiRuntimeRealSession(t, cur) {
+		t.Fatal("a no-header conversation was rebuilt in a new native session after the TTL, not resumed from its checkpoint")
+	}
+	// the resumed request goes on from the first's messages
+	var o, c struct{ Messages []any }
+	_ = json.Unmarshal(old, &o)
+	_ = json.Unmarshal(cur, &c)
+	was, now := tuiRuntimeRealUnmarked(o.Messages), tuiRuntimeRealUnmarked(c.Messages)
+	if len(now) <= len(was) || !reflect.DeepEqual(was, now[:len(was)]) {
+		t.Fatalf("the no-header turn after the TTL did not go on from the first's prefix:\nbefore=%v\nafter=%v", was, now)
 	}
 	b.Shutdown()
 	tuiRuntimeWaitGone(t, b, profile)

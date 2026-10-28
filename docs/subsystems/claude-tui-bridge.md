@@ -318,6 +318,45 @@ before: a cut point, the checkpoint or a rebuild. On au-exit (10-28) a
 steer rebuilt a 44k conversation, writing 22k of it to the cache again; on
 a 280k one a rebuild writes nearly all of it.
 
+### Native checkpoints (strict prefix, no session header)
+
+A native checkpoint (`claude_tui_runtime_native_checkpoint.go`) is where a
+native transcript holds a complete reply, keyed by the **strict content
+prefix** the client sent up to and including that reply, within an
+isolation scope (`tuiRuntimePrefixScope(owner, caller key)`) — never by an
+external session header. `ended` records one (`saveNativeCheckpoint`) for
+every complete reply of a scoped conversation, with or without a session
+header: the strict prefix of the request's messages plus the reply exactly
+as the client was told it (`tuiRuntimeReplyRecorder`), the native session,
+the uuid of the reply's last transcript row, the session's cwd, the model,
+the instruction key and the tool-definitions hash. They live in
+`<config>/claude-tui/claude-native-checkpoints.json` (30 days, 256 per
+scope, 4096 in all, oldest first); a store that doesn't read is not resumed
+from and not written over.
+
+A conversation with no session header has a stable cwd of its own from its
+first turn on (`tuiRuntimeNativeRootKey`: the scope plus the digest of its
+first message), instead of borrowing a shared stateless slot whose
+transcript is wiped. Because the cwd is part of the cached system prompt,
+deriving it from the conversation's root — not from anything that changes
+as the conversation grows — keeps it identical on every turn, so the
+cached prefix holds. A compacted or edited history has a new first message
+and so a new root, as intended.
+
+A request goes on from the deepest checkpoint its history extends
+(`startLiteAtNativeCheckpoint`, tried after the idle process and before any
+rebuild): for each prefix ending at an assistant reply, deepest first, the
+checkpoint under that exact prefix in the request's scope. The suffix after
+it must be new user input only. It resumes that session in place when no
+run writes it and the transcript still ends at the checkpoint's row, else
+forks it there. Changed instructions rebuild. Only then is Anthropic sent
+the prefix it has cached; a request whose history matches no checkpoint is
+rebuilt from the request. This is what lets consecutive requests without a
+session header resume rather than rebuild (the au-exit case). Tests:
+`TestClaudeTUIRuntimeNativeCheckpointResume` (a cp-wrapper transcript, told
+apart from a rebuild by the first reply's row uuid) and the real
+`TestClaudeTUIRuntimeRealServe/no_header_after_the_TTL`.
+
 ### Cut points
 
 A cut point (`claude_tui_runtime_claude_interactive_points.go`) is where a

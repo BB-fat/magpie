@@ -1099,6 +1099,12 @@ func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop str
 				r.bridge.noteLiteCompletedToolTurn(r.owner, outerSession, req, said)
 			}
 		}
+		// Record the strict-prefix boundary, with or without a session
+		// header: the next request whose history extends this exact prefix
+		// resumes this native session (resumed in place or forked), even
+		// after this process is gone. Only a complete reply is a boundary.
+		// Done before afterServeTurn, which consumes the kept reply.
+		r.saveNativeCheckpoint(req)
 		if r.serve {
 			// its session ends at this reply, where it is kept for the
 			// conversation's next turn, or its process ended

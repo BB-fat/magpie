@@ -1378,6 +1378,20 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	if workKey == "" && outerSession != "" {
 		workKey = tuiRuntimeInteractiveSessionStateKey(owner, outerSession)
 	}
+	if workKey == "" && req.scope != "" {
+		// A conversation with no session header still has a stable identity:
+		// its isolation scope plus the digest of its first message, which
+		// does not change as the conversation grows. The session gets a cwd
+		// of its own (kept across turns, so a later turn resumes it) instead
+		// of borrowing a shared stateless slot whose transcript is wiped.
+		// This holds from the first turn on, so the cwd — part of the cached
+		// system prompt — is the same on every turn. A compacted/edited
+		// history has a new first message and so a new root, as intended. A
+		// resumed session's own workKey (req.workKey, from its checkpoint)
+		// takes precedence above. A one-off ask's folder is removed when its
+		// turn ends (ended), so it leaves nothing behind.
+		workKey = tuiRuntimeNativeRootKey(req)
+	}
 	if req.toolRepair != nil {
 		work, release = req.toolRepair.work, req.toolRepair.discard
 	} else if workKey != "" {
@@ -1394,9 +1408,10 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		clean()
 		return nil, nil, err
 	}
-	if outerSession == "" && req.toolRepair == nil {
+	if outerSession == "" && req.scope == "" && req.toolRepair == nil {
 		// The folder is this run's alone, and nothing resumes a stateless
 		// session: what the last run's Claude Code wrote as it exited goes.
+		// A scoped run keeps its cwd and transcript for its next turn.
 		for _, dir := range tuiRuntimeClaudeSessions(configDir, work) {
 			entries, _ := os.ReadDir(dir)
 			for _, e := range entries {
@@ -1657,10 +1672,12 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	leaseTransferred = true // run.finish/removeRun now owns its release
 	if outerSession == "" || req.toolRepair != nil {
 		// Nothing resumes a stateless run's session: removeRun deletes it and
-		// gives the folder back.
+		// gives the folder back. A scoped run keeps its session's transcript
+		// on disk for the next turn's native-checkpoint resume (a one-off's
+		// folder is removed in ended); only the slot bookkeeping is released.
 		dirs, seed := tuiRuntimeClaudeSessions(configDir, work), resumeID
 		run.releaseWork = func(sid string) {
-			if outerSession == "" {
+			if outerSession == "" && req.scope == "" {
 				tuiRuntimeRemoveSession(dirs, seed)
 				tuiRuntimeRemoveSession(dirs, sid)
 			}
