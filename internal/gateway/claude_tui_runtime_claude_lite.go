@@ -84,6 +84,18 @@ func tuiRuntimeAutoModeClassifier(req *tuiRuntimeRequest) bool {
 	return len(first) > 0 && first[0].Kind == Text && strings.HasPrefix(first[0].Text, "<transcript>\n")
 }
 
+// tuiRuntimeLiteOuterSession gives each identified Claude subagent its own
+// checkpoint namespace. Without a conversation ID there is no stable parent.
+// Length-prefixed fields avoid ambiguous concatenations; the hash bounds the key.
+func tuiRuntimeLiteOuterSession(outer string, header http.Header) string {
+	agent, _ := subagentOf(header)
+	if outer == "" || agent == "" {
+		return outer
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s%d:%s", len(outer), outer, len(agent), agent)))
+	return "claude-subagent-" + hex.EncodeToString(sum[:])
+}
+
 // configDir is the Claude config folder the account runs in ("" for
 // Claude Code's own, as the plugin's runtime ran).
 func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model, owner, outerSession, configDir string, body []byte) (int, string) {
@@ -93,11 +105,7 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	}
 	req.Model = model
 	req.leanPrompt = tuiRuntimeLeanPrompt()
-	// A subagent may share its parent's session header, but must not
-	// replace the parent's checkpoint when its history differs.
-	if subOf(r.Header) != "" {
-		outerSession = ""
-	}
+	outerSession = tuiRuntimeLiteOuterSession(outerSession, r.Header)
 	// Auto mode's own classifier: refused before any native run starts.
 	if tuiRuntimeAutoModeClassifier(req) {
 		log.Printf("Claude interactive refused auto mode's local classifier request: a TUI account can't review auto mode's actions")

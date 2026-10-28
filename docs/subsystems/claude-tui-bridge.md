@@ -442,9 +442,13 @@ new checkpoint; subsequent turns can resume it, including after a gateway
 restart. No agent-specific summary recognition or branch store is needed.
 Forks sharing a session ID go on from their own cut points (above), side
 by side. Explicit
-`x-claude-code-agent-id` subagents run stateless without changing the parent
-checkpoint; Desktop compaction/suggestion and one-message other-model
-helper routing remain separate. An unmarked helper sharing the parent's
+`x-claude-code-agent-id` subagents use an independent outer session keyed
+by a SHA-256 hash of the length-prefixed conversation ID and agent ID
+(`tuiRuntimeLiteOuterSession`). The same pair can resume its own checkpoint;
+different agents or conversations keep separate checkpoints without changing
+the parent checkpoint. The optional parent-agent header does not change this
+identity. Without a conversation ID, subagents still run stateless. Desktop
+compaction/suggestion and one-message other-model helper routing remain separate. An unmarked helper sharing the parent's
 session ID cannot be distinguished from an edited history by its text.
 
 The cwd remains stable across resumes and stateless slot reuse, auto memory
