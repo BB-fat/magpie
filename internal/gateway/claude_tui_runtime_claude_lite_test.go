@@ -379,10 +379,9 @@ func TestClaudeTUIRuntimeLitePairedToolTraffic(t *testing.T) {
 	}
 }
 
-// An explicitly identified subagent sharing the conversation id runs
-// stateless without replacing its parent's checkpoint.
-func TestClaudeTUIRuntimeLiteSubagentOnTheConversationIdRunsStateless(t *testing.T) {
-	_, runs := tuiRuntimeScWrapper(t)
+// An identified subagent checkpoints and resumes independently of its parent.
+func TestClaudeTUIRuntimeLiteSubagentOnTheConversationIdResumesIndependently(t *testing.T) {
+	logs, runs := tuiRuntimeScWrapper(t)
 	rt, b := tuiRuntimeScRuntime(t)
 	tuiRuntimeScSaveClean(t, b, "inner-saved", false)
 	b.anchorOuterThread(tuiRuntimeScOwner, tuiRuntimeScOuter, &tuiRuntimeRequest{Request: Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "先读一下配置"}}}}}})
@@ -397,7 +396,35 @@ func TestClaudeTUIRuntimeLiteSubagentOnTheConversationIdRunsStateless(t *testing
 	if code != 200 || !strings.Contains(out, "SC_ANSWER") {
 		t.Fatalf("helper: %d %s", code, out)
 	}
-	tuiRuntimeOnlyRun(t, runs())
+	first := tuiRuntimeOnlyRun(t, runs())
+	outer := tuiRuntimeLiteOuterSession(tuiRuntimeScOuter, req.Header)
+	saved, ok, err := b.loadInteractiveSession(tuiRuntimeScOwner, outer)
+	if err != nil || !ok || saved.Dirty || saved.SessionID != first["resume"] {
+		t.Fatalf("subagent has no clean checkpoint: %+v ok=%t err=%v", saved, ok, err)
+	}
+	// A new bridge proves the next turn uses persisted session state.
+	rt, b = tuiRuntimeScRuntime(t)
+	next := strings.TrimSuffix(body, "]}") + `,{"role":"assistant","content":"SC_ANSWER"},{"role":"user","content":"List the tests too"}]}`
+	entries, err := os.ReadDir(logs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(logs, entry.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req = httptest.NewRequest("POST", "/v1/messages", strings.NewReader(next))
+	req.Header.Set("x-claude-code-agent-id", "explorer")
+	rec = httptest.NewRecorder()
+	code, _ = rt.serveMessages(rec, req, "claude-opus-5-5", tuiRuntimeScOuter, []byte(next), &Usage{})
+	if code != 200 {
+		t.Fatalf("subagent continuation: %d %s", code, rec.Body.String())
+	}
+	second := tuiRuntimeOnlyRun(t, runs())
+	if second["resume"] != saved.SessionID || strings.Contains(second["stdin"], "Explore the repository") || !strings.Contains(second["stdin"], "List the tests too") {
+		t.Fatalf("subagent did not resume with suffix only: %v", second)
+	}
 	after, _, _ := b.loadInteractiveSession(tuiRuntimeScOwner, tuiRuntimeScOuter)
 	if after != before {
 		t.Fatalf("a helper thread changed the conversation checkpoint: %+v -> %+v", before, after)
@@ -712,5 +739,35 @@ func TestClaudeTUIRuntimeLiteSignedRequestSizeLimit(t *testing.T) {
 	code, out := post(32<<20 + 1)
 	if code != http.StatusRequestEntityTooLarge || !strings.Contains(out, `"request_too_large"`) {
 		t.Fatalf("an oversized request answered %d %.200s", code, out)
+	}
+}
+
+func TestClaudeTUIRuntimeLiteSubagentSessionIdentity(t *testing.T) {
+	header := http.Header{}
+	key := func(outer, agent, parent string) string {
+		header.Set("x-claude-code-agent-id", agent)
+		header.Set("x-claude-code-parent-agent-id", parent)
+		return tuiRuntimeLiteOuterSession(outer, header)
+	}
+	first := key("conversation", "explorer", "")
+	if first == "" || first == "conversation" {
+		t.Fatal("subagent shares parent identity")
+	}
+	if key("conversation", "explorer", "parent-agent") != first {
+		t.Fatal("optional parent header changed identity")
+	}
+	for _, other := range []string{key("conversation", "reviewer", ""), key("other-conversation", "explorer", ""), key("ab", "c", ""), key("a", "bc", "")} {
+		if other == first {
+			t.Fatal("different subagents share identity")
+		}
+	}
+	if key("ab", "c", "") == key("a", "bc", "") {
+		t.Fatal("ambiguous field boundaries")
+	}
+	if key("", "explorer", "") != "" {
+		t.Fatal("missing conversation became stateful")
+	}
+	if key("conversation", "", "") != "conversation" {
+		t.Fatal("lead identity changed")
 	}
 }
