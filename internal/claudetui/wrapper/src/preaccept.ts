@@ -77,6 +77,21 @@ export function canBypassPermissions(env: NodeJS.ProcessEnv, uid: number | undef
 }
 
 /**
+ * A Claude Code kept for its next turn waits at its input box, and its
+ * session's last row is where that turn goes on. Claude Code 2.1.308 can
+ * act on its own there: write a suggested prompt into the input box
+ * (promptSuggestionEnabled), recap the session after five minutes away
+ * (awaySummaryEnabled) and compact it while idle (idleCompaction). Each
+ * would type into the box a prompt is pasted in, or move the session's
+ * last row, so all three are off.
+ */
+export const IDLE_QUIET_SETTINGS = {
+  promptSuggestionEnabled: false,
+  awaySummaryEnabled: false,
+  idleCompaction: false,
+} as const;
+
+/**
  * Per-workdir settings.json with the policy bits that skip remaining prompts.
  * Claude reads .claude/settings.local.json out of the cwd at startup.
  */
@@ -100,5 +115,6 @@ export function writeWorkdirSettings(
       delete settings.skipDangerousModePermissionPrompt;
     }
   }
+  Object.assign(settings, IDLE_QUIET_SETTINGS);
   writePrivateAtomic(file, JSON.stringify(settings, null, 2) + "\n");
 }

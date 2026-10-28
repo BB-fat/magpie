@@ -344,6 +344,11 @@ func letGoForRoom(most int) bool {
 		idle.abortFor(why)
 		return true
 	}
+	// a Claude TUI process idle for its conversation's next turn, before
+	// any run that is working or waiting on its caller's tools
+	if tuiRuntimeLetGoIdleForRoom(most) {
+		return true
+	}
 	if parked != nil {
 		log.Printf("claude: a run on %s waiting on tool results since %s is let go to make room (%d may run at once)", parked.model, parkedAt.Format(time.TimeOnly), most)
 		parked.abortFor(why)

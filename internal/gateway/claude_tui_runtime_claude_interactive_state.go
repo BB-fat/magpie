@@ -512,6 +512,14 @@ func (b *tuiRuntimeSubscriptionBridge) interactiveTerminalDelivered(ownerRun *tu
 // old child was reaped; observing the same run still there proves it has
 // not been reaped yet and the wait must keep failing closed.
 func (b *tuiRuntimeSubscriptionBridge) waitInteractiveTerminalOwner(ctx context.Context, owner, outerSession string, ownerRun *tuiRuntimeSubscriptionRun) error {
+	// One kept idle for the conversation's next turn would not end by
+	// itself within the wait: it is let go, as its TTL would.
+	ownerRun.mu.Lock()
+	idle, gen := ownerRun.hotIdle, ownerRun.hotGen
+	ownerRun.mu.Unlock()
+	if idle {
+		ownerRun.letGoIdle(gen, "another start of its conversation needs its slot")
+	}
 	key := tuiRuntimeInteractiveSessionStateKey(owner, outerSession)
 	deadline := time.Now().Add(tuiRuntimeInteractiveTerminalCleanupWait)
 	for {

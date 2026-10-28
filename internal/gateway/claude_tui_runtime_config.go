@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config is what the gateway hands the bridge.
@@ -82,6 +83,14 @@ type tuiRuntimeConfig struct {
 	// LeanPrompt says whether a run starts with the caller's instructions
 	// as its system prompt, in place of Claude Code's (ClaudeLeanPrompt).
 	LeanPrompt func() bool
+
+	// IdleTTL is how long a process with a complete reply waits for its
+	// conversation's next turn (claudeTuiIdleSeconds); 0 keeps none.
+	// Unset waits tuiRuntimeDefaultIdleTTL.
+	IdleTTL func() time.Duration
+	// Nudge tells the room's waiters a process came to wait idle, which
+	// they may end for room (claudeRoom.nudge).
+	Nudge func()
 }
 
 var tuiRuntimeSettings *tuiRuntimeConfig
@@ -163,6 +172,12 @@ func initTUIRuntime(cfg *tuiRuntimeConfig) {
 	}
 	if cfg.LeanPrompt != nil {
 		c.LeanPrompt = cfg.LeanPrompt
+	}
+	if cfg.IdleTTL != nil {
+		c.IdleTTL = cfg.IdleTTL
+	}
+	if cfg.Nudge != nil {
+		c.Nudge = cfg.Nudge
 	}
 	tuiRuntimeSettings = &c
 }

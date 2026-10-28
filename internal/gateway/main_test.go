@@ -29,6 +29,10 @@ func TestMain(m *testing.M) {
 	serveMiddleware()
 	searchOn = gwtool.Serve(gwtool.WebSearch)
 	limitsOn = gwbudget.Limit(budget.Limiter{})
+	// The Claude TUI tests' wrapper doubles answer one turn and exit, as the
+	// wrapper does with claudeTuiIdleSeconds 0; those keeping a process for
+	// its next turn ask for it (tuiRuntimeServeTest).
+	tuiRuntimeDefaultIdleTTL = 0
 	code, err := isolatedTests(m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/yetone/magpie/internal/claudebridge"
 	"github.com/yetone/magpie/internal/claudecode"
@@ -214,7 +215,18 @@ func tuiConfig() *tuiRuntimeConfig {
 		NoteLimits: provider.NoteClaudeLimits,
 		MovedOff:   provider.ClaudeCodeMovedOff,
 		LeanPrompt: func() bool { return settings.Load().ClaudeLeanPrompt },
+		IdleTTL:    tuiIdleTTL,
+		Nudge:      claudeRoom.nudge,
 	}
+}
+
+// tuiIdleTTL is claudeTuiIdleSeconds as a duration, read for each turn:
+// unset is the runtime's default, 0 or less keeps no process idle.
+func tuiIdleTTL() time.Duration {
+	if n := settings.Load().ClaudeTuiIdleSeconds; n != nil {
+		return time.Duration(max(*n, 0)) * time.Second
+	}
+	return tuiRuntimeDefaultIdleTTL
 }
 
 // serveClaudeTUI answers a request on a Claude account set to TUI, in any
