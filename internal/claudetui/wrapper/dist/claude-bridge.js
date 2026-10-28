@@ -893,6 +893,7 @@ var OPTION_ARITY = new Map([
   ["--remote-control", "none"],
   ["--remote-control-session-name-prefix", "required"],
   ["--replay-user-messages", "variadic"],
+  ["--reply-on-resume", "none"],
   ["-r", "optional"],
   ["--resume", "optional"],
   ["--session-id", "required"],
@@ -11010,7 +11011,8 @@ var initialMessage = args.initialPrompt;
 if (printMode && !initialMessage && !process.stdin.isTTY) {
   initialMessage = (await new Response(Bun.stdin.stream()).text()).trimEnd();
 }
-if (printMode && !initialMessage) {
+var replyOnResume = Boolean(claudeResumeSessionId(args.claudeArgs) && args.claudeArgs.includes("--reply-on-resume"));
+if (printMode && !initialMessage && !replyOnResume) {
   process.stderr.write(`claude-bridge: -p/--print requires a prompt argument or piped stdin.
 `);
   process.stderr.write("Run `bun ./src/cli.ts --help` for wrapper usage.\n");

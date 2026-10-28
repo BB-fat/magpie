@@ -255,6 +255,9 @@ type tuiRuntimeSubscriptionRun struct {
 	interactiveContextSnapshot *tuiRuntimeInteractiveContextDiagnosticSnapshot // immutable per-field compatibility and diagnostic digests
 	firstTurnAnchorKey         string                                          // first user message hash, only for opt-in first-turn durable recovery
 	workKey                    string                                          // state key of the run's cwd, where its session's transcript is
+	nativeWork                 string                                          // cwd and config dir of its native transcript,
+	nativeConfigDir            string                                          // which keepToolRepair copies
+	toolRepair                 *tuiRuntimeToolRepair                           // a detached tool round, not a live MCP waiter
 	lastRow                    string                                          // uuid of the last transcript row read: a complete reply's cut point
 	startKey                   string                                          // replay key of the lite request it was started for
 	heldTools                  map[string]bool                                 // tools defined for the cache but not offered (heldTools)
@@ -1002,11 +1005,15 @@ func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop str
 	// going on) is taken back to before it (letGo)
 	r.mu.Lock()
 	r.turnUUID, r.backKey = "", ""
+	repair := r.toolRepair
 	r.mu.Unlock()
 	switch {
 	case !ok:
 		// the caller has no whole reply, so no tool calls to answer
 		r.abort()
+		if repair != nil {
+			repair.expire()
+		}
 		return
 	case stop == "tool":
 		r.park()
@@ -1543,8 +1550,11 @@ func (r *tuiRuntimeSubscriptionRun) park() {
 	}
 	now := time.Now()
 	r.parkedAt = now
+	closed := r.closed
 	r.mu.Unlock()
 	switch {
+	case closed:
+		return
 	case r.timer == nil:
 		return
 	case final:
@@ -2859,6 +2869,29 @@ func (r *tuiRuntimeSubscriptionRun) rejectUnshownInteractiveMCP(id string) {
 	close(waiter)
 }
 
+// registerToolLocked journals a conversation's tool call before it can run
+// and marks its ID seen. r.mu is held.
+func (r *tuiRuntimeSubscriptionRun) registerToolLocked(name, id string, args json.RawMessage) error {
+	if b := r.bridge; b != nil && b.toolJournal != nil && r.interactive && r.outerSession != "" {
+		digest, err := tuiRuntimeToolEvidenceArgumentsHash(args)
+		var evidence tuiRuntimeInteractiveToolEvidence
+		if err == nil {
+			evidence, err = tuiRuntimeToolEvidenceFor(r, name, id, digest, "", "registered")
+		}
+		if err == nil {
+			err = b.toolJournal.append(evidence)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if r.seenMCPCallIDs == nil {
+		r.seenMCPCallIDs = map[string]bool{}
+	}
+	r.seenMCPCallIDs[id] = true
+	return nil
+}
+
 func (b *tuiRuntimeSubscriptionBridge) mcpCall(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	if token == "" {
@@ -2999,26 +3032,12 @@ func (b *tuiRuntimeSubscriptionBridge) mcpCall(w http.ResponseWriter, r *http.Re
 		http.Error(w, "duplicate native MCP callback ID; refusing tool replay", http.StatusConflict)
 		return
 	}
-	if b.toolJournal != nil && run.interactive && run.outerSession != "" {
-		argsDigest, evidenceErr := tuiRuntimeToolEvidenceArgumentsHash(call.Arguments)
-		var evidence tuiRuntimeInteractiveToolEvidence
-		if evidenceErr == nil {
-			evidence, evidenceErr = tuiRuntimeToolEvidenceFor(run, call.Name, call.ToolCallID, argsDigest, "", "registered")
-		}
-		if evidenceErr == nil {
-			evidenceErr = b.toolJournal.append(evidence)
-		}
-		if evidenceErr != nil {
-			run.mu.Unlock()
-			log.Printf("Claude interactive durable tool registration failed: %v", evidenceErr)
-			http.Error(w, "durable tool registration unavailable; refusing execution", http.StatusServiceUnavailable)
-			return
-		}
+	if err := run.registerToolLocked(call.Name, call.ToolCallID, call.Arguments); err != nil {
+		run.mu.Unlock()
+		log.Printf("Claude interactive durable tool registration failed: %v", err)
+		http.Error(w, "durable tool registration unavailable; refusing execution", http.StatusServiceUnavailable)
+		return
 	}
-	if run.seenMCPCallIDs == nil {
-		run.seenMCPCallIDs = map[string]bool{}
-	}
-	run.seenMCPCallIDs[call.ToolCallID] = true
 	// On a truly first canonical turn, a tool callback may arrive before
 	// any complete assistant text reply. Persist a *dirty* checkpoint only
 	// when the native Wrapper has provided its real session ID. Do this
@@ -3245,9 +3264,20 @@ func (b *tuiRuntimeSubscriptionBridge) abortAll() {
 	for _, run := range b.runs {
 		runs = append(runs, run)
 	}
+	var repairs []*tuiRuntimeToolRepair
+	for _, r := range b.liteParked {
+		r.mu.Lock()
+		if r.toolRepair != nil {
+			repairs = append(repairs, r.toolRepair)
+		}
+		r.mu.Unlock()
+	}
 	b.mu.Unlock()
 	for _, run := range runs {
 		run.abort()
+	}
+	for _, repair := range repairs {
+		repair.expire()
 	}
 }
 

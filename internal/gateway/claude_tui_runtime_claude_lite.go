@@ -370,6 +370,12 @@ func tuiRuntimeLiteVisibleToolHandoff(req *tuiRuntimeRequest) error {
 // model, conversation, tools and settings it was started with. Only then is
 // it handed to the run; anything else is a new turn.
 func tuiRuntimeLiteContinues(owner, model string, req *tuiRuntimeRequest, run *tuiRuntimeSubscriptionRun, results []Part, how string) bool {
+	run.mu.Lock()
+	detached := run.toolRepair != nil
+	run.mu.Unlock()
+	if detached {
+		return false
+	}
 	if !tuiRuntimeInteractiveToolContinuation(req) || !run.interactive || run.owner != owner || run.model != model {
 		return false
 	}
@@ -492,6 +498,18 @@ func (b *tuiRuntimeSubscriptionBridge) letGoAbandonedRuns(owner string, req *tui
 // as a first turn, and a session rebuilt from the request's history.
 // Stateless requests (outerSession "") never read or write either.
 func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
+	if repair, err := b.takeToolRepair(owner, model, req); err != nil {
+		return nil, nil, err
+	} else if repair != nil {
+		copied := *req
+		copied.toolRepair, copied.resumedCopy = repair, true
+		copied.workKey = repair.workKey
+		run, events, err := b.startInteractiveWithPrompt(ctx, &copied, model, configDir, owner, outerSession, "", "", false)
+		if err != nil {
+			repair.discard()
+		}
+		return run, events, err
+	}
 	if outerSession != "" {
 		if id, prompt, images, work, ok := b.liteParkedBranch(owner, outerSession, model, configDir, req); ok {
 			log.Printf("Claude interactive resuming the conversation's own session with its tool results")
@@ -683,10 +701,14 @@ func tuiRuntimeLiteTurnPrompt(req *tuiRuntimeRequest, turn []Message) (string, m
 // of their ids for liteParkedBranch, and the round they make for
 // liteEarlierRound.
 func (b *tuiRuntimeSubscriptionBridge) noteLiteParked(r *tuiRuntimeSubscriptionRun) {
-	if b == nil || !r.interactive || r.outerSession == "" {
+	if b == nil || !r.interactive {
 		return
 	}
 	r.mu.Lock()
+	if r.outerSession == "" && r.toolRepair == nil {
+		r.mu.Unlock()
+		return
+	}
 	ids := make([]string, 0, len(r.shown))
 	for _, c := range r.shown {
 		ids = append(ids, c.id)
@@ -773,13 +795,14 @@ func (b *tuiRuntimeSubscriptionBridge) liteEarlierRound(owner, model, configDir 
 	}
 	run.mu.Lock()
 	sid, runModel, work, runOwner, snapshot := run.sessionID, run.model, run.workKey, run.owner, run.interactiveContextSnapshot
+	detached := run.toolRepair != nil
 	// still waiting on these very calls: liteParkedBranch takes or refuses them
 	waiting := false
 	for _, c := range run.shown {
 		waiting = waiting || answered[c.id]
 	}
 	run.mu.Unlock()
-	if waiting || sid == "" || runOwner != owner || runModel != model || work == "" ||
+	if detached || waiting || sid == "" || runOwner != owner || runModel != model || work == "" ||
 		snapshot == nil || snapshot.lean != req.leanPrompt || !run.interactiveEquivalentContext(req) ||
 		!run.wasTold(append(slices.Clone(req.Messages[:k]), results...)) {
 		return "", "", nil, "", false
@@ -836,12 +859,13 @@ func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, mod
 	}
 	run.mu.Lock()
 	sid, runModel, work, runOwner := run.sessionID, run.model, run.workKey, run.owner
+	detached := run.toolRepair != nil
 	calls := make([]string, 0, len(run.shown))
 	for _, c := range run.shown {
 		calls = append(calls, c.id)
 	}
 	run.mu.Unlock()
-	if sid == "" || runOwner != owner || runModel != model || work == "" || len(calls) == 0 || len(answered) != len(calls) ||
+	if detached || sid == "" || runOwner != owner || runModel != model || work == "" || len(calls) == 0 || len(answered) != len(calls) ||
 		!run.interactiveEquivalentContext(req) || !run.follows(req.Messages) {
 		return "", "", nil, "", false
 	}
@@ -890,6 +914,23 @@ func tuiRuntimeLiteBranchTranscript(work, configDir, model, sid string, calls []
 	if err != nil {
 		return "", err
 	}
+	lines, parent, err := tuiRuntimeToolRoundLines(data, calls, whole)
+	if err != nil {
+		return "", err
+	}
+	id, f, err := tuiRuntimeCopyTranscript(dir, sid, lines)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if err := tuiRuntimeAppendClaudeTranscript(f, id, parent, work, model, nil, results, "", tuiRuntimeLiteResultsReceived); err != nil {
+		_ = os.Remove(filepath.Join(dir, id+".jsonl"))
+		return "", err
+	}
+	return id, nil
+}
+
+func tuiRuntimeToolRoundLines(data []byte, calls []string, whole bool) ([][]byte, string, error) {
 	want := map[string]bool{}
 	for _, c := range calls {
 		want[c] = true
@@ -923,21 +964,12 @@ func tuiRuntimeLiteBranchTranscript(work, configDir, model, sid string, calls []
 		}
 	}
 	if cut < 0 || parent == "" || len(found) != len(want) {
-		return "", fmt.Errorf("session %s does not hold the calls", sid)
+		return nil, "", fmt.Errorf("native transcript does not hold the calls")
 	}
 	if whole && (reply == "" || !maps.Equal(replyCalls[reply], want)) {
-		return "", fmt.Errorf("session %s's reply makes other calls than the round's", sid)
+		return nil, "", fmt.Errorf("native reply makes other calls than the round's")
 	}
-	id, f, err := tuiRuntimeCopyTranscript(dir, sid, lines[:cut+1])
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	if err := tuiRuntimeAppendClaudeTranscript(f, id, parent, work, model, nil, results, "", tuiRuntimeLiteResultsReceived); err != nil {
-		_ = os.Remove(filepath.Join(dir, id+".jsonl"))
-		return "", err
-	}
-	return id, nil
+	return lines[:cut+1], parent, nil
 }
 
 // Stateless runs borrow fixed cwds, the lowest free first, so one after

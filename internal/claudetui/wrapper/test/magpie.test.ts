@@ -11,6 +11,15 @@ import { buildRuntimeHookCommand, installJsonSchemaStopHook, installRuntimeHooks
 import { JSON_LIMITS, extractAndValidateStructuredOutput, jsonShapeError, loadJsonSchemaFromText, validateJsonAgainstSchema } from "../src/json-schema.ts";
 import { writePrivateAtomic } from "../src/fs-atomic.ts";
 import { canBypassPermissions, preAcceptProject } from "../src/preaccept.ts";
+import { parseCliArgs } from "../src/args.ts";
+
+test("native reply-on-resume is forwarded without inventing a prompt", () => {
+  const result = parseCliArgs(["-p", "--resume", "saved-session", "--reply-on-resume"]);
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.error.message);
+  expect(result.parsed.initialPrompt).toBeUndefined();
+  expect(result.parsed.claudeArgs).toEqual(["--resume", "saved-session", "--reply-on-resume"]);
+});
 
 const testRoot = mkdtempSync(join(tmpdir(), "magpie-wrapper-test-"));
 afterAll(() => rmSync(testRoot, { recursive: true, force: true }));

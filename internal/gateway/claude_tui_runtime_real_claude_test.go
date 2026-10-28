@@ -524,6 +524,11 @@ func tuiRuntimeNewAnthropicStandIn(t *testing.T) *tuiRuntimeStandIn {
 		switch {
 		case strings.Contains(last, "ECHOED"):
 			blocks = []map[string]any{{"type": "text", "text": "DONE: ECHOED"}}
+		case strings.Contains(last, "No such tool"):
+			blocks = []map[string]any{{"type": "text", "text": "native retry must be discarded"}}
+		case echo != "" && strings.Contains(last, "call bare echo"):
+			blocks = []map[string]any{{"type": "tool_use", "id": "toolu_standin_bare", "name": "echo", "input": map[string]any{"text": "hi"}}}
+			stop = "tool_use"
 		case echo != "" && strings.Contains(last, "call echo"):
 			blocks = []map[string]any{{"type": "tool_use", "id": "toolu_standin_1", "name": echo, "input": map[string]any{"text": "hi"}}}
 			stop = "tool_use"

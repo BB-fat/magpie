@@ -147,6 +147,7 @@ const OPTION_ARITY = new Map<string, OptionArity>([
   ["--remote-control", "none"],
   ["--remote-control-session-name-prefix", "required"],
   ["--replay-user-messages", "variadic"],
+  ["--reply-on-resume", "none"],
   ["-r", "optional"],
   ["--resume", "optional"],
   ["--session-id", "required"],
