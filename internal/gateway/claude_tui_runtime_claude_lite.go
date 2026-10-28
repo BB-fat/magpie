@@ -554,10 +554,6 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 			copied.resumedCopy, copied.workKey = true, work
 			return b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
 		}
-		point, pointSince, havePoint := tuiRuntimeInteractivePoint{}, []Message(nil), false
-		if tuiRuntimeClaudeDesktopTurnCompanionSuffix(req) == nil {
-			point, pointSince, havePoint = tuiRuntimeFindInteractivePoint(owner, outerSession, model, req)
-		}
 		saved, savedOK, err := b.loadInteractiveSession(owner, outerSession)
 		if err != nil {
 			return nil, nil, err
@@ -568,14 +564,6 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 			saved, since, status = b.restoreInteractiveSession(owner, outerSession, req)
 		}
 		legacy := status == tuiRuntimeInteractiveRestoreExact || status == tuiRuntimeInteractiveRestoreReplyAnchor || status == tuiRuntimeInteractiveRestoreCompanion
-		// The deeper of the two goes on; a point also when they are level,
-		// since it can be forked if its session is busy.
-		if havePoint && (!legacy || status != tuiRuntimeInteractiveRestoreCompanion && len(pointSince) <= len(since)) {
-			if run, events, err, ok := b.startLiteAtPoint(ctx, req, model, owner, outerSession, configDir, point, pointSince); ok {
-				b.anchorOuterThread(owner, outerSession, req)
-				return run, events, err
-			}
-		}
 		if legacy {
 			if release, ok := b.claimSession(saved.SessionID); ok {
 				defer release()
@@ -638,51 +626,6 @@ func (b *tuiRuntimeSubscriptionBridge) startLiteAtNativeCheckpoint(ctx context.C
 		return nil, nil, nil, false
 	}
 	log.Printf("Claude interactive forking the native session at the strict-prefix checkpoint")
-	copied.resumedCopy = true
-	run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
-	return run, events, err, true
-}
-
-// startLiteAtPoint goes on from point with since, the messages after it:
-// in its session when no run writes it and nothing was said in it after
-// the point, else in a copy of the session up to the point. Changed
-// instructions rebuild: the old ones are in the session's first prompt.
-// It reports false, starting nothing, when the session can't be read.
-func (b *tuiRuntimeSubscriptionBridge) startLiteAtPoint(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string, point tuiRuntimeInteractivePoint, since []Message) (*tuiRuntimeSubscriptionRun, <-chan Event, error, bool) {
-	if point.InstructionKey != tuiRuntimeInstructionKey(req) {
-		log.Printf("Claude interactive rebuilding native session: external instructions changed")
-		run, events, err := b.startInteractiveRebuild(ctx, req, model, owner, outerSession, configDir)
-		return run, events, err, true
-	}
-	work, err := tuiRuntimeInteractiveWorkDirForKey(point.Work)
-	if err != nil {
-		return nil, nil, err, true
-	}
-	prompt, images, err := tuiRuntimeRenderInteractiveTurnPromptWithImages(since)
-	if err != nil {
-		return nil, nil, err, true
-	}
-	copied := *req
-	copied.workKey = point.Work
-	if len(req.Tools) == 0 && len(images) == 0 && point.ToolsHash != "" {
-		copied.heldTools = tuiRuntimeLoadInteractiveTools(point.ToolsHash)
-	}
-	prompt = tuiRuntimeRenderInteractiveTurnConstraint(&copied) + prompt
-	if release, ok := b.claimSession(point.SessionID); ok {
-		defer release()
-		if tuiRuntimeTranscriptEndsAt(configDir, work, point.SessionID, point.Row) {
-			log.Printf("Claude interactive resuming the native session at the reply the request goes on from")
-			copied.pointResume = true
-			run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, point.SessionID, images, false)
-			return run, events, err, true
-		}
-	}
-	id, err := tuiRuntimeForkTranscript(configDir, work, point.SessionID, point.Row)
-	if err != nil {
-		log.Printf("Claude interactive could not fork the native session at the reply the request goes on from: %v", err)
-		return nil, nil, nil, false
-	}
-	log.Printf("Claude interactive forking the native session at the reply the request goes on from")
 	copied.resumedCopy = true
 	run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
 	return run, events, err, true

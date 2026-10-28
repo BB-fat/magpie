@@ -1066,18 +1066,6 @@ func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop str
 		r.mu.Lock()
 		sessionID, outerSession, threadKey := r.sessionID, r.outerSession, r.threadKey
 		r.mu.Unlock()
-		r.mu.Lock()
-		row, work, toolsHash := r.lastRow, r.workKey, r.toolsHash
-		r.mu.Unlock()
-		if outerSession != "" && sessionID != "" && conv != "" && row != "" && work != "" {
-			if err := tuiRuntimeSaveInteractivePoint(conv, tuiRuntimeInteractivePoint{
-				SessionID: sessionID, Row: row, Work: work, Outer: tuiRuntimeInteractiveSessionStateKey(r.owner, outerSession),
-				Model: r.model, InstructionKey: tuiRuntimeInstructionKey(req), ReplyKey: tuiRuntimeAssistantReplyKey(reply),
-				ToolsHash: toolsHash,
-			}); err != nil {
-				log.Printf("Claude interactive cut point not saved: %v", err)
-			}
-		}
 		if outerSession != "" && sessionID != "" && conv != "" {
 			err := r.bridge.saveInteractiveSession(r.owner, outerSession, tuiRuntimeInteractiveSessionEntry{
 				SessionID: sessionID, Model: r.model, ThreadKey: threadKey,
