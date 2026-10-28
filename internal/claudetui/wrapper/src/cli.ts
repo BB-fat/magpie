@@ -123,7 +123,8 @@ let initialMessage = args.initialPrompt;
 if (printMode && !initialMessage && !process.stdin.isTTY) {
   initialMessage = (await new Response(Bun.stdin.stream()).text()).trimEnd();
 }
-if (printMode && !initialMessage) {
+const replyOnResume = Boolean(claudeResumeSessionId(args.claudeArgs) && args.claudeArgs.includes("--reply-on-resume"));
+if (printMode && !initialMessage && !replyOnResume) {
   process.stderr.write("claude-bridge: -p/--print requires a prompt argument or piped stdin.\n");
   process.stderr.write("Run `bun ./src/cli.ts --help` for wrapper usage.\n");
   process.exit(2);

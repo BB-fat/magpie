@@ -132,6 +132,36 @@ the standard bridge's, `claudebridge.ToolName`, and come back as declared
 conversation's checkpoint is not taken up under another name: its next
 turn is rebuilt from the request.
 
+An offered client tool named without its MCP prefix is repaired rather than
+ending the request (Grok's first turn after compact, au-exit 10-28).
+`readInteractiveOneTurn` keeps the call's ID and arguments. At the tool
+round's boundary, `keepToolRepair` retains its native transcript through
+that round, normalizing only the tool names in a copy, and reaps the old
+process before delivering the buffered calls. Native unknown-tool results
+and anything generated after them are not carried over. Unoffered tools,
+invalid IDs and read-only recovery keep their existing refusal behavior.
+
+This is a pending tool round, not a successful checkpoint or a live MCP
+waiter. `takeToolRepair` finds it by the returned call IDs, including for a
+stateless client, using the existing ownership, context, history and result
+set checks. The copied transcript receives the real results and any actual
+new user content, with no synthetic acknowledgment or continuation prompt.
+The wrapper launches `--resume <copy> --reply-on-resume`: Claude queries the
+history ending in the user/tool results itself. This requires native Claude
+support for `--reply-on-resume` (exercised with 2.1.308); it is never replaced
+with a generated user instruction. Normal calls still use their live MCP
+waiters. Only a complete delivered answer saves a new checkpoint.
+
+The pending copy is held in memory for the existing five-minute tool wait;
+a stateless run retains its cwd slot until the continuation ends or the
+copy expires. Shutdown releases it too. After expiration or a restart,
+the caller's complete history can rebuild a session through the ordinary
+fallback instead. The original transcript is not edited. The prefix before
+the corrected call is retained, but cache reuse from the changed tool name
+onwards is not guaranteed. Tests: `TestClaudeTUIRuntimeBareToolRound`,
+`TestClaudeTUIRuntimeBareToolMustBeOffered` and
+`TestClaudeTUIRuntimeRealBareTool`.
+
 The runtime reads the gateway's shared search-in-progress context.
 A TUI run used as the search provider enables native `WebSearch`; an ordinary
 run uses the gateway's private MCP search when `CanSearch` says one is

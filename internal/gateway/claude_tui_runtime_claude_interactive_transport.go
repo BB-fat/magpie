@@ -1378,7 +1378,9 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	if workKey == "" && outerSession != "" {
 		workKey = tuiRuntimeInteractiveSessionStateKey(owner, outerSession)
 	}
-	if workKey != "" {
+	if req.toolRepair != nil {
+		work, release = req.toolRepair.work, req.toolRepair.discard
+	} else if workKey != "" {
 		// a resumed session's own cwd, which its transcript's project and
 		// the cached system prompt name
 		work, err = tuiRuntimeInteractiveWorkDirForKey(workKey)
@@ -1392,7 +1394,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		clean()
 		return nil, nil, err
 	}
-	if outerSession == "" {
+	if outerSession == "" && req.toolRepair == nil {
 		// The folder is this run's alone, and nothing resumes a stateless
 		// session: what the last run's Claude Code wrote as it exited goes.
 		for _, dir := range tuiRuntimeClaudeSessions(configDir, work) {
@@ -1463,7 +1465,14 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	// earlier native state of it to mark dirty, and it becomes the checkpoint
 	// only by completing.
 	seeded := req.resumedCopy
-	if readOnly && len(req.compactHistory) > 0 {
+	if req.toolRepair != nil {
+		resumeID, err = req.toolRepair.write(configDir, model, req.Messages)
+		if err != nil {
+			clean()
+			return nil, nil, err
+		}
+		args = append(args, "--resume", resumeID, "--reply-on-resume")
+	} else if readOnly && len(req.compactHistory) > 0 {
 		var seedPath string
 		resumeID, seedPath, err = tuiRuntimeWriteCompactionTranscript(work, configDir, req)
 		if err != nil {
@@ -1612,6 +1621,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 			return &s
 		}(),
 		outerSession: outerSession, threadKey: firstWords(&req.Request), sessionID: resumeID, images: images, workKey: workKey,
+		nativeWork: work, nativeConfigDir: configDir,
 		heldTools: held, toolsHash: toolsHash,
 		searchName: req.tuiSearchTool, nativeSearch: nativeSearch, schema: len(req.Format.schema()) > 0, readOnlyRecovery: readOnly, tmuxSocket: sock,
 		safeguards: bytes.Clone(req.Safeguards), safeguardBeta: req.SafeguardBeta, resumeBase: resumeBase}
@@ -1625,13 +1635,15 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	}
 	run.nativeLease = nativeLease
 	leaseTransferred = true // run.finish/removeRun now owns its release
-	if outerSession == "" {
+	if outerSession == "" || req.toolRepair != nil {
 		// Nothing resumes a stateless run's session: removeRun deletes it and
 		// gives the folder back.
 		dirs, seed := tuiRuntimeClaudeSessions(configDir, work), resumeID
 		run.releaseWork = func(sid string) {
-			tuiRuntimeRemoveSession(dirs, seed)
-			tuiRuntimeRemoveSession(dirs, sid)
+			if outerSession == "" {
+				tuiRuntimeRemoveSession(dirs, seed)
+				tuiRuntimeRemoveSession(dirs, sid)
+			}
 			release()
 		}
 	}
@@ -1724,6 +1736,8 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 	finished := false
 	sawText := false
 	toolStopped := false
+	repairToolNames := false
+	var repairCalls []tuiRuntimeShownCall
 	var pmu sync.Mutex
 	var quiet *time.Timer
 	pendingToolMessage := ""
@@ -1744,6 +1758,38 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 			return
 		}
 		pendingToolMessage = ""
+		if repairToolNames {
+			finished = true
+			if err := r.keepToolRepair(repairCalls); err != nil {
+				r.emit(Event{Kind: KError, Text: "Claude tool-name repair: " + err.Error()})
+				r.endSegment()
+				return
+			}
+			// Detach the HTTP segment while the old native process is reaped.
+			// Its failed tool result must never enter the repaired continuation.
+			r.mu.Lock()
+			ch := r.segment
+			repair := r.toolRepair
+			r.segment = nil
+			r.mu.Unlock()
+			go func() {
+				r.abort()
+				if ch == nil {
+					repair.expire()
+				} else {
+					r.mu.Lock()
+					r.segment = ch
+					r.mu.Unlock()
+					for _, call := range repairCalls {
+						r.emit(Event{Kind: KToolStart, ID: call.id, Name: call.name})
+						r.emit(Event{Kind: KToolArgs, Text: call.args})
+					}
+					r.emit(Event{Kind: KStop, Stop: "tool"})
+					r.endSegment()
+				}
+			}()
+			return
+		}
 		toolStopped = true
 		r.emit(Event{Kind: KStop, Stop: "tool"})
 		r.endSegment()
@@ -1846,6 +1892,10 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 	}()
 	for scanner.Scan() {
 		pmu.Lock()
+		if finished {
+			pmu.Unlock()
+			continue
+		}
 		var msg struct {
 			Type              string          `json:"type"`
 			UUID              string          `json:"uuid"`
@@ -1894,6 +1944,10 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 			} else {
 				pendingToolMessage = msg.Message.ID
 			}
+		}
+		if finished {
+			pmu.Unlock()
+			continue
 		}
 		if msg.SessionID != "" {
 			r.mu.Lock()
@@ -2078,7 +2132,7 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 					if ok && held {
 						continue // answered by mcpCall as unavailable, never shown
 					}
-					if !ok || !offered || block.ID == "" || toolStopped {
+					if !offered || block.ID == "" || toolStopped || !ok && (name == tuiRuntimeInteractiveImageTool || internalSearch) {
 						r.emit(Event{Kind: KError, Text: "Claude interactive migration: unsupported or repeated tool call"})
 						r.endSegment()
 						pmu.Unlock()
@@ -2089,11 +2143,18 @@ func (r *tuiRuntimeSubscriptionRun) readInteractiveOneTurn(rd io.Reader) {
 						// appear as a tool request the outer client has to execute.
 						continue
 					}
+					if !ok {
+						repairToolNames = true
+					}
 					calledTools = true
 					shownIDs[block.ID] = true
 					r.mu.Lock()
 					r.asked = append(r.asked, name)
 					r.mu.Unlock()
+					if repairToolNames {
+						repairCalls = append(repairCalls, tuiRuntimeShownCall{id: block.ID, name: name, args: string(block.Input)})
+						continue
+					}
 					r.emit(Event{Kind: KToolStart, ID: block.ID, Name: name})
 					if len(block.Input) > 0 {
 						r.emit(Event{Kind: KToolArgs, Text: string(block.Input)})

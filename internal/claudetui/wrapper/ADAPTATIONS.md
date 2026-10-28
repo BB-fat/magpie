@@ -29,6 +29,10 @@ this copy with upstream 0.2.2; they are not interchangeable.
 
 ## Adaptations vs upstream 0.2.2
 
+- An explicit `--resume <id> --reply-on-resume` can run without a pasted
+  prompt. The native CLI continues the loaded user/tool-result turn; the
+  wrapper adds no acknowledgment or continuation text. Ordinary print-mode
+  launches still require a prompt.
 - `CLAUDE_BRIDGE_USER_CONTEXT_PATH` user-context hook injection
   (`src/user-context.ts`, `installUserContextHooks` in `hook-install.ts`).
 - Runtime-hook plumbing: `CLAUDE_BRIDGE_RUNTIME_HOOK` /
