@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/yetone/magpie/internal/access"
 )
 
 // A client of the Messages API sends its whole conversation with every
@@ -105,6 +107,7 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	}
 	req.Model = model
 	req.leanPrompt = tuiRuntimeLeanPrompt()
+	req.scope = tuiRuntimePrefixScope(owner, access.Caller(r.Context()).KeyID)
 	outerSession = tuiRuntimeLiteOuterSession(outerSession, r.Header)
 	// Auto mode's own classifier: refused before any native run starts.
 	if tuiRuntimeAutoModeClassifier(req) {
@@ -192,9 +195,17 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 		}
 		defer release()
 	}
-	run, events, err := rt.bridge.startLite(r.Context(), req, model, owner, outerSession, configDir)
-	if err != nil {
-		return out.Fail(tuiRuntimeStartStatus(err), "Claude Code: "+err.Error())
+	// the idle process whose session ends where the request's history does
+	// takes its new turn; else a native session is started for it
+	run, events, hot := rt.bridge.startHot(req, model, owner, outerSession, configDir)
+	if hot {
+		log.Printf("Claude interactive went on in the idle process at the request's prefix")
+	} else {
+		var err error
+		run, events, err = rt.bridge.startLite(r.Context(), req, model, owner, outerSession, configDir)
+		if err != nil {
+			return out.Fail(tuiRuntimeStartStatus(err), "Claude Code: "+err.Error())
+		}
 	}
 	defer run.releaseHTTP()
 	run.mu.Lock()
@@ -215,9 +226,16 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	run.heard(req.Messages)
 	began := time.Now()
 	var letting atomic.Bool
+	// the native turn this request owns: a later request's turn in the same
+	// process is not this client's to end
+	turn := run.turn()
 	gone := context.AfterFunc(r.Context(), func() {
 		letting.Store(true)
 		log.Printf("Claude Code run on %s stopped: the client went away %s into the reply", model, time.Since(began).Round(time.Millisecond))
+		if run.serve {
+			run.letGoServeTurn(events, turn)
+			return
+		}
 		// A stateless run belongs to no conversation that could take it up
 		// again: it is stopped, not kept waiting for its client.
 		if outerSession == "" {
@@ -232,10 +250,14 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 			run.abort()
 		}
 	}
-	return out.Relay(req, events, abort, func(said, stop string, ok bool) {
+	reply := &tuiRuntimeReplyRecorder{}
+	relayed := reply.tee(events)
+	defer tuiRuntimeDrain(relayed)
+	return out.Relay(req, relayed, abort, func(said, stop string, ok bool) {
 		if !gone() {
 			return
 		}
+		run.noteTurnReply(reply.message())
 		run.ended(req, said, stop, ok)
 	})
 }

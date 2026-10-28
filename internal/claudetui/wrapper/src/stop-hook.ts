@@ -48,12 +48,12 @@ export function recordRuntimeHook(inputText: string, env: NodeJS.ProcessEnv = pr
 
   if (input.hook_event_name === "Stop") {
     if (evaluateJsonSchemaStopHook(inputText, env)?.decision === "block") return;
-    writeFileSync(join(env.CLAUDE_BRIDGE_RUN_DIR, "stop-event.json"), inputText.trim() + "\n");
+    writeFileSync(join(env.CLAUDE_BRIDGE_RUN_DIR, "stop-event.json"), stampedStopEvent(inputText, env.CLAUDE_BRIDGE_RUN_DIR));
     return;
   }
 
   if (input.hook_event_name === "StopFailure") {
-    writeFileSync(join(env.CLAUDE_BRIDGE_RUN_DIR, "stop-event.json"), inputText.trim() + "\n");
+    writeFileSync(join(env.CLAUDE_BRIDGE_RUN_DIR, "stop-event.json"), stampedStopEvent(inputText, env.CLAUDE_BRIDGE_RUN_DIR));
     return;
   }
 
@@ -63,6 +63,24 @@ export function recordRuntimeHook(inputText: string, env: NodeJS.ProcessEnv = pr
       JSON.stringify(normalizeMessageDisplay(input)) + "\n"
     );
   }
+}
+
+// A wrapper serving several turns names the turn in flight in its run
+// folder's `turn` file (SERVE_TURN_FILE). The stop event carries that name,
+// so a Stop of an earlier turn can never complete a later one. A one-turn
+// run has no such file and its event is written as it came.
+export const SERVE_TURN_FILE = "turn";
+
+export function stampedStopEvent(inputText: string, runDir: string): string {
+  let turn: string;
+  try {
+    turn = readFileSync(join(runDir, SERVE_TURN_FILE), "utf8").trim();
+  } catch {
+    return inputText.trim() + "\n";
+  }
+  const input = parseHookInput(inputText);
+  if (!input || !turn) return inputText.trim() + "\n";
+  return JSON.stringify({ ...input, bridge_turn: turn }) + "\n";
 }
 
 export function evaluateJsonSchemaStopHook(

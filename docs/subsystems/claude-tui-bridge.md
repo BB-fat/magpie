@@ -117,6 +117,8 @@ from the fork's per-account mode control.
 | `MaxRSS` | `claudeTuiMaxRSSMiB`, else `claudeRunBudget` |
 | `CanSearch`, `SearchHandler`, `NoteLimits`, `MovedOff` | the gateway's search availability and web search, `provider.NoteClaudeLimits`, `provider.ClaudeCodeMovedOff` |
 | `LeanPrompt` | `settings.ClaudeLeanPrompt`, read for each request |
+| `IdleTTL` | `settings.ClaudeTuiIdleSeconds` as a duration, read per turn (unset: 60s, 0: none) |
+| `Nudge` | `claudeRoom.nudge`: a process that came to wait idle can be let go for room |
 
 ## The MCP server name and tool names
 
@@ -252,8 +254,8 @@ choice controls both the launch flag and work-directory settings.
   (`magpie-claude-pty-<gateway pid>-*`, their callback and tools files)
   (`tuiRuntimeSweep`).
 - `MAGPIE_CLAUDE_IDLE_MAX` and `MAGPIE_CLAUDE_IDLE_TTL` are the standard
-  bridge's idle pool alone: a TUI run ends with its reply, and its
-  conversation's next turn resumes the checkpointed session.
+  bridge's idle pool alone: a TUI run has its own idle wait
+  ([below](#a-process-kept-for-the-next-turn)).
 - Between a tool-use reply and its results, `tuiRuntimeBridge.Parked` contributes to
   `tuiRuntimeServer.Busy().Tools`. An attached HTTP response stays in request/bridge
   accounting instead; keep-awake and idle restart consumers see the waiting
@@ -456,6 +458,58 @@ a tool runs neither refuses the results with 409 nor lets the run go. That
 turn's checkpoint is the run's mode, so the conversation's next turn is the
 one rebuilt.
 
+## A process kept for the next turn
+
+A run started for a request whose turn may be followed by its
+conversation's next (`claudeTuiIdleSeconds` > 0; not a schema answer, a
+read-only recovery or a repaired tool round) launches the wrapper with
+`--desplega-serve`. The wrapper then takes its turns as control lines on
+stdin, one JSON object a line (`serve-protocol.ts`): `{"op":"submit",
+"segment","input"}`, `{"op":"shutdown"}`. It emits `bridge_ready` once
+Claude Code's input box takes a prompt again and `bridge_accepted` for
+each turn typed in, beside each turn's ordinary stream-json lines and its
+terminal result. `dispatchServe` reads that stream for the process's whole
+life and hands each native turn's lines to a reader of its own
+(`readInteractiveOneTurn`), so a turn's end is not the process's; the
+Stop hook names the turn in flight in its `stop-event.json` (the run
+folder's `turn` file), so a Stop left from an earlier turn never completes
+a later one. While a serve run waits at its input box, the wrapper turns
+off Claude Code's own idle actions (`IDLE_QUIET_SETTINGS`: prompt
+suggestions, the away recap, idle compaction), any of which could type
+into the box a prompt is pasted in or move the session's last row.
+
+After a complete non-tool reply, the run is kept idle
+(`tuiRuntimeSubscriptionBridge.hot`, by the strict prefix digest its
+session now ends at) for `claudeTuiIdleSeconds` (default 60s, 0 keeps
+none). The next request is typed into that same process only when it goes
+on from exactly that prefix: the request's history up to the reply, the
+reply as its client was told it (recorded by `tuiRuntimeReplyRecorder`),
+then new user input — matched by `tuiRuntimePrefixOf` over
+`tuiRuntimePrefixScope(owner, caller key)`, so no outer session header is
+needed and two callers of one account never continue each other's native
+session. The launch must also match what a typed-in turn cannot change
+(`tuiRuntimeHotConfig`: account, caller, model, instructions and their
+place, effort, thinking, the MCP tool definitions byte for byte, native
+search, safeguards); a mismatch starts a new native session instead. One
+process serves one request: a claim removes it from the pool before
+anything is typed in.
+
+A turn the client gave up on, a failed one, a read-only-signaled one, or
+one whose session end is in any doubt is never kept: its process is ended
+and its cut points stay as they were. A cancellation acts only on the
+turn it belongs to (`letGoServeTurn`, by turn number), so a late cancel
+never kills a turn already handed to the next request. An idle process
+still counts in `claudeRoom` (it is not a served HTTP request), is the
+first let go when another needs room (`tuiRuntimeLetGoIdleForRoom`), is
+bounded per bridge (`tuiRuntimeServeIdleMost`), and its TTL timer carries
+a generation so a stale timer never kills a newer wait or a claimed turn.
+Nothing is said to Claude Code while it waits, and the wait is not tied to
+the upstream cache's TTL. Tests: `TestClaudeTUIRuntimeServeNextTurnSameProcess`,
+`TestClaudeTUIRuntimeServeStrictPrefix`, `TestClaudeTUIRuntimeServeIdleTTL`,
+`TestClaudeTUIRuntimeServeClaimBeatsTTL`, `TestClaudeTUIRuntimeServeLateCancel`,
+`TestClaudeTUIRuntimeServeIdleBounds`, and the real
+`TestClaudeTUIRuntimeRealServe`.
+
 ## Prompt-cache continuity
 
 A stable supported session header lets a completed conversation resume its
@@ -539,7 +593,7 @@ go test -tags nogui ./internal/claudebridge/ -count=1
 (cd internal/claudetui/wrapper && $BUN test)
 # the real Claude Code, tmux and Bun against a local stand-in for Anthropic
 MAGPIE_CLAUDE_TUI_REAL=1 MAGPIE_TUI_BUN=<bun> MAGPIE_TUI_CLAUDE=<claude> \
-  MAGPIE_TUI_MAGPIE=<a built magpie> go test -run '^TestClaudeTUIRuntimeRealClaudeTUI$' ./internal/gateway/
+  MAGPIE_TUI_MAGPIE=<a built magpie> go test -run '^TestClaudeTUIRuntimeReal' ./internal/gateway/
 ```
 
 `TestClaudeTUIRuntimeRealClaudeTUI/cache_prefix` compares the real CLI's outgoing tools,
@@ -547,6 +601,13 @@ system instructions (apart from its billing metadata), and previous message
 content before and after a checkpoint resume. Cache marks can move to a later
 boundary; equivalent plain-text string and block-array forms are normalized.
 The stand-in supplies no evidence of Anthropic's server-side cache hits.
+
+`TestClaudeTUIRuntimeRealServe` keeps the real Claude Code for the next
+turn: the next turn is typed into the same process (same upstream session
+id and message prefix), nothing is asked of Anthropic while it waits, and
+once its TTL ends the process the next turn resumes the native session
+from the reply's cut point. It asserts same-process continuation, not
+Anthropic's live cache hit rate.
 
 `claude-mode.test.cjs` exercises the Providers editor's mode selection,
 persistence across reload, failed saves and restoration to standard in

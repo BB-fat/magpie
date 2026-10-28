@@ -1496,6 +1496,13 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		}
 		args = append(args, "--resume", resumeID)
 	}
+	// A run whose turn may be followed by its conversation's next keeps its
+	// Claude Code for it (native_serve.go). A schema answer, a read-only
+	// recovery and a repaired tool round each end with their reply.
+	serve := tuiRuntimeIdleTTL() > 0 && !readOnly && len(req.Format.schema()) == 0 && req.toolRepair == nil
+	if serve {
+		args = append(args, "--desplega-serve")
+	}
 	cmd := tuiRuntimeCommandContext(context.Background(), wrapper[0], append(wrapper[1:], args...)...)
 	cmd.Dir = work
 	var nativeLease *os.File
@@ -1602,7 +1609,16 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		clean()
 		return nil, nil, errors.New(why)
 	}
-	cmd.Stdin = strings.NewReader(prompt) // finite prompt with immediate EOF
+	var serveIn io.WriteCloser
+	if serve {
+		// the turns' control lines, kept open for the process's life
+		if serveIn, err = cmd.StdinPipe(); err != nil {
+			clean()
+			return nil, nil, err
+		}
+	} else {
+		cmd.Stdin = strings.NewReader(prompt) // finite prompt with immediate EOF
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		clean()
@@ -1624,7 +1640,11 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		nativeWork: work, nativeConfigDir: configDir,
 		heldTools: held, toolsHash: toolsHash,
 		searchName: req.tuiSearchTool, nativeSearch: nativeSearch, schema: len(req.Format.schema()) > 0, readOnlyRecovery: readOnly, tmuxSocket: sock,
-		safeguards: bytes.Clone(req.Safeguards), safeguardBeta: req.SafeguardBeta, resumeBase: resumeBase}
+		safeguards: bytes.Clone(req.Safeguards), safeguardBeta: req.SafeguardBeta, resumeBase: resumeBase, serve: serve}
+	if serve {
+		run.hotConfig = tuiRuntimeHotConfigOf(req, model, outerSession, configDir, len(images) > 0)
+		run.hotConfig.held = held != nil
+	}
 	if b.toolJournal != nil && os.Getenv("MAGPIE_CLAUDE_FIRST_TURN_ANCHOR") == "1" &&
 		outerSession != "" && resumeID == "" && !readOnly && len(req.Messages) == 1 && req.Messages[0].Role == "user" {
 		// conversationKeys deliberately emits keys only at *assistant*
@@ -1678,11 +1698,28 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		run.finish()
 		return nil, nil, tuiRuntimeRoomError{err}
 	}
+	if serve {
+		// the first turn's reader waits before anything can be read
+		run.mu.Lock()
+		run.serveIn = serveIn
+		run.mu.Unlock()
+		run.beginServeTurn()
+	}
 	tree, err := tuiRuntimeStartTree(cmd)
 	if err != nil {
 		freeRoom(false)
 		run.finish()
 		return nil, nil, err
+	}
+	if serve {
+		// typed in once Claude Code is ready; a prompt larger than the pipe
+		// waits for the wrapper to read it, so not on this goroutine
+		go func() {
+			if err := run.submitServe(prompt); err != nil {
+				log.Printf("Claude interactive first turn not typed in: %v", err)
+				run.abort()
+			}
+		}()
 	}
 	drained := make(chan struct{})
 	finished := make(chan struct{})
@@ -1706,7 +1743,14 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	go func() {
 		_, _ = io.Copy(&tuiRuntimeLockedWriter{run: run}, io.LimitReader(stderr, 1<<20))
 	}()
-	go func() { run.readInteractiveOneTurn(stdout); close(drained) }()
+	go func() {
+		if serve {
+			run.dispatchServe(stdout)
+		} else {
+			run.readInteractiveOneTurn(stdout)
+		}
+		close(drained)
+	}()
 	go func() {
 		// exec.Wait closes StdoutPipe. Reap only after the reader drains,
 		// otherwise a fast wrapper can turn a valid response into EBADF.

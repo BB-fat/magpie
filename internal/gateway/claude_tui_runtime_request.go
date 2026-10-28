@@ -12,6 +12,9 @@ type tuiRuntimeRequest struct {
 	heldTools      []byte                // tool definitions kept for the cache, not offered (heldTools)
 	toolRepair     *tuiRuntimeToolRepair // resumes its corrected tool round with --reply-on-resume, no prompt
 	tuiSearchTool  string
+	// scope is the isolation domain the request's native sessions are
+	// found in (tuiRuntimePrefixScope): its account and caller
+	scope string
 }
 
 func tuiRuntimeParseRequest(body []byte) (*tuiRuntimeRequest, error) {
