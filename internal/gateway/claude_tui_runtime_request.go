@@ -10,7 +10,7 @@ type tuiRuntimeRequest struct {
 	pointResume    bool                  // resumes a native checkpoint's session in place
 	workKey        string                // state key of the cwd of the session it resumes
 	heldTools      []byte                // tool definitions kept for the cache, not offered (heldTools)
-	toolRepair     *tuiRuntimeToolRepair // resumes its corrected tool round with --reply-on-resume, no prompt
+	toolRepair     *tuiRuntimeToolRepair // resumes a copy of its corrected tool round, the turn typed in (repairPrompt)
 	tuiSearchTool  string
 	// scope is the isolation domain the request's native sessions are
 	// found in (tuiRuntimePrefixScope): its account and caller

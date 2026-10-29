@@ -185,14 +185,21 @@ func (b *tuiRuntimeSubscriptionBridge) takeToolRepair(owner, model string, req *
 	return repair, nil
 }
 
+// write copies the corrected round, appends the client's results and
+// liteResultsReceived, as liteParkedBranch's copy, and returns the copy's
+// id. The copy is resumed with the turn as a typed prompt (repairPrompt):
+// Claude Code's --reply-on-resume sends its first request before the MCP
+// tools are listed, with none at all (2.1.304 and 2.1.308; au-exit 10-29
+// it answered one line and ended the turn), and a typed prompt waits for
+// them (waitForMcpListed).
 func (s *tuiRuntimeToolRepair) write(configDir, model string, messages []Message) (string, error) {
 	dir := tuiRuntimeClaudeSessions(configDir, s.work)[0]
 	id, f, err := tuiRuntimeCopyTranscript(dir, s.session, s.rows)
 	if err != nil {
 		return "", err
 	}
-	_, results, turn := tuiRuntimeLiteTail(messages)
-	err = tuiRuntimeAppendClaudeTranscript(f, id, s.parent, s.work, model, nil, append(results, turn...), "", "")
+	_, results, _ := tuiRuntimeLiteTail(messages)
+	err = tuiRuntimeAppendClaudeTranscript(f, id, s.parent, s.work, model, nil, results, "", tuiRuntimeLiteResultsReceived)
 	closeErr := f.Close()
 	if err == nil {
 		err = closeErr
@@ -202,4 +209,19 @@ func (s *tuiRuntimeToolRepair) write(configDir, model string, messages []Message
 		return "", err
 	}
 	return id, nil
+}
+
+// repairPrompt is the prompt a repaired round's copy is resumed with: what
+// the user said with the results, or liteContinueText when they came
+// alone, after the request's tool_choice.
+func tuiRuntimeRepairPrompt(req *tuiRuntimeRequest) (string, map[string]Part, error) {
+	_, _, turn := tuiRuntimeLiteTail(req.Messages)
+	if !tuiRuntimeHasUserText(turn) {
+		turn = append(turn, Message{Role: "user", Parts: []Part{{Kind: Text, Text: tuiRuntimeLiteContinueText}}})
+	}
+	prompt, images, err := tuiRuntimeRenderInteractiveTurnPromptWithImages(turn)
+	if err != nil {
+		return "", nil, err
+	}
+	return tuiRuntimeRenderInteractiveTurnConstraint(req) + prompt, images, nil
 }

@@ -146,13 +146,18 @@ invalid IDs and read-only recovery keep their existing refusal behavior.
 This is a pending tool round, not a successful checkpoint or a live MCP
 waiter. `takeToolRepair` finds it by the returned call IDs, including for a
 stateless client, using the existing ownership, context, history and result
-set checks. The copied transcript receives the real results and any actual
-new user content, with no synthetic acknowledgment or continuation prompt.
-The wrapper launches `--resume <copy> --reply-on-resume`: Claude queries the
-history ending in the user/tool results itself. This requires native Claude
-support for `--reply-on-resume` (exercised with 2.1.308); it is never replaced
-with a generated user instruction. Normal calls still use their live MCP
-waiters. Only a complete delivered answer saves a new checkpoint.
+set checks. The copied transcript receives the real results and
+`liteResultsReceived`, as a parked run's copy does (`liteParkedBranch`), and
+is resumed with the turn typed in (`tuiRuntimeRepairPrompt`): what the user
+said with the results, or `liteContinueText` when they came alone. A typed
+prompt waits for the MCP tools to be listed (`waitForMcpListed`). The copy was
+resumed with `--reply-on-resume` before: Claude Code sends that first
+request itself as soon as its input box is up, before the interactive TUI
+has listed its MCP tools, so it went out with `tools: []` (2.1.304 and
+2.1.308; au-exit 10-29: 28 tools became 0, a cache write, and a one-line
+answer that ended the turn). `MCP_CONNECTION_NONBLOCKING=false` didn't
+change that. Normal calls still use their live MCP waiters. Only a complete
+delivered answer saves a new checkpoint.
 
 The pending copy is held in memory for the existing five-minute tool wait;
 a stateless run retains its cwd slot until the continuation ends or the
@@ -161,8 +166,10 @@ the caller's complete history can rebuild a session through the ordinary
 fallback instead. The original transcript is not edited. The prefix before
 the corrected call is retained, but cache reuse from the changed tool name
 onwards is not guaranteed. Tests: `TestClaudeTUIRuntimeBareToolRound`,
-`TestClaudeTUIRuntimeBareToolMustBeOffered` and
-`TestClaudeTUIRuntimeRealBareTool`.
+`TestClaudeTUIRuntimeBareToolMustBeOffered`,
+`TestClaudeTUIRuntimeBareToolResumesWithTheTurnTyped` and
+`TestClaudeTUIRuntimeRealBareTool`, whose continuation must be asked with
+the run's tools.
 
 The runtime reads the gateway's shared search-in-progress context.
 A TUI run used as the search provider enables native `WebSearch`; an ordinary

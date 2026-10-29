@@ -527,10 +527,15 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 	if repair, err := b.takeToolRepair(owner, model, req); err != nil {
 		return nil, nil, err
 	} else if repair != nil {
+		prompt, images, err := tuiRuntimeRepairPrompt(req)
+		if err != nil {
+			repair.discard()
+			return nil, nil, err
+		}
 		copied := *req
 		copied.toolRepair, copied.resumedCopy = repair, true
 		copied.workKey = repair.workKey
-		run, events, err := b.startInteractiveWithPrompt(ctx, &copied, model, configDir, owner, outerSession, "", "", false)
+		run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, "", images, false)
 		if err != nil {
 			repair.discard()
 		}
