@@ -817,6 +817,124 @@ func TestClaudeTUIRuntimeNativeCheckpointCompactionHoldsTools(t *testing.T) {
 	b.abortAll()
 }
 
+// A turn that sends the conversation's tools but may call none of them
+// (tool_choice none: Grok's session title, au-exit 10-29, ~667k written to
+// the cache in three titles) keeps the session's definitions byte for byte
+// and is told not to call them; a call of one never reaches the client. Its
+// checkpoint keeps the definitions' hash, and the conversation going on with
+// tool_choice auto has its tools offered as before. tool_choice naming one
+// tool keeps the others defined, held.
+func TestClaudeTUIRuntimeNativeCheckpointToolChoiceHoldsTools(t *testing.T) {
+	runs := tuiRuntimeCpWrapper(t)
+	t.Setenv("SC_PREFIX", tuiRuntimeMcpToolPrefix())
+	rt, _ := tuiRuntimeScRuntime(t)
+	withTools := func(body, choice string) string {
+		tools := `"tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object","properties":{"cmd":{"type":"string"}}}},{"name":"read_file","description":"read","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}]`
+		if choice != "" {
+			tools += `,"tool_choice":` + choice
+		}
+		return strings.Replace(body, `"system":"rules"`, `"system":"rules",`+tools, 1)
+	}
+	serve := func(body, last string) (map[string]string, string) {
+		t.Helper()
+		code, out := tuiRuntimeScServe(t, rt, "", body)
+		if code != 200 || !strings.Contains(out, "ANS") {
+			t.Fatalf("%s: %d %s", last, code, out)
+		}
+		tuiRuntimeScWaitReaped(t, rt)
+		for _, run := range runs() {
+			if strings.Contains(run["stdin"], last) {
+				return run, out
+			}
+		}
+		t.Fatalf("no run for %s", last)
+		return nil, ""
+	}
+	first, _ := serve(withTools(tuiRuntimeCpBody("q1"), ""), "q1")
+	if !strings.Contains(first["tools.json"], "exec_command") || !strings.Contains(first["tools.json"], "read_file") {
+		t.Fatalf("first run's tools: %q", first["tools.json"])
+	}
+	title, _ := serve(withTools(tuiRuntimeCpBody("q1", "ANS1", "TITLE"), `{"type":"none"}`), "TITLE")
+	if title["resume"] == "" || title["tools.json"] != first["tools.json"] {
+		t.Fatalf("tool_choice none did not keep the session's definitions: resume=%q tools=%q", title["resume"], title["tools.json"])
+	}
+	if !strings.Contains(title["stdin"], "No tools are available for this request") {
+		t.Fatalf("tool_choice none turn not told: %q", title["stdin"])
+	}
+	// the title's checkpoint names the definitions: a later tool-less turn
+	// from it holds them too
+	after, _ := serve(tuiRuntimeCpBody("q1", "ANS1", "TITLE", "ANS2", "after title"), "after title")
+	if after["resume"] == "" || after["tools.json"] != first["tools.json"] {
+		t.Fatalf("the title's checkpoint lost the definitions: resume=%q tools=%q", after["resume"], after["tools.json"])
+	}
+	// a call the turn makes anyway is answered as not executed
+	if _, out := serve(withTools(tuiRuntimeCpBody("q1", "ANS1", "RETITLE CALLHELD"), `{"type":"none"}`), "RETITLE"); strings.Contains(out, "tool_use") || strings.Contains(out, "held_1") {
+		t.Fatalf("held call reached the client: %s", out)
+	}
+	// the conversation itself goes on with its tools offered
+	work, _ := serve(withTools(tuiRuntimeCpBody("q1", "ANS1", "work"), `{"type":"auto"}`), "work")
+	if work["resume"] == "" || work["tools.json"] != first["tools.json"] || strings.Contains(work["stdin"], "No tools are available") {
+		t.Fatalf("auto turn after the title: %v", work)
+	}
+	// naming one tool keeps the other defined; a call of it is not shown
+	named, out := serve(withTools(tuiRuntimeCpBody("q1", "ANS1", "NAMED CALLHELD"), `{"type":"tool","name":"read_file"}`), "NAMED")
+	if named["tools.json"] != first["tools.json"] || !strings.Contains(named["stdin"], "You must call the read_file tool") {
+		t.Fatalf("tool_choice naming a tool: %v", named)
+	}
+	if strings.Contains(out, "held_1") {
+		t.Fatalf("a call of a tool tool_choice ruled out reached the client: %s", out)
+	}
+}
+
+// A tool tool_choice rules out is defined but not offered: its MCP call is
+// answered as not executed and never registered for the client, and a
+// tool_choice none request is not typed into an idle process that offers
+// the tools (their launches differ), nor is its own process reused.
+func TestClaudeTUIRuntimeToolChoiceRuledOutToolIsHeld(t *testing.T) {
+	_, b := tuiRuntimeScRuntime(t)
+	tools := []Tool{{Name: "exec_command"}, {Name: "read_file"}}
+	none := &tuiRuntimeRequest{Request: Request{Tools: tools, ToolChoice: "none"}}
+	auto := &tuiRuntimeRequest{Request: Request{Tools: tools}}
+	named := &tuiRuntimeRequest{Request: Request{Tools: tools, ToolChoice: "name:read_file"}}
+	run := &tuiRuntimeSubscriptionRun{bridge: b, interactive: true, pending: map[string]chan tuiRuntimeMcpToolResult{}}
+	run.offerLocked(named, false)
+	if run.tools["exec_command"] || !run.tools["read_file"] || !run.heldTools["exec_command"] || !run.offers(tools) {
+		t.Fatalf("name:read_file: offered %v held %v", run.tools, run.heldTools)
+	}
+	run.offerLocked(none, false)
+	if len(run.tools) != 0 || !run.heldTools["read_file"] {
+		t.Fatalf("none: offered %v held %v", run.tools, run.heldTools)
+	}
+	b.mu.Lock()
+	b.runs["choice-token"] = run
+	b.mu.Unlock()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/_magpie/claude-mcp/choice-token", strings.NewReader(`{"tool_call_id":"c1","name":"exec_command","arguments":{}}`))
+	req.SetPathValue("token", "choice-token")
+	b.mcpCall(rec, req)
+	if !strings.Contains(rec.Body.String(), "NOT executed") || !strings.Contains(rec.Body.String(), `"is_error":true`) {
+		t.Fatalf("ruled-out tool call: %s", rec.Body.String())
+	}
+	b.mu.Lock()
+	_, registered := b.calls["c1"]
+	b.mu.Unlock()
+	if registered || len(run.pending) != 0 {
+		t.Fatal("ruled-out tool call was registered for the client")
+	}
+
+	if a, n := tuiRuntimeHotConfigOf(auto, "m", "", "", false), tuiRuntimeHotConfigOf(none, "m", "", "", false); a.tools == n.tools {
+		t.Fatal("a tool_choice none launch matches one offering the tools")
+	}
+	if tuiRuntimeToolChoiceHeld(auto) != nil || len(tuiRuntimeToolChoiceHeld(none)) != 2 {
+		t.Fatal("held by tool_choice")
+	}
+	ad, _ := json.Marshal(tuiRuntimeInteractiveDefinedTools(auto, false))
+	nd, _ := json.Marshal(tuiRuntimeInteractiveDefinedTools(none, false))
+	if string(ad) != string(nd) {
+		t.Fatalf("definitions differ by tool_choice: %s vs %s", ad, nd)
+	}
+}
+
 // After a compaction replaces the history H with a summary S, S is a new
 // prefix: it must not resume the old H session (the client dropped H), and
 // it builds its own new checkpoint. A later turn on S resumes S's session.

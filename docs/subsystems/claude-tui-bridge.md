@@ -384,7 +384,7 @@ session header resume rather than rebuild (the au-exit case). Tests:
 apart from a rebuild by the first reply's row uuid) and the real
 `TestClaudeTUIRuntimeRealServe/no_header_after_the_TTL`.
 
-### Held tools (a compaction offering none)
+### Held tools (a turn that may call none)
 
 A request offering no tools that goes on from a session that had them
 (Codex's own compaction request carries none: openai/codex#37305) is run
@@ -398,6 +398,19 @@ go), and a resumed no-tools turn loads them (`heldTools`). The turn is
 told no tools are available (`tuiRuntimeHeldToolsConstraint`); a call of a
 held tool is answered as not executed by `mcpCall` and its transcript row
 is never shown to the client. A turn with images is not held.
+
+A request that sends tools but whose `tool_choice` rules some or all of
+them out is held the same way (`tuiRuntimeInteractiveDefinedTools`,
+`tuiRuntimeToolChoiceHeld`): its run defines every tool it was sent, byte
+for byte as a turn offering them would, and offers only those
+`tool_choice` lets it call (`offerLocked`); the rest are held, and a
+`none` turn is told no tools are available. Grok asks for its session
+title with the conversation's tools and `tool_choice: none`; with the
+definitions dropped, each title wrote the whole conversation to the cache
+again (au-exit 10-29: three titles, ~667k written, checkpoints with no
+tools hash). Such a turn isn't typed into an idle process that offers the
+tools (`claimHot` compares the offered set), and its own process is not
+reused (`held`). Test: `TestClaudeTUIRuntimeNativeCheckpointToolChoiceHoldsTools`.
 
 ### The outer conversation's checkpoint
 
@@ -587,7 +600,9 @@ Instruction identity and runtime settings are independent. A resumable history
 with the same rendered instructions resumes the same native session and sends
 only the new suffix, even when tools, tool choice, effort or output schema
 change between completed turns. Each new wrapper receives the current MCP
-definitions and launch settings. A forced tool choice (`required`, `name:`)
+definitions and launch settings; the definitions are every tool sent,
+whatever `tool_choice` offers (held tools, above). A tool choice
+(`required`, `name:`, and `none` with tools sent)
 is a `<current_turn_constraint>` placed before the current request of every
 prompt kind (first turn, rebuild, resume, parked copy), never inside the
 instructions, so it binds that request only; a read-only recovery turn, which
