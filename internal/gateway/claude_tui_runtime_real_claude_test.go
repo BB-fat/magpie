@@ -204,6 +204,28 @@ func tuiRuntimeRealCachePrefix(t *testing.T) {
 		z, _ := json.Marshal(clean(current))
 		t.Fatalf("the resumed upstream request changed its prior message prefix:\nbefore=%s\nafter=%s", a, z)
 	}
+
+	// The same tools with tool_choice none (Grok's session title) keep
+	// their definitions upstream, and the prior messages.
+	up.mu.Lock()
+	mark := len(up.requests)
+	up.mu.Unlock()
+	b = bridge()
+	title := `{"model":"` + tuiRuntimeRealModel + `","tools":` + tuiRuntimeRealTools + `,"tool_choice":{"type":"none"},"max_tokens":64,"stream":true,"messages":[{"role":"user","content":"say hello"},{"role":"assistant","content":"PONG"},{"role":"user","content":"and again"},{"role":"assistant","content":"PONG"},{"role":"user","content":"name this session"}]}`
+	if out, code, msg := tuiRuntimeRealServe(t, b, ctx, profile, "cache-prefix", title); code != 200 || out.text() != "PONG" {
+		t.Fatalf("tool_choice none: %d %s %q", code, msg, out.text())
+	}
+	tuiRuntimeWaitGone(t, b, profile)
+	up.mu.Lock()
+	rows := append([]json.RawMessage(nil), up.requests[mark:]...)
+	up.mu.Unlock()
+	titled := main(rows)
+	if !reflect.DeepEqual(old["tools"], titled["tools"]) {
+		t.Fatal("tool definitions changed on a tool_choice none turn")
+	}
+	if titledMessages := titled["messages"].([]any); len(titledMessages) <= len(current) || !reflect.DeepEqual(clean(current), clean(titledMessages[:len(current)])) {
+		t.Fatal("the tool_choice none turn changed its prior message prefix")
+	}
 }
 
 // The gateway killed outright: its wrapper is told to end (its parent's

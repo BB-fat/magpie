@@ -2800,11 +2800,37 @@ func (r *tuiRuntimeSubscriptionRun) offers(tools []Tool) bool {
 		return true
 	}
 	for _, t := range tools {
-		if !r.tools[t.Name] {
+		if !r.tools[t.Name] && !r.heldTools[bridgeToolName(t.Name)] {
 			return false
 		}
 	}
 	return true
+}
+
+// offerLocked makes req's tools the ones the run's calls are shown for:
+// those its tool_choice lets the agent call, and the private image tool
+// when image is set. The others stay defined, held (heldTools). r.mu is
+// held, or the run is not yet shared.
+func (r *tuiRuntimeSubscriptionRun) offerLocked(req *tuiRuntimeRequest, image bool) {
+	r.tools = map[string]bool{}
+	r.addOfferedLocked(req)
+	if image {
+		r.tools[tuiRuntimeInteractiveImageTool] = true
+	}
+}
+
+// addOfferedLocked adds req's tools to the run's, as offerLocked.
+func (r *tuiRuntimeSubscriptionRun) addOfferedLocked(req *tuiRuntimeRequest) {
+	for _, t := range req.Tools {
+		if toolChoiceOffers(req.ToolChoice, t.Name) {
+			r.tools[t.Name] = true
+			continue
+		}
+		if r.heldTools == nil {
+			r.heldTools = map[string]bool{}
+		}
+		r.heldTools[bridgeToolName(t.Name)] = true
+	}
 }
 
 // continueWith hands the agent its tool results: at once for the calls it
@@ -3691,7 +3717,7 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 	// text, and its model went on to write its own calls as text.
 	var more []tuiRuntimeBridgeTool
 	if run != nil && !run.offers(req.Tools) {
-		more = bridgeTools(&req.Request)
+		more = bridgeToolDefs(&req.Request)
 	}
 	var events <-chan Event
 	if run != nil {
@@ -3773,9 +3799,7 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 			// is compared against what the helper now exposes.
 			contextSnapshot := tuiRuntimeInteractiveContextDiagnosticFromRequest(req)
 			run.mu.Lock()
-			for _, t := range req.Tools {
-				run.tools[t.Name] = true
-			}
+			run.addOfferedLocked(req)
 			run.interactiveContextSnapshot = &contextSnapshot
 			run.mu.Unlock()
 		}
@@ -3823,13 +3847,7 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 			run.mu.Lock()
 			run.httpConsumers++
 			keepPrivateImage := run.interactive && len(run.images) > 0 && !readOnly
-			run.tools = map[string]bool{}
-			for _, t := range req.Tools {
-				run.tools[t.Name] = true
-			}
-			if keepPrivateImage {
-				run.tools[tuiRuntimeInteractiveImageTool] = true
-			}
+			run.offerLocked(req, keepPrivateImage)
 			if !readOnly && search.Name != "" && tuiRuntimeSettings.SearchHandler != nil {
 				run.search, run.searchName = tuiRuntimeSettings.SearchHandler, search.Name
 			}

@@ -985,7 +985,8 @@ func tuiRuntimeRenderInteractiveTurnConstraint(req *tuiRuntimeRequest) string {
 		return "<current_turn_constraint>\nYou must call at least one available tool before answering this request.\n</current_turn_constraint>\n\n"
 	case strings.HasPrefix(req.ToolChoice, "name:"):
 		return fmt.Sprintf("<current_turn_constraint>\nYou must call the %s tool before answering this request.\n</current_turn_constraint>\n\n", strings.TrimPrefix(req.ToolChoice, "name:"))
-	case len(req.heldTools) > 0:
+	case len(req.heldTools) > 0, req.ToolChoice == "none" && len(req.Tools) > 0:
+		// its run defines the tools for the cache but may call none
 		return tuiRuntimeHeldToolsConstraint
 	}
 	return ""
@@ -1091,8 +1092,37 @@ func tuiRuntimeInteractiveImageID(p Part) string {
 	return fmt.Sprintf("img_%x", sum[:8])
 }
 
+// interactiveTools are the tools req's tool_choice lets its run call, with
+// the private image tool when the turn has images.
 func tuiRuntimeInteractiveTools(req *tuiRuntimeRequest, hasImages bool) []tuiRuntimeBridgeTool {
-	tools := bridgeTools(&req.Request)
+	return tuiRuntimeWithImageTool(bridgeTools(&req.Request), hasImages)
+}
+
+// interactiveDefinedTools are the definitions req's run is started with:
+// every tool the client sent, whatever tool_choice offers this turn. They
+// are the head of the prefix Anthropic caches, so a turn that may call
+// none of them (tool_choice none: Grok's session title) keeps them, held.
+func tuiRuntimeInteractiveDefinedTools(req *tuiRuntimeRequest, hasImages bool) []tuiRuntimeBridgeTool {
+	return tuiRuntimeWithImageTool(bridgeToolDefs(&req.Request), hasImages)
+}
+
+// toolChoiceHeld is the MCP names of req's tools its tool_choice rules out
+// this turn: defined for the cache, refused when called (heldTools). Nil
+// when it rules out none.
+func tuiRuntimeToolChoiceHeld(req *tuiRuntimeRequest) map[string]bool {
+	var held map[string]bool
+	for _, t := range req.Tools {
+		if !toolChoiceOffers(req.ToolChoice, t.Name) {
+			if held == nil {
+				held = map[string]bool{}
+			}
+			held[bridgeToolName(t.Name)] = true
+		}
+	}
+	return held
+}
+
+func tuiRuntimeWithImageTool(tools []tuiRuntimeBridgeTool, hasImages bool) []tuiRuntimeBridgeTool {
 	if !hasImages {
 		return tools
 	}
@@ -1422,20 +1452,25 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		}
 	}
 	toolsPath := filepath.Join(tmp, "tools.json")
-	toolBytes, _ := json.Marshal(tuiRuntimeInteractiveTools(req, len(images) > 0))
-	var held map[string]bool
+	defined := tuiRuntimeInteractiveDefinedTools(req, len(images) > 0)
+	toolBytes, _ := json.Marshal(defined)
+	held, heldFrom := tuiRuntimeToolChoiceHeld(req), "tool_choice"
 	if len(req.heldTools) > 0 && len(images) == 0 {
 		// the session's previous definitions, byte for byte: the head of
 		// the prefix Anthropic cached for it (heldTools)
 		var defs []tuiRuntimeBridgeTool
 		if json.Unmarshal(req.heldTools, &defs) == nil {
-			toolBytes, held = req.heldTools, map[string]bool{}
+			defined, toolBytes, held, heldFrom = defs, req.heldTools, map[string]bool{}, "checkpoint"
 			for _, d := range defs {
 				held[d.Name] = true
 			}
 		}
 	}
 	toolsHash := tuiRuntimeKeepInteractiveTools(toolBytes)
+	if held != nil {
+		// counts and the hash only: never a definition or the conversation
+		log.Printf("Claude interactive tools held for the cache: from=%s defined=%d held=%d hash=%.12s", heldFrom, len(defined), len(held), toolsHash)
+	}
 	if err := os.WriteFile(toolsPath, toolBytes, 0o600); err != nil {
 		clean()
 		return nil, nil, err
@@ -1688,12 +1723,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 			release()
 		}
 	}
-	for _, t := range req.Tools {
-		run.tools[t.Name] = true
-	}
-	if len(images) > 0 {
-		run.tools[tuiRuntimeInteractiveImageTool] = true
-	}
+	run.offerLocked(req, len(images) > 0)
 	run.timer = time.AfterFunc(tuiRuntimeInteractiveActiveLongest, run.abort)
 	segment := run.attach()
 	b.mu.Lock()
