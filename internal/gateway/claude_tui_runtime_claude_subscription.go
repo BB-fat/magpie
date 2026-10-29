@@ -258,6 +258,7 @@ type tuiRuntimeSubscriptionRun struct {
 	nativeLease                *os.File                                        // held by Runtime and inherited by wrapper; only plugin feature-gated
 	interactiveContextSnapshot *tuiRuntimeInteractiveContextDiagnosticSnapshot // immutable per-field compatibility and diagnostic digests
 	firstTurnAnchorKey         string                                          // first user message hash, only for opt-in first-turn durable recovery
+	scope                      string                                          // isolation domain its session may be taken up in (tuiRuntimePrefixScope)
 	workKey                    string                                          // state key of the run's cwd, where its session's transcript is
 	nativeWork                 string                                          // cwd and config dir of its native transcript,
 	nativeConfigDir            string                                          // which keepToolRepair copies

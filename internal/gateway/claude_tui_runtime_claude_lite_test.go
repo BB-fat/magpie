@@ -663,19 +663,20 @@ func TestClaudeTUIRuntimeLiteParkedRunLetGoResumesItsOwnSession(t *testing.T) {
 func TestClaudeTUIRuntimeLiteParkedBranchNeedsExactlyItsCalls(t *testing.T) {
 	b := tuiRuntimeNewSubscriptionBridge()
 	t.Cleanup(func() { tuiRuntimeBridges.Delete(b) })
-	run := &tuiRuntimeSubscriptionRun{interactive: true, owner: tuiRuntimeScOwner, outerSession: tuiRuntimeScOuter, model: "claude-opus-5-5",
+	run := &tuiRuntimeSubscriptionRun{interactive: true, owner: tuiRuntimeScOwner, outerSession: tuiRuntimeScOuter, scope: tuiRuntimeErScope, model: "claude-opus-5-5",
 		sessionID: "inner-x", workKey: tuiRuntimeInteractiveSessionStateKey(tuiRuntimeScOwner, tuiRuntimeScOuter), closed: true, parkedAt: time.Now(), shown: []tuiRuntimeShownCall{{id: "call_1"}, {id: "call_2"}}}
 	req, err := tuiRuntimeParseRequest([]byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"go"},{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"echo","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"x"}]}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
+	req.scope = tuiRuntimeErScope
 	run.interactiveContextSnapshot = tuiRuntimeTestContextSnapshot(req)
 	b.noteLiteParked(run)
-	if _, _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, tuiRuntimeScOuter, "claude-opus-5-5", "", req); ok {
+	if _, _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, "claude-opus-5-5", "", req); ok {
 		t.Fatal("one result of two calls resumed the run's session")
 	}
 	b.noteLiteParked(run)
-	if _, _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, tuiRuntimeScOuter, "claude-sonnet-5-5", "", req); ok {
+	if _, _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, "claude-sonnet-5-5", "", req); ok {
 		t.Fatal("another model resumed the run's session")
 	}
 }

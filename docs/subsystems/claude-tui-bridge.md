@@ -146,13 +146,18 @@ invalid IDs and read-only recovery keep their existing refusal behavior.
 This is a pending tool round, not a successful checkpoint or a live MCP
 waiter. `takeToolRepair` finds it by the returned call IDs, including for a
 stateless client, using the existing ownership, context, history and result
-set checks. The copied transcript receives the real results and any actual
-new user content, with no synthetic acknowledgment or continuation prompt.
-The wrapper launches `--resume <copy> --reply-on-resume`: Claude queries the
-history ending in the user/tool results itself. This requires native Claude
-support for `--reply-on-resume` (exercised with 2.1.308); it is never replaced
-with a generated user instruction. Normal calls still use their live MCP
-waiters. Only a complete delivered answer saves a new checkpoint.
+set checks. The copied transcript receives the real results and
+`liteResultsReceived`, as a parked run's copy does (`liteParkedBranch`), and
+is resumed with the turn typed in (`tuiRuntimeRepairPrompt`): what the user
+said with the results, or `liteContinueText` when they came alone. A typed
+prompt waits for the MCP tools to be listed (`waitForMcpListed`). The copy was
+resumed with `--reply-on-resume` before: Claude Code sends that first
+request itself as soon as its input box is up, before the interactive TUI
+has listed its MCP tools, so it went out with `tools: []` (2.1.304 and
+2.1.308; au-exit 10-29: 28 tools became 0, a cache write, and a one-line
+answer that ended the turn). `MCP_CONNECTION_NONBLOCKING=false` didn't
+change that. Normal calls still use their live MCP waiters. Only a complete
+delivered answer saves a new checkpoint.
 
 The pending copy is held in memory for the existing five-minute tool wait;
 a stateless run retains its cwd slot until the continuation ends or the
@@ -161,8 +166,10 @@ the caller's complete history can rebuild a session through the ordinary
 fallback instead. The original transcript is not edited. The prefix before
 the corrected call is retained, but cache reuse from the changed tool name
 onwards is not guaranteed. Tests: `TestClaudeTUIRuntimeBareToolRound`,
-`TestClaudeTUIRuntimeBareToolMustBeOffered` and
-`TestClaudeTUIRuntimeRealBareTool`.
+`TestClaudeTUIRuntimeBareToolMustBeOffered`,
+`TestClaudeTUIRuntimeBareToolResumesWithTheTurnTyped` and
+`TestClaudeTUIRuntimeRealBareTool`, whose continuation must be asked with
+the run's tools.
 
 The runtime reads the gateway's shared search-in-progress context.
 A TUI run used as the search provider enables native `WebSearch`; an ordinary
@@ -299,8 +306,10 @@ A request can go on from a tool round of a run that has since made more
 calls: the client kept the round's calls and results, then something else
 came. Codex does this when the user steers mid-turn: it drops the call the
 run went on to make, and sends the round's results with what the user said.
-`noteLiteParked` keeps each round a conversation's run parked on, by its
-calls' ids, in `liteRounds`, for `tuiRuntimeClaudeCacheTTL` (an hour) from
+Grok does it after a Ctrl-C and a new ask: it keeps the round and drops the
+reply that was cut off. `noteLiteParked` keeps each round a scoped run parked
+on, with or without a session header, by its calls' ids, in `liteRounds`,
+for `tuiRuntimeClaudeCacheTTL` (an hour) from
 when it was made, whatever the run does after; a run keeps the keys of the
 histories it was told (`heard`, `toldKeys`, the latest 256). `liteEarlierRound`
 copies the run's session up to the round's calls, appends the results and
@@ -311,14 +320,19 @@ run is left as it is: its own calls may still be answered.
 It does so only when the results answer every call of the round; the run
 was told this very history up to them (`wasTold`: the round's reply and
 its calls included, budget notices aside as `follows` allows); its owner,
-model and context (`interactiveEquivalentContext`) are the request's, in
+scope (`tuiRuntimePrefixScope`: account and gateway key), model and
+context (`interactiveEquivalentContext`) are the request's, in
 the request's mode (lean or not: a new turn after the setting changed is
 rebuilt); the run no longer waits on those calls (that is
 `liteParkedBranch`'s case); and the session's reply that made them made
 no other call (a held tool's included). Otherwise the turn goes on as
 before: a cut point, the checkpoint or a rebuild. On au-exit (10-28) a
 steer rebuilt a 44k conversation, writing 22k of it to the cache again; on
-a 280k one a rebuild writes nearly all of it.
+a 280k one a rebuild writes nearly all of it. On 10-29 a Grok request with
+no session header, after a Ctrl-C, wrote 104k of a 126k conversation
+again: these paths were tried only with a header then. `liteParkedBranch`
+and `takeToolRepair` take up a run's session only in its own scope too
+(`TestClaudeTUIRuntimeLiteBranchesStayInTheirScope`).
 
 ### Native checkpoints (strict prefix, no session header)
 
@@ -534,12 +548,15 @@ the upstream cache's TTL. Tests: `TestClaudeTUIRuntimeServeNextTurnSameProcess`,
 
 ## Prompt-cache continuity
 
-A stable supported session header lets a completed conversation resume its
-native session and send only the new suffix. Without such a header, later
-text turns run stateless and rebuild the supplied history; live tool results
-can still find their run by call ID. Clients that need checkpoint continuity
-should send `X-Magpie-Session` or an agent session header recognized by
-`sessionOf`. Body metadata and `prompt_cache_key` are not checkpoint IDs.
+What a request goes on from is found by its prefix in its scope, with or
+without a session header: the idle process at that prefix, a native
+checkpoint, or a run's tool round (above). A request with no scope runs
+stateless and rebuilds the supplied history; live tool results can still
+find their run by call ID. A session header (`X-Magpie-Session` or an agent
+session header recognized by `sessionOf`) still names the legacy outer
+checkpoint, read after those, and the per-conversation retry, cancel and
+tool-journal bookkeeping. Body metadata and `prompt_cache_key` are not
+checkpoint IDs.
 
 The request's history is authoritative. A changed first user message
 (client compaction or edits) does not remove its session identity. If it

@@ -28,6 +28,10 @@ const tuiRuntimeErNative = `{"type":"user","uuid":"u1","parentUuid":null,"sessio
 {"type":"assistant","uuid":"t2","parentUuid":"x1","sessionId":"inner-steer","message":{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"call_2","name":"mcp__magpie__write_file","input":{"path":"b"}}]}}
 `
 
+// erScope is the scope of a request the test server is sent: the account,
+// asked with no gateway key.
+var tuiRuntimeErScope = tuiRuntimePrefixScope(tuiRuntimeScOwner, "")
+
 func tuiRuntimeErParse(t *testing.T, messages string) *tuiRuntimeRequest {
 	t.Helper()
 	req, err := tuiRuntimeParseRequest([]byte(`{"model":"claude-opus-5-5","max_tokens":64,` + tuiRuntimeErTools + `,"messages":[` + messages + `]}`))
@@ -35,6 +39,7 @@ func tuiRuntimeErParse(t *testing.T, messages string) *tuiRuntimeRequest {
 		t.Fatal(err)
 	}
 	req.Model = "claude-opus-5-5"
+	req.scope = tuiRuntimeErScope
 	return req
 }
 
@@ -43,8 +48,20 @@ func tuiRuntimeErParse(t *testing.T, messages string) *tuiRuntimeRequest {
 // as native says, under the conversation's cwd.
 func tuiRuntimeErParkedPast(t *testing.T, b *tuiRuntimeSubscriptionBridge, native string) (*tuiRuntimeSubscriptionRun, string) {
 	t.Helper()
-	work := tuiRuntimeInteractiveSessionStateKey(tuiRuntimeScOwner, tuiRuntimeScOuter)
-	dir, err := tuiRuntimeInteractiveSessionWorkDir(tuiRuntimeScOwner, tuiRuntimeScOuter)
+	return tuiRuntimeErParkedPastIn(t, b, native, tuiRuntimeScOuter)
+}
+
+// erParkedPastIn is erParkedPast for a conversation with session header
+// outer, or with none (""): its cwd then named by its root, as a run of a
+// request with no header has it (nativeRootKey).
+func tuiRuntimeErParkedPastIn(t *testing.T, b *tuiRuntimeSubscriptionBridge, native, outer string) (*tuiRuntimeSubscriptionRun, string) {
+	t.Helper()
+	told := tuiRuntimeErParse(t, tuiRuntimeErRound+`,{"role":"user","content":[`+tuiRuntimeErResult+`]}`)
+	work := tuiRuntimeInteractiveSessionStateKey(tuiRuntimeScOwner, outer)
+	if outer == "" {
+		work = tuiRuntimeNativeRootKey(told)
+	}
+	dir, err := tuiRuntimeInteractiveWorkDirForKey(work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,8 +74,7 @@ func tuiRuntimeErParkedPast(t *testing.T, b *tuiRuntimeSubscriptionBridge, nativ
 	if err := os.WriteFile(path, []byte(native), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	told := tuiRuntimeErParse(t, tuiRuntimeErRound+`,{"role":"user","content":[`+tuiRuntimeErResult+`]}`)
-	run := &tuiRuntimeSubscriptionRun{interactive: true, owner: tuiRuntimeScOwner, outerSession: tuiRuntimeScOuter, model: "claude-opus-5-5",
+	run := &tuiRuntimeSubscriptionRun{interactive: true, owner: tuiRuntimeScOwner, outerSession: outer, scope: tuiRuntimeErScope, model: "claude-opus-5-5",
 		sessionID: "inner-steer", workKey: work, closed: true}
 	run.interactiveContextSnapshot = tuiRuntimeTestContextSnapshot(told)
 	run.shown, run.parkedAt = []tuiRuntimeShownCall{{id: "call_1"}}, time.Now()
@@ -67,7 +83,7 @@ func tuiRuntimeErParkedPast(t *testing.T, b *tuiRuntimeSubscriptionBridge, nativ
 	// It goes on (continueWith clears its park) while another
 	// conversation's run parks: the round is kept all the same.
 	run.shown, run.parkedAt = nil, time.Time{}
-	b.noteLiteParked(&tuiRuntimeSubscriptionRun{interactive: true, owner: tuiRuntimeScOwner, outerSession: "another",
+	b.noteLiteParked(&tuiRuntimeSubscriptionRun{interactive: true, owner: tuiRuntimeScOwner, outerSession: "another", scope: tuiRuntimeErScope,
 		shown: []tuiRuntimeShownCall{{id: "call_x"}}, parkedAt: time.Now()})
 	run.shown, run.parkedAt = []tuiRuntimeShownCall{{id: "call_2"}}, time.Now()
 	b.noteLiteParked(run)
@@ -80,11 +96,22 @@ func tuiRuntimeErParkedPast(t *testing.T, b *tuiRuntimeSubscriptionBridge, nativ
 // that round — the rows the model saw byte for byte, a prefix Anthropic
 // has cached — where it was rebuilt from the request, the history written
 // to the cache again (au-exit 10-28). The run is left waiting on its call.
+// A client with no session header (Grok, au-exit 10-29: a Ctrl-C and a new
+// ask wrote 104k of a 126k conversation again) is found by its prefix the
+// same way.
 func TestClaudeTUIRuntimeLiteSteerForksAtTheRoundTheClientKept(t *testing.T) {
+	for _, outer := range []string{tuiRuntimeScOuter, ""} {
+		t.Run("header="+map[bool]string{true: "yes", false: "none"}[outer != ""], func(t *testing.T) {
+			tuiRuntimeErSteerForks(t, outer)
+		})
+	}
+}
+
+func tuiRuntimeErSteerForks(t *testing.T, outer string) {
 	_, runs := tuiRuntimeScWrapper(t)
 	rt, b := tuiRuntimeScRuntime(t)
-	run, native := tuiRuntimeErParkedPast(t, b, tuiRuntimeErNative)
-	code, out := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, `{"model":"claude-opus-5-5","max_tokens":64,`+tuiRuntimeErTools+`,"messages":[`+
+	run, native := tuiRuntimeErParkedPastIn(t, b, tuiRuntimeErNative, outer)
+	code, out := tuiRuntimeScServe(t, rt, outer, `{"model":"claude-opus-5-5","max_tokens":64,`+tuiRuntimeErTools+`,"messages":[`+
 		tuiRuntimeErRound+`,{"role":"user","content":[`+tuiRuntimeErResult+`,{"type":"text","text":"换成 b.txt 再写"}]}]}`)
 	if code != 200 || !strings.Contains(out, "SC_ANSWER") {
 		t.Fatalf("steered turn failed: %d %s", code, out)
@@ -189,5 +216,57 @@ func TestClaudeTUIRuntimeLiteEarlierRoundNeedsAllTheRoundsResults(t *testing.T) 
 	steer := tuiRuntimeErParse(t, two+`,{"role":"user","content":[`+tuiRuntimeErResult+`,{"type":"text","text":"换成 b.txt 再写"}]}`)
 	if _, _, _, _, ok := b.liteEarlierRound(tuiRuntimeScOwner, "claude-opus-5-5", "", steer); ok {
 		t.Fatal("forked a round with one of its two calls unanswered")
+	}
+}
+
+// A run's session is taken up only in its own scope: another gateway key
+// asking the same account with the same history never goes on in it, with
+// or without a session header. An unscoped run's session goes with it, so
+// none of its rounds is kept.
+func TestClaudeTUIRuntimeLiteBranchesStayInTheirScope(t *testing.T) {
+	tuiRuntimeScWrapper(t)
+	steer := func(scope string) *tuiRuntimeRequest {
+		req := tuiRuntimeErParse(t, tuiRuntimeErRound+`,{"role":"user","content":[`+tuiRuntimeErResult+`,{"type":"text","text":"换成 b.txt 再写"}]}`)
+		req.scope = scope
+		return req
+	}
+	other := tuiRuntimePrefixScope(tuiRuntimeScOwner, "another-key")
+	for _, outer := range []string{tuiRuntimeScOuter, ""} {
+		t.Run("header="+map[bool]string{true: "yes", false: "none"}[outer != ""], func(t *testing.T) {
+			b := tuiRuntimeNewSubscriptionBridge()
+			t.Cleanup(func() { tuiRuntimeBridges.Delete(b) })
+			tuiRuntimeErParkedPastIn(t, b, tuiRuntimeErNative, outer)
+			if _, _, _, _, ok := b.liteEarlierRound(tuiRuntimeScOwner, "claude-opus-5-5", "", steer(other)); ok {
+				t.Fatal("another key's request forked the run's session")
+			}
+			if _, _, _, _, ok := b.liteEarlierRound(tuiRuntimeScOwner, "claude-opus-5-5", "", steer(tuiRuntimeErScope)); !ok {
+				t.Fatal("the run's own scope did not fork its session")
+			}
+
+			b = tuiRuntimeNewSubscriptionBridge()
+			t.Cleanup(func() { tuiRuntimeBridges.Delete(b) })
+			run, _ := tuiRuntimeErParkedPastIn(t, b, tuiRuntimeErNative, outer)
+			// told the ask alone and parked on call_1 still: liteParkedBranch's case
+			run.heard(tuiRuntimeErParse(t, `{"role":"user","content":"把结果写进 notes.txt"}`).Messages)
+			run.shown, run.parkedAt = []tuiRuntimeShownCall{{id: "call_1"}}, time.Now()
+			b.noteLiteParked(run)
+			if _, _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, "claude-opus-5-5", "", steer(other)); ok {
+				t.Fatal("another key's request took the parked run's session")
+			}
+			if _, _, _, _, ok := b.liteParkedBranch(tuiRuntimeScOwner, "claude-opus-5-5", "", steer(tuiRuntimeErScope)); !ok {
+				t.Fatal("the run's own scope did not take its parked session")
+			}
+		})
+	}
+	b := tuiRuntimeNewSubscriptionBridge()
+	t.Cleanup(func() { tuiRuntimeBridges.Delete(b) })
+	b.noteLiteParked(&tuiRuntimeSubscriptionRun{interactive: true, owner: tuiRuntimeScOwner,
+		shown: []tuiRuntimeShownCall{{id: "call_u"}}, parkedAt: time.Now()})
+	b.mu.Lock()
+	_, parked := b.liteParked["call_u"]
+	_, round := b.liteRounds["call_u"]
+	b.mu.Unlock()
+	if parked || round {
+		t.Fatal("an unscoped run's round was kept")
 	}
 }

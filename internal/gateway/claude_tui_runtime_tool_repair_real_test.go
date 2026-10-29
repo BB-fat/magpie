@@ -48,13 +48,37 @@ func TestClaudeTUIRuntimeRealBareTool(t *testing.T) {
 					continue
 				}
 				found = true
-				for _, extra := range []string{tuiRuntimeLiteResultsReceived, tuiRuntimeLiteContinueText, "No response requested.", "No such tool"} {
+				for _, extra := range []string{"No response requested.", "No such tool"} {
 					if strings.Contains(string(raw), extra) {
 						t.Fatalf("repaired history added %q: %s", extra, raw)
 					}
 				}
+				// results alone: the copy is resumed with liteContinueText
+				// after liteResultsReceived, as a parked run's copy is
+				for _, typed := range []string{tuiRuntimeLiteResultsReceived, tuiRuntimeLiteContinueText} {
+					if !strings.Contains(string(raw), typed) {
+						t.Fatalf("repaired round was not continued with %q: %s", typed, raw)
+					}
+				}
 				if !strings.Contains(string(raw), `"name":"mcp__magpie__echo"`) {
 					t.Fatalf("native history did not normalize the tool: %s", raw)
+				}
+				// the continuation is asked with the run's tools: au-exit
+				// 10-29, a request with none answered one line and ended
+				var asked struct {
+					Tools []struct {
+						Name string `json:"name"`
+					} `json:"tools"`
+				}
+				if err := json.Unmarshal(raw, &asked); err != nil {
+					t.Fatal(err)
+				}
+				offered := false
+				for _, tl := range asked.Tools {
+					offered = offered || tl.Name == "mcp__magpie__echo"
+				}
+				if !offered {
+					t.Fatalf("the repaired round was continued with tools %v, not mcp__magpie__echo", asked.Tools)
 				}
 			}
 			if !found {
