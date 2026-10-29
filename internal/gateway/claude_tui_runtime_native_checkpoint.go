@@ -57,6 +57,10 @@ const (
 	tuiRuntimeNativeCheckpointLongest  = 30 * 24 * time.Hour
 )
 
+// tuiRuntimeNativeCheckpointMu serializes saves, each a load, change and
+// write of the whole store. Readers never take it: a save replaces the file
+// by rename, so a read sees the whole store before or after it, and a resume
+// never waits on another turn's disk sync.
 var tuiRuntimeNativeCheckpointMu sync.Mutex
 
 func tuiRuntimeNativeCheckpointPath() string {
@@ -213,9 +217,7 @@ func tuiRuntimeFindNativeCheckpoint(req *tuiRuntimeRequest, model string) (tuiRu
 	if req.scope == "" {
 		return tuiRuntimeNativeCheckpoint{}, nil, false
 	}
-	tuiRuntimeNativeCheckpointMu.Lock()
 	store, err := tuiRuntimeLoadNativeCheckpoints()
-	tuiRuntimeNativeCheckpointMu.Unlock()
 	if err != nil {
 		// a store that doesn't read is unknown, not empty: resume from
 		// nothing (the request is rebuilt), and never write over it

@@ -146,10 +146,9 @@ const forwardedClaudeArgs = jsonSchema
     )
   : args.claudeArgs;
 const resumedSessionId = claudeResumeSessionId(forwardedClaudeArgs);
-const forkedSession = Boolean(resumedSessionId && forwardedClaudeArgs.includes("--fork-session"));
 let resumedTranscriptPathBeforeLaunch: string | null = null;
 let resumedTranscriptBaselineRows: number | null = null;
-if (resumedSessionId && !forkedSession) {
+if (resumedSessionId) {
   try {
     resumedTranscriptPathBeforeLaunch = await findTranscriptBySessionId(resumedSessionId);
     if (resumedTranscriptPathBeforeLaunch) {
@@ -256,7 +255,7 @@ let lastApiErrorStatus: number | null = null;
 
 // A serve run's turn in flight: the gateway's name for it, its prompt, and
 // the transcript row its own rows begin at (null: at the last row holding
-// its prompt, as a fork's first turn is found). One turn runs at a time.
+// its prompt, when that row isn't known). One turn runs at a time.
 type ServeTurn = { segment: string; prompt: string; baselineRows: number | null };
 let serveTurn: ServeTurn | null = null;
 let serveTurnsDone = 0;
@@ -715,12 +714,11 @@ function pumpServeQueue(): void {
 }
 
 // The row a turn's rows begin at: for the first, where print mode finds
-// it (the resumed session's length before launch, the whole of a new one,
-// the prompt in a fork); after that, the session's length as the turn is
+// it (the resumed session's length before launch, the whole of a new
+// one); after that, the session's length as the turn is
 // typed, the last turn having ended in it.
 function serveTurnBaseline(): number | null {
   if (serveTurnsDone === 0) {
-    if (forkedSession) return null;
     if (resumedSessionId) return resumedTranscriptBaselineRows;
     return 0;
   }
@@ -1010,18 +1008,14 @@ function currentTurnTranscriptRows(rows: TranscriptRow[]): TranscriptRow[] | nul
   // wrapper launched. Prefer that pre-launch row boundary: Claude Code may
   // normalize a large pasted prompt in the persisted user row, so exact prompt
   // matching can reject an otherwise complete turn at Stop-hook catch-up.
-  if (!forkedSession && resumedSessionId) {
+  if (resumedSessionId) {
     if (resumedTranscriptBaselineRows !== null) {
       return transcriptRowsAfterBaseline(rows, resumedTranscriptBaselineRows);
     }
     if (!initialMessage) return null;
     return transcriptRowsFromLastUserPrompt(rows, initialMessage);
   }
-  // A fork creates a new transcript containing inherited rows, so there is no
-  // old-file baseline to trust; retain the fail-closed prompt boundary there.
-  if (!forkedSession) return rows;
-  if (!initialMessage) return null;
-  return transcriptRowsFromLastUserPrompt(rows, initialMessage);
+  return rows;
 }
 
 async function hydrateTranscriptFromStopEvent(stopEvent: RuntimeStopEvent): Promise<void> {
@@ -1034,7 +1028,7 @@ async function hydrateTranscriptFromStopEvent(stopEvent: RuntimeStopEvent): Prom
     const rows = currentTurnTranscriptRows(allRows);
     if (!rows) {
       pendingPrintFailure = {
-        message: "Fork transcript did not contain the submitted prompt; refusing inherited-history replay.",
+        message: "Transcript did not contain the submitted turn; refusing inherited-history replay.",
       };
       return;
     }
@@ -1118,7 +1112,7 @@ async function emitClaudeStreamResult(stopEvent: RuntimeStopEvent, resultText: s
       const allRows = await readTranscript(stopEvent.transcript_path);
       const rows = currentTurnTranscriptRows(allRows);
       if (!rows) {
-        failPrint("Fork transcript did not contain the submitted prompt; refusing inherited-history replay.");
+        failPrint("Transcript did not contain the submitted turn; refusing inherited-history replay.");
         return false;
       }
       emitClaudeStreamCatchUp(rows);
@@ -1405,10 +1399,10 @@ async function startTranscriptTail(): Promise<void> {
   let transcriptPath: string;
   try {
     transcriptPath =
-      (!forkedSession && resumedSessionId
+      (resumedSessionId
         ? resumedTranscriptPathBeforeLaunch ?? await findTranscriptBySessionId(resumedSessionId)
         : null) ??
-      (compatStreamJsonPrint && !forkedSession ? await waitForRuntimeTranscriptPath(1_500) : null) ??
+      (compatStreamJsonPrint ? await waitForRuntimeTranscriptPath(1_500) : null) ??
       await waitForFreshTranscriptForCwd(targetCwd, transcriptsBefore, ctrl.signal);
   } catch (err) {
     if (printMode) {

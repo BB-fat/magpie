@@ -829,6 +829,13 @@ var BLOCKED_OPTIONS = new Map([
       label: "--replay-user-messages",
       reason: "replay mode is not supported through this wrapper."
     }
+  ],
+  [
+    "--fork-session",
+    {
+      label: "--fork-session",
+      reason: "the wrapper tails the session it resumes; fork it by copying its transcript to a new session and resume that."
+    }
   ]
 ]);
 var CLAUDE_COMMANDS = new Map([
@@ -872,7 +879,6 @@ var OPTION_ARITY = new Map([
   ["--exclude-dynamic-system-prompt-sections", "none"],
   ["--fallback-model", "required"],
   ["--file", "variadic"],
-  ["--fork-session", "none"],
   ["--from-pr", "required"],
   ["-h", "none"],
   ["--help", "none"],
@@ -11079,10 +11085,9 @@ if (printMode && !serveMode && !initialMessage && !replyOnResume) {
 var jsonSchema = loadPrintJsonSchema();
 var forwardedClaudeArgs = jsonSchema ? mergeAppendSystemPrompt(args.claudeArgs, makeJsonSchemaSystemPrompt(jsonSchema.compact)) : args.claudeArgs;
 var resumedSessionId = claudeResumeSessionId(forwardedClaudeArgs);
-var forkedSession = Boolean(resumedSessionId && forwardedClaudeArgs.includes("--fork-session"));
 var resumedTranscriptPathBeforeLaunch = null;
 var resumedTranscriptBaselineRows = null;
-if (resumedSessionId && !forkedSession) {
+if (resumedSessionId) {
   try {
     resumedTranscriptPathBeforeLaunch = await findTranscriptBySessionId(resumedSessionId);
     if (resumedTranscriptPathBeforeLaunch) {
@@ -11567,8 +11572,6 @@ function pumpServeQueue() {
 }
 function serveTurnBaseline() {
   if (serveTurnsDone === 0) {
-    if (forkedSession)
-      return null;
     if (resumedSessionId)
       return resumedTranscriptBaselineRows;
     return 0;
@@ -11822,7 +11825,7 @@ function currentTurnTranscriptRows(rows) {
       return transcriptRowsAfterBaseline(rows, serveTurn.baselineRows);
     return transcriptRowsFromLastUserPrompt(rows, serveTurn.prompt);
   }
-  if (!forkedSession && resumedSessionId) {
+  if (resumedSessionId) {
     if (resumedTranscriptBaselineRows !== null) {
       return transcriptRowsAfterBaseline(rows, resumedTranscriptBaselineRows);
     }
@@ -11830,11 +11833,7 @@ function currentTurnTranscriptRows(rows) {
       return null;
     return transcriptRowsFromLastUserPrompt(rows, initialMessage);
   }
-  if (!forkedSession)
-    return rows;
-  if (!initialMessage)
-    return null;
-  return transcriptRowsFromLastUserPrompt(rows, initialMessage);
+  return rows;
 }
 async function hydrateTranscriptFromStopEvent(stopEvent) {
   const transcriptPath = stopEvent.transcript_path;
@@ -11847,7 +11846,7 @@ async function hydrateTranscriptFromStopEvent(stopEvent) {
     const rows = currentTurnTranscriptRows(allRows);
     if (!rows) {
       pendingPrintFailure = {
-        message: "Fork transcript did not contain the submitted prompt; refusing inherited-history replay."
+        message: "Transcript did not contain the submitted turn; refusing inherited-history replay."
       };
       return;
     }
@@ -11912,7 +11911,7 @@ async function emitClaudeStreamResult(stopEvent, resultText) {
       const allRows = await readTranscript(stopEvent.transcript_path);
       const rows = currentTurnTranscriptRows(allRows);
       if (!rows) {
-        failPrint("Fork transcript did not contain the submitted prompt; refusing inherited-history replay.");
+        failPrint("Transcript did not contain the submitted turn; refusing inherited-history replay.");
         return false;
       }
       emitClaudeStreamCatchUp(rows);
@@ -12174,7 +12173,7 @@ async function startTranscriptTail() {
   const compatStreamJsonPrint = printMode && outputFormat === "stream-json" && !desplegaFormat;
   let transcriptPath;
   try {
-    transcriptPath = (!forkedSession && resumedSessionId ? resumedTranscriptPathBeforeLaunch ?? await findTranscriptBySessionId(resumedSessionId) : null) ?? (compatStreamJsonPrint && !forkedSession ? await waitForRuntimeTranscriptPath(1500) : null) ?? await waitForFreshTranscriptForCwd(targetCwd, transcriptsBefore, ctrl.signal);
+    transcriptPath = (resumedSessionId ? resumedTranscriptPathBeforeLaunch ?? await findTranscriptBySessionId(resumedSessionId) : null) ?? (compatStreamJsonPrint ? await waitForRuntimeTranscriptPath(1500) : null) ?? await waitForFreshTranscriptForCwd(targetCwd, transcriptsBefore, ctrl.signal);
   } catch (err) {
     if (printMode) {
       desplegaDebug("live transcript discovery failed; falling back to Stop hook result", {

@@ -64,7 +64,13 @@ func tuiRuntimeServeFake(logPath string) {
 		}
 		say(map[string]any{"type": "bridge_accepted", "segment": c.Segment})
 		if strings.Contains(c.Input, "HOLD") {
-			select {} // the turn never ends: its client goes, or the test ends it
+			// the turn never ends: its client goes, or the test ends it.
+			// Held on stdin, which the run closes or its kill ends; a bare
+			// select{} has nothing left to run, and the runtime ends the
+			// fake as deadlocked at once.
+			for in.Scan() {
+			}
+			return
 		}
 		reply := fmt.Sprintf("reply %d from %d", turns, pid)
 		say(map[string]any{"type": "assistant", "uuid": fmt.Sprintf("%s-%d", sid, turns), "session_id": sid,
