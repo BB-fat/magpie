@@ -14,18 +14,23 @@ import (
 // A conversation's prefix is named by a digest of its messages exactly as
 // the client sent them: every role, text, tool call's id, name and
 // arguments, tool result with its error flag and images, image and file
-// with a digest of its bytes, and thinking with its signature, in order.
-// Nothing is ignored or matched loosely: a history whose digest is equal is
-// the same history. Only representations the protocol defines as equal are
-// made one: a tool call's arguments as one JSON object, whatever their key
-// order and spacing. Where a part came from (SignedBy, SealedBy) and the
-// client's cache marks are not content and are left out.
+// with a digest of its bytes, in order. Nothing else is ignored or matched
+// loosely: a history whose digest is equal is the same history. Only
+// representations the protocol defines as equal are made one: a tool call's
+// arguments as one JSON object, whatever their key order and spacing. Where
+// a part came from (SignedBy, SealedBy) and the client's cache marks are not
+// content and are left out.
+//
+// Thinking is left out too. A chat completions client, and a gateway in
+// front of one, sends its history back without the thinking the reply had,
+// so a digest over it never matched the checkpoint and every turn was
+// rebuilt (au-exit 10-29). The native session keeps its own thinking.
 //
 // Each digest is a hash of the one before and of one message, each field
 // length-prefixed, so one pass over a request names every prefix of it:
 // H0 = H(version, scope), Hi = H(Hi-1, message i). The scope is the
 // isolation domain a native session may be found in (tuiRuntimePrefixScope).
-const tuiRuntimePrefixVersion = "claude-tui-prefix-v1"
+const tuiRuntimePrefixVersion = "claude-tui-prefix-v2"
 
 type tuiRuntimePrefixDigest [32]byte
 
@@ -73,7 +78,7 @@ func tuiRuntimePrefixNext(prev tuiRuntimePrefixDigest, m Message) tuiRuntimePref
 	e := tuiRuntimePrefixEncoder{h}
 	e.str("message")
 	e.str(m.Role)
-	e.parts(m.Parts)
+	e.parts(slices.DeleteFunc(slices.Clone(m.Parts), func(p Part) bool { return p.Kind == Thinking }))
 	var d tuiRuntimePrefixDigest
 	h.Sum(d[:0])
 	return d
