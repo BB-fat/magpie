@@ -515,10 +515,14 @@ func (b *tuiRuntimeSubscriptionBridge) letGoAbandonedRuns(owner string, req *tui
 
 // startLite starts the native run for a turn, keeping as much of the
 // prefix Anthropic cached as it can: the session of the deepest reply the
-// request goes on from, in place or forked there (startLiteAtPoint); the
-// conversation's checkpoint as earlier versions saved it; else a first turn
-// as a first turn, and a session rebuilt from the request's history.
-// Stateless requests (outerSession "") never read or write either.
+// request goes on from, in place or forked there
+// (startLiteAtNativeCheckpoint); a copy of a run's session at the tool
+// round the request goes on from (liteParkedBranch, liteEarlierRound); the
+// conversation's checkpoint as earlier versions saved it, for a request
+// with a session header; else a first turn as a first turn, and a session
+// rebuilt from the request's history. What a request goes on from is found
+// by its prefix in its scope, with or without a session header; an
+// unscoped request has no session to go on from.
 func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
 	if repair, err := b.takeToolRepair(owner, model, req); err != nil {
 		return nil, nil, err
@@ -539,8 +543,8 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 	if run, events, err, ok := b.startLiteAtNativeCheckpoint(ctx, req, model, owner, outerSession, configDir); ok {
 		return run, events, err
 	}
-	if outerSession != "" {
-		if id, prompt, images, work, ok := b.liteParkedBranch(owner, outerSession, model, configDir, req); ok {
+	if req.scope != "" {
+		if id, prompt, images, work, ok := b.liteParkedBranch(owner, model, configDir, req); ok {
 			log.Printf("Claude interactive resuming the conversation's own session with its tool results")
 			b.anchorOuterThread(owner, outerSession, req)
 			copied := *req
@@ -554,6 +558,8 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 			copied.resumedCopy, copied.workKey = true, work
 			return b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
 		}
+	}
+	if outerSession != "" {
 		saved, savedOK, err := b.loadInteractiveSession(owner, outerSession)
 		if err != nil {
 			return nil, nil, err
@@ -645,7 +651,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveRebuild(ctx context.Conte
 	if err != nil {
 		return nil, nil, err
 	}
-	log.Printf("Claude interactive starting a native session rebuilt from the request: history=%d stateless=%t", len(seeded.seedHistory), outerSession == "")
+	log.Printf("Claude interactive starting a native session rebuilt from the request: history=%d stateless=%t scoped=%t", len(seeded.seedHistory), outerSession == "", req.scope != "")
 	return b.startInteractiveWithPromptImages(ctx, seeded, model, configDir, owner, outerSession, prompt, "", images, false)
 }
 
@@ -653,7 +659,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveRebuild(ctx context.Conte
 // upstream does once a canonical start is verified.
 func (b *tuiRuntimeSubscriptionBridge) anchorOuterThread(owner, outerSession string, req *tuiRuntimeRequest) {
 	thread := firstWords(&req.Request)
-	if thread == "" {
+	if thread == "" || outerSession == "" {
 		return
 	}
 	key := tuiRuntimeInteractiveSessionStateKey(owner, outerSession)
@@ -721,13 +727,15 @@ func tuiRuntimeLiteTurnPrompt(req *tuiRuntimeRequest, turn []Message) (string, m
 
 // noteLiteParked keeps r, a run now waiting on its tool calls, under each
 // of their ids for liteParkedBranch, and the round they make for
-// liteEarlierRound.
+// liteEarlierRound. A scoped run's session stays in its own cwd, header or
+// not, so a request of its scope can go on from it; an unscoped run's is
+// removed with it, so only its repaired round (takeToolRepair) is kept.
 func (b *tuiRuntimeSubscriptionBridge) noteLiteParked(r *tuiRuntimeSubscriptionRun) {
 	if b == nil || !r.interactive {
 		return
 	}
 	r.mu.Lock()
-	if r.outerSession == "" && r.toolRepair == nil {
+	if r.scope == "" && r.toolRepair == nil {
 		r.mu.Unlock()
 		return
 	}
@@ -784,8 +792,8 @@ type tuiRuntimeLiteRound struct {
 // (au-exit 10-28: a steer wrote 22k of a 44k conversation again). The run
 // is left as it is: its own calls may still be answered. It reports false
 // unless the results answer the round's calls, all of them, and the run
-// was told this very history up to them (the reply's calls included), with
-// the request's context and in its mode.
+// was told this very history up to them (the reply's calls included), in
+// the request's scope, with the request's context and in its mode.
 func (b *tuiRuntimeSubscriptionBridge) liteEarlierRound(owner, model, configDir string, req *tuiRuntimeRequest) (string, string, map[string]Part, string, bool) {
 	k, results, turn := tuiRuntimeLiteTail(req.Messages)
 	answered := map[string]bool{}
@@ -817,6 +825,7 @@ func (b *tuiRuntimeSubscriptionBridge) liteEarlierRound(owner, model, configDir 
 	}
 	run.mu.Lock()
 	sid, runModel, work, runOwner, snapshot := run.sessionID, run.model, run.workKey, run.owner, run.interactiveContextSnapshot
+	runScope := run.scope
 	detached := run.toolRepair != nil
 	// still waiting on these very calls: liteParkedBranch takes or refuses them
 	waiting := false
@@ -824,7 +833,7 @@ func (b *tuiRuntimeSubscriptionBridge) liteEarlierRound(owner, model, configDir 
 		waiting = waiting || answered[c.id]
 	}
 	run.mu.Unlock()
-	if detached || waiting || sid == "" || runOwner != owner || runModel != model || work == "" ||
+	if detached || waiting || sid == "" || runOwner != owner || runScope == "" || runScope != req.scope || runModel != model || work == "" ||
 		snapshot == nil || snapshot.lean != req.leanPrompt || !run.interactiveEquivalentContext(req) ||
 		!run.wasTold(append(slices.Clone(req.Messages[:k]), results...)) {
 		return "", "", nil, "", false
@@ -858,8 +867,9 @@ func (b *tuiRuntimeSubscriptionBridge) liteEarlierRound(owner, model, configDir 
 // has cached, where a session rebuilt from the request (liteSeed) would
 // write the whole conversation again. It returns the copy's id, the turn's
 // prompt and the state key of the session's cwd, or false when req is not
-// exactly those results. Other conversations' parked runs are not touched.
-func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, model, configDir string, req *tuiRuntimeRequest) (string, string, map[string]Part, string, bool) {
+// exactly those results, or comes from another scope. Other conversations'
+// parked runs are not touched.
+func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, model, configDir string, req *tuiRuntimeRequest) (string, string, map[string]Part, string, bool) {
 	_, results, turn := tuiRuntimeLiteTail(req.Messages)
 	answered := map[string]bool{}
 	for _, m := range results {
@@ -880,14 +890,14 @@ func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, outerSession, mod
 		return "", "", nil, "", false
 	}
 	run.mu.Lock()
-	sid, runModel, work, runOwner := run.sessionID, run.model, run.workKey, run.owner
+	sid, runModel, work, runOwner, runScope := run.sessionID, run.model, run.workKey, run.owner, run.scope
 	detached := run.toolRepair != nil
 	calls := make([]string, 0, len(run.shown))
 	for _, c := range run.shown {
 		calls = append(calls, c.id)
 	}
 	run.mu.Unlock()
-	if detached || sid == "" || runOwner != owner || runModel != model || work == "" || len(calls) == 0 || len(answered) != len(calls) ||
+	if detached || sid == "" || runOwner != owner || runScope == "" || runScope != req.scope || runModel != model || work == "" || len(calls) == 0 || len(answered) != len(calls) ||
 		!run.interactiveEquivalentContext(req) || !run.follows(req.Messages) {
 		return "", "", nil, "", false
 	}
