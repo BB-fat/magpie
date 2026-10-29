@@ -161,8 +161,11 @@ func (b *tuiRuntimeSubscriptionBridge) takeToolRepair(owner, model string, req *
 		return nil, nil
 	}
 	run.mu.Lock()
-	repair := run.toolRepair
+	repair, scope := run.toolRepair, run.scope
 	run.mu.Unlock()
+	if scope != req.scope {
+		return nil, nil
+	}
 	if repair == nil || !run.interactiveEquivalentContext(req) || !run.follows(req.Messages) ||
 		tuiRuntimeValidateInteractiveMatchedContinuation(req, run, parts, tuiRuntimeByExactID) != nil || !repair.claim() {
 		return nil, nil

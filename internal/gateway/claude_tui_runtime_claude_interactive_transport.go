@@ -1655,7 +1655,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 			s := tuiRuntimeInteractiveContextDiagnosticFromRequest(req)
 			return &s
 		}(),
-		outerSession: outerSession, threadKey: firstWords(&req.Request), sessionID: resumeID, images: images, workKey: workKey,
+		outerSession: outerSession, threadKey: firstWords(&req.Request), sessionID: resumeID, images: images, scope: req.scope, workKey: workKey,
 		nativeWork: work, nativeConfigDir: configDir,
 		heldTools: held, toolsHash: toolsHash,
 		searchName: req.tuiSearchTool, nativeSearch: nativeSearch, schema: len(req.Format.schema()) > 0, readOnlyRecovery: readOnly, tmuxSocket: sock,
