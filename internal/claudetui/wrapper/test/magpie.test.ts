@@ -21,6 +21,16 @@ test("native reply-on-resume is forwarded without inventing a prompt", () => {
   expect(result.parsed.claudeArgs).toEqual(["--resume", "saved-session", "--reply-on-resume"]);
 });
 
+// The wrapper tails the session it resumes; a fork Claude Code makes is a
+// new transcript it would not find. Magpie forks by copying the transcript.
+test("--fork-session is refused, not forwarded", () => {
+  const result = parseCliArgs(["-p", "--resume", "saved-session", "--fork-session", "hi"]);
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("--fork-session was accepted");
+  expect(result.error.arg).toBe("--fork-session");
+  expect(result.error.message).toContain("Unsupported Claude option --fork-session");
+});
+
 const testRoot = mkdtempSync(join(tmpdir(), "magpie-wrapper-test-"));
 afterAll(() => rmSync(testRoot, { recursive: true, force: true }));
 const dir = () => mkdtempSync(join(testRoot, "case-"));

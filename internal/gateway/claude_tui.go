@@ -311,6 +311,8 @@ type tuiResponder struct {
 
 func (t *tuiResponder) Header() http.Header { return t.w.Header() }
 
+func (t *tuiResponder) Client() provider.Protocol { return t.from }
+
 func (t *tuiResponder) Fail(status int, msg string) (int, string) {
 	return writeError(t.w, t.from, status, msg), msg
 }

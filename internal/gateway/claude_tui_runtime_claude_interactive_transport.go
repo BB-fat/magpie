@@ -1585,9 +1585,13 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	// conversation and issues its own /compact. The private native Claude Code
 	// session is only a tool executor for that conversation. Letting it compact
 	// independently creates an invisible second history that can diverge from
-	// the client's summarized transcript. Independent one-shot CLI invocations
-	// without a client session retain their native auto-compaction behavior.
-	env := tuiRuntimeInteractiveClaudeEnv(os.Environ(), outerSession != "" || readOnly)
+	// the client's summarized transcript. A scoped request without a session
+	// header is owned by its client too: its native session is checkpointed
+	// at the client's strict prefix and resumed or kept for its next turn
+	// (saveNativeCheckpoint, afterServeTurn), which a native compaction would
+	// make a summary of. Only unscoped one-shot invocations retain their
+	// native auto-compaction behavior.
+	env := tuiRuntimeInteractiveClaudeEnv(os.Environ(), outerSession != "" || req.scope != "" || readOnly)
 	// The wrapper runs this Claude Code and this tmux, and its hooks name
 	// the helper's tools by this server's prefix.
 	env = append(env, "CLAUDE_BRIDGE_CLAUDE_PATH="+claudePath, "CLAUDE_BRIDGE_MCP_SERVER="+tuiRuntimeSettings.MCPServer)

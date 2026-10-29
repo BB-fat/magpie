@@ -3863,7 +3863,7 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 			run.abort()
 		}
 	}
-	reply := &tuiRuntimeReplyRecorder{}
+	reply := tuiRuntimeNewReplyRecorder(out.Client())
 	relayed := reply.tee(events)
 	defer tuiRuntimeDrain(relayed)
 	return out.Relay(req, relayed, abort, func(said, stop string, ok bool) {

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"hash"
 	"slices"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // A conversation's prefix is named by a digest of its messages exactly as
@@ -184,13 +186,34 @@ func tuiRuntimeCanonicalJSON(v map[string]any) []byte {
 // the client is told it and sends it back in its next request: thinking
 // blocks with their signatures, text, and tool calls with their arguments,
 // one part each, in order.
+//
+// A Messages client keeps the reply as the blocks it was sent, and those
+// are the encoder's: a search is two blocks of its own, and after it each
+// line naming a page found is a text block (search_cite.go). For one, the
+// reply is collected as the relay collects it and laid out by
+// renderAnthropic, whose blocks are the stream's, then read back as its
+// next request is (messagesReply).
 type tuiRuntimeReplyRecorder struct {
 	parts []Part
 	// open is the kind the last part is still being written as
 	open Kind
+	// messages: the client speaks Anthropic Messages, and col collects
+	// the reply for messagesReply
+	messages bool
+	col      collector
+}
+
+// tuiRuntimeNewReplyRecorder records the reply for a client of the API
+// client.
+func tuiRuntimeNewReplyRecorder(client provider.Protocol) *tuiRuntimeReplyRecorder {
+	return &tuiRuntimeReplyRecorder{messages: client == provider.Anthropic}
 }
 
 func (rec *tuiRuntimeReplyRecorder) note(ev Event) {
+	if rec.messages {
+		rec.col.add(ev)
+		return
+	}
 	last := func() *Part { return &rec.parts[len(rec.parts)-1] }
 	switch ev.Kind {
 	case KThinkStart:
@@ -227,6 +250,9 @@ func (rec *tuiRuntimeReplyRecorder) note(ev Event) {
 // message is the reply as the client's next request holds it. Text the
 // relay sends as one block is one part here too.
 func (rec *tuiRuntimeReplyRecorder) message() Message {
+	if rec.messages {
+		return tuiRuntimeMessagesReply(rec.col.finish())
+	}
 	parts := slices.Clone(rec.parts)
 	for i := range parts {
 		if parts[i].Kind == ToolCall {
@@ -234,6 +260,30 @@ func (rec *tuiRuntimeReplyRecorder) message() Message {
 		}
 	}
 	return Message{Role: "assistant", Parts: parts}
+}
+
+// messagesReply is res as a Messages client sends it back: the blocks
+// renderAnthropic lays it out in, read by the parser its next request goes
+// through. A reply that doesn't read back is one with no parts, which
+// nothing is resumed at.
+func tuiRuntimeMessagesReply(res Result) Message {
+	var rendered struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(renderAnthropic(res, ""), &rendered) != nil {
+		return Message{Role: "assistant"}
+	}
+	body, err := json.Marshal(map[string]any{"messages": []any{
+		map[string]any{"role": "assistant", "content": rendered.Content},
+	}})
+	if err != nil {
+		return Message{Role: "assistant"}
+	}
+	req, err := parseAnthropic(body)
+	if err != nil || len(req.Messages) != 1 {
+		return Message{Role: "assistant"}
+	}
+	return req.Messages[0]
 }
 
 // tee forwards events as they come, noting each, and closes its own channel

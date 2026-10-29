@@ -120,5 +120,9 @@ magpie embeds this wrapper in its Claude TUI bridge
   waits the wrapper turns off Claude Code's own idle actions
   (`IDLE_QUIET_SETTINGS`: prompt suggestions, the away recap, idle
   compaction). `test/serve.test.ts` tests these.
+- `--fork-session` is refused (`BLOCKED_OPTIONS`), and its path through the
+  transcript tail is removed: magpie forks a session by copying its
+  transcript and resumes the copy, so a resumed run always tails the
+  session it names.
 - Dependencies: `zod` 4.6.6, locked in `bun.lock`, built into
   `dist/claude-bridge.js`; `test/magpie.test.ts` tests the changes.

@@ -250,7 +250,7 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 			run.abort()
 		}
 	}
-	reply := &tuiRuntimeReplyRecorder{}
+	reply := tuiRuntimeNewReplyRecorder(out.Client())
 	relayed := reply.tee(events)
 	defer tuiRuntimeDrain(relayed)
 	return out.Relay(req, relayed, abort, func(said, stop string, ok bool) {

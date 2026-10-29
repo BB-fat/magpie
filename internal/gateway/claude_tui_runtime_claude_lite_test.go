@@ -1001,6 +1001,46 @@ func TestClaudeTUIRuntimeNativeCheckpointCorruptStore(t *testing.T) {
 	}
 }
 
+// A resume finds its checkpoint while another turn's save holds the store's
+// lock (as it does across that save's disk sync): readers never wait on it.
+func TestClaudeTUIRuntimeNativeCheckpointFindSkipsSaveLock(t *testing.T) {
+	dir := t.TempDir()
+	old := tuiRuntimeSettings
+	t.Cleanup(func() { tuiRuntimeSettings = old })
+	initTUIRuntime(&tuiRuntimeConfig{StateDir: dir})
+	scope := "scope"
+	msgs := []Message{
+		{Role: "user", Parts: []Part{{Kind: Text, Text: "u1"}}},
+		{Role: "assistant", Parts: []Part{{Kind: Text, Text: "a1"}}},
+		{Role: "user", Parts: []Part{{Kind: Text, Text: "u2"}}},
+	}
+	digests := tuiRuntimePrefixDigests(scope, msgs)
+	if err := tuiRuntimeSaveNativeCheckpoint(tuiRuntimeNativeCheckpoint{
+		Prefix: tuiRuntimeNativeCheckpointKey(scope, digests[1])[len(scope)+1:], Scope: scope,
+		SessionID: "sid", Row: "r", Work: "w", InstructionKey: "i",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	req := &tuiRuntimeRequest{}
+	req.scope = scope
+	req.Messages = msgs
+	tuiRuntimeNativeCheckpointMu.Lock()
+	defer tuiRuntimeNativeCheckpointMu.Unlock()
+	found := make(chan bool, 1)
+	go func() {
+		_, _, ok := tuiRuntimeFindNativeCheckpoint(req, "m")
+		found <- ok
+	}()
+	select {
+	case ok := <-found:
+		if !ok {
+			t.Fatal("the saved checkpoint was not found")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("finding a checkpoint waited on a save's lock")
+	}
+}
+
 // scWaitReaped waits for every run's process to be reaped.
 func tuiRuntimeScWaitReaped(t *testing.T, rt *tuiRuntime) {
 	t.Helper()

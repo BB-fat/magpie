@@ -216,7 +216,9 @@ downloads one. Hooks run that Bun by its absolute path (`process.execPath`
 in `buildInternalHookCommand`), so no `bun` on PATH is needed. Every hook
 is written to the run's own `.claude/settings.local.json`; the user's
 `~/.claude/settings.json` is never written (the wrapper's install and
-uninstall flags are left out). The trust record goes to the account's
+uninstall flags are left out). `--fork-session` is refused: the wrapper
+tails the session it resumes, and the gateway forks a session by copying
+its transcript (`tuiRuntimeForkTranscript`). The trust record goes to the account's
 `.claude.json` (`CLAUDE_CONFIG_DIR`); under magpie the wrapper refuses to
 start without one. A JSON Schema is passed in a file (one argument holds
 128 KiB on Linux) and checked within bounds: schema 256 KiB, reply 4 MiB,
@@ -327,12 +329,23 @@ isolation scope (`tuiRuntimePrefixScope(owner, caller key)`) — never by an
 external session header. `ended` records one (`saveNativeCheckpoint`) for
 every complete reply of a scoped conversation, with or without a session
 header: the strict prefix of the request's messages plus the reply exactly
-as the client was told it (`tuiRuntimeReplyRecorder`), the native session,
+as the client was told it (`tuiRuntimeReplyRecorder`; for a Messages
+client, the blocks `renderAnthropic` lays it out in, which are the
+stream's, read back by the request parser, so a search's two blocks and
+each line citing a page found are parts of their own, as in the client's
+next request: `TestClaudeTUIRuntimeReplyRecorderKeepsMessagesBlocks`;
+another API's client is recorded as before), the native session,
 the uuid of the reply's last transcript row, the session's cwd, the model,
 the instruction key and the tool-definitions hash. They live in
 `<config>/claude-tui/claude-native-checkpoints.json` (30 days, 256 per
 scope, 4096 in all, oldest first); a store that doesn't read is not resumed
-from and not written over.
+from and not written over. A save holds the store's lock across its write
+and sync; a read never takes it, since the file is replaced by rename
+(`TestClaudeTUIRuntimeNativeCheckpointFindSkipsSaveLock`). The native Claude
+Code of a scoped request never compacts by itself, header or not
+(`DISABLE_AUTO_COMPACT=1`, and `idleCompaction: false` in the run's
+settings): a compaction would make its session a summary, not the prefix
+its checkpoint names (`TestClaudeTUIRuntimeInteractiveNoHeaderConversationIsCompactionOwner`).
 
 A conversation with no session header has a stable cwd of its own from its
 first turn on (`tuiRuntimeNativeRootKey`: the scope plus the digest of its
