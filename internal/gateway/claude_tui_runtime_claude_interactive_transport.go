@@ -1486,7 +1486,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 			clean()
 			return nil, nil, err
 		}
-		args = append(args, "--resume", resumeID, "--reply-on-resume")
+		args = append(args, "--resume", resumeID)
 	} else if readOnly && len(req.compactHistory) > 0 {
 		var seedPath string
 		resumeID, seedPath, err = tuiRuntimeWriteCompactionTranscript(work, configDir, req)
