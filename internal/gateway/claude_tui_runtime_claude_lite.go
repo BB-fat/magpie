@@ -212,13 +212,7 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	run.startKey = req.replayKey
 	run.httpConsumers++
 	keepImage := len(run.images) > 0
-	run.tools = map[string]bool{}
-	for _, t := range req.Tools {
-		run.tools[t.Name] = true
-	}
-	if keepImage {
-		run.tools[tuiRuntimeInteractiveImageTool] = true
-	}
+	run.offerLocked(req, keepImage)
 	if search.Name != "" && tuiRuntimeSettings.SearchHandler != nil {
 		run.search, run.searchName = tuiRuntimeSettings.SearchHandler, search.Name
 	}
