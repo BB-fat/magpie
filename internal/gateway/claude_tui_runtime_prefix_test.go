@@ -120,3 +120,39 @@ func TestClaudeTUIRuntimeReplyRecorderKeepsMessagesBlocks(t *testing.T) {
 		})
 	}
 }
+
+// A chat completions client (or a gateway in front of one) sends the reply
+// back without its thinking. Its next turn still finds the checkpoint the
+// reply made: au-exit 10-29 rebuilt every turn of such a conversation,
+// writing its whole history to the cache again each time.
+func TestClaudeTUIRuntimeNativeCheckpointFoundWithoutThinking(t *testing.T) {
+	tuiRuntimeTestInit(t, &tuiRuntimeConfig{StateDir: t.TempDir()})
+	scope := tuiRuntimePrefixScope("owner", "")
+	q1 := Message{Role: "user", Parts: []Part{{Kind: Text, Text: "q1"}}}
+	reply := Message{Role: "assistant", Parts: []Part{
+		{Kind: Thinking, Text: "the user asks", Signature: "sig-1"},
+		{Kind: Text, Text: "a1"},
+		{Kind: ToolCall, ID: "c1", Name: "Read", Args: json.RawMessage(`{"path":"go.mod"}`)},
+	}}
+	prefix := tuiRuntimePrefixOf(scope, []Message{q1, reply})
+	if err := tuiRuntimeSaveNativeCheckpoint(tuiRuntimeNativeCheckpoint{
+		Prefix: tuiRuntimeNativeCheckpointKey(scope, prefix)[len(scope)+1:], Scope: scope,
+		SessionID: "sess", Row: "row", Work: "work", Model: "m", InstructionKey: "k",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resent := Message{Role: "assistant", Parts: reply.Parts[1:]}
+	q2 := Message{Role: "user", Parts: []Part{{Kind: Text, Text: "q2"}}}
+	req := &tuiRuntimeRequest{scope: scope}
+	req.Messages = []Message{q1, resent, q2}
+	p, since, ok := tuiRuntimeFindNativeCheckpoint(req, "m")
+	if !ok || p.SessionID != "sess" || len(since) != 1 {
+		t.Fatalf("the checkpoint was not found from a history without thinking: ok=%t %+v since=%d", ok, p, len(since))
+	}
+	// what was said still counts
+	other := Message{Role: "assistant", Parts: []Part{{Kind: Text, Text: "a2"}, reply.Parts[2]}}
+	req.Messages = []Message{q1, other, q2}
+	if _, _, ok := tuiRuntimeFindNativeCheckpoint(req, "m"); ok {
+		t.Fatal("a reply with other text matched the checkpoint")
+	}
+}
