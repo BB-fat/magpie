@@ -18,8 +18,7 @@ production builds:
 - `magpie update auto on` is rejected; saving settings forces
   `noAutoUpdate` true so the GUI cannot re-enable official updates.
 
-Install newer custom builds from
-[BB-fat/magpie Releases](https://github.com/BB-fat/magpie/releases).
+Newer custom builds are built locally ([Building](#building)).
 
 Tests may set `MAGPIE_UPDATE_ALLOW_OFFICIAL=1` to exercise the upstream
 update path against a httptest feed; release builds do not set that.
@@ -90,6 +89,19 @@ Anthropic (`TestRealClaudeTUI`); not yet against a real subscription.
 
 - `.github/workflows/upstream-sync.yml` — daily (and manual) check for a new
   upstream release tag, merge into `custom` via a PR when tests pass.
-- `.github/workflows/custom-release.yml` — on `v*` tag, publish two assets:
-  `magpie-darwin-arm64.zip` (macOS Apple Silicon `magpie.app`, same as upstream)
-  and `magpie-cli-linux-amd64` (static Linux x86_64 CLI).
+
+No workflow builds or publishes this fork's binaries; a tag starts nothing.
+Builds are made locally (below).
+
+## Building
+
+From a clean checkout of the tag `v0.1.<upstream>-custom.<n>` on `custom`,
+the static Linux x86_64 CLI (what runs as `/usr/local/bin/magpie`):
+
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nogui -trimpath \
+  -ldflags="-s -w -X main.version=0.1.<upstream>-custom.<n>" -o magpie-cli-linux-amd64 .
+```
+
+Copy it to the host, check its sha256 there, keep the old binary as
+`magpie.bak.<version>`, replace it and restart the service.
