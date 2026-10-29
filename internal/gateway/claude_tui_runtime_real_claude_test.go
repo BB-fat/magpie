@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // TestRealClaudeTUI runs the real Claude Code in a real private tmux, by the
@@ -598,6 +600,9 @@ func (c *tuiRuntimeRecorder) Header() http.Header {
 }
 
 func (c *tuiRuntimeRecorder) Fail(status int, msg string) (int, string) { return status, msg }
+
+// Client is Messages: the real tests send Messages requests.
+func (c *tuiRuntimeRecorder) Client() provider.Protocol { return protoAnthropic }
 
 func (c *tuiRuntimeRecorder) Relay(events <-chan Event, _ bool, _ func(), ended func(said, stop string, ok bool)) (int, string) {
 	var said, stop, failed string

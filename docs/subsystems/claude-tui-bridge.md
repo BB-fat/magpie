@@ -117,6 +117,8 @@ from the fork's per-account mode control.
 | `MaxRSS` | `claudeTuiMaxRSSMiB`, else `claudeRunBudget` |
 | `CanSearch`, `SearchHandler`, `NoteLimits`, `MovedOff` | the gateway's search availability and web search, `provider.NoteClaudeLimits`, `provider.ClaudeCodeMovedOff` |
 | `LeanPrompt` | `settings.ClaudeLeanPrompt`, read for each request |
+| `IdleTTL` | `settings.ClaudeTuiIdleSeconds` as a duration, read per turn (unset: 60s, 0: none) |
+| `Nudge` | `claudeRoom.nudge`: a process that came to wait idle can be let go for room |
 
 ## The MCP server name and tool names
 
@@ -214,7 +216,9 @@ downloads one. Hooks run that Bun by its absolute path (`process.execPath`
 in `buildInternalHookCommand`), so no `bun` on PATH is needed. Every hook
 is written to the run's own `.claude/settings.local.json`; the user's
 `~/.claude/settings.json` is never written (the wrapper's install and
-uninstall flags are left out). The trust record goes to the account's
+uninstall flags are left out). `--fork-session` is refused: the wrapper
+tails the session it resumes, and the gateway forks a session by copying
+its transcript (`tuiRuntimeForkTranscript`). The trust record goes to the account's
 `.claude.json` (`CLAUDE_CONFIG_DIR`); under magpie the wrapper refuses to
 start without one. A JSON Schema is passed in a file (one argument holds
 128 KiB on Linux) and checked within bounds: schema 256 KiB, reply 4 MiB,
@@ -252,8 +256,8 @@ choice controls both the launch flag and work-directory settings.
   (`magpie-claude-pty-<gateway pid>-*`, their callback and tools files)
   (`tuiRuntimeSweep`).
 - `MAGPIE_CLAUDE_IDLE_MAX` and `MAGPIE_CLAUDE_IDLE_TTL` are the standard
-  bridge's idle pool alone: a TUI run ends with its reply, and its
-  conversation's next turn resumes the checkpointed session.
+  bridge's idle pool alone: a TUI run has its own idle wait
+  ([below](#a-process-kept-for-the-next-turn)).
 - Between a tool-use reply and its results, `tuiRuntimeBridge.Parked` contributes to
   `tuiRuntimeServer.Busy().Tools`. An attached HTTP response stays in request/bridge
   accounting instead; keep-awake and idle restart consumers see the waiting
@@ -316,57 +320,77 @@ before: a cut point, the checkpoint or a rebuild. On au-exit (10-28) a
 steer rebuilt a 44k conversation, writing 22k of it to the cache again; on
 a 280k one a rebuild writes nearly all of it.
 
-### Cut points
+### Native checkpoints (strict prefix, no session header)
 
-A cut point (`claude_tui_runtime_claude_interactive_points.go`) is where a
-native transcript holds a complete reply: the conversation's key up to
-that reply (`conversationKeys`, which names the owner) → the session, the
-uuid of the reply's last row, the session's cwd, the model, the
-instruction key and the reply key. `ended` records one for every complete
-reply, beside the checkpoint. Native transcripts only grow, so a point
-never changes. They live in `<config>/claude-tui/claude-interactive-points.json`
-(30 days, 128 per conversation, 4096 in all, the oldest go first); a store
-that doesn't read is not resumed from and not written over.
+A native checkpoint (`claude_tui_runtime_native_checkpoint.go`) is where a
+native transcript holds a complete reply, keyed by the **strict content
+prefix** the client sent up to and including that reply, within an
+isolation scope (`tuiRuntimePrefixScope(owner, caller key)`) — never by an
+external session header. `ended` records one (`saveNativeCheckpoint`) for
+every complete reply of a scoped conversation, with or without a session
+header: the strict prefix of the request's messages plus the reply exactly
+as the client was told it (`tuiRuntimeReplyRecorder`; for a Messages
+client, the blocks `renderAnthropic` lays it out in, which are the
+stream's, read back by the request parser, so a search's two blocks and
+each line citing a page found are parts of their own, as in the client's
+next request: `TestClaudeTUIRuntimeReplyRecorderKeepsMessagesBlocks`;
+another API's client is recorded as before), the native session,
+the uuid of the reply's last transcript row, the session's cwd, the model,
+the instruction key and the tool-definitions hash. They live in
+`<config>/claude-tui/claude-native-checkpoints.json` (30 days, 256 per
+scope, 4096 in all, oldest first); a store that doesn't read is not resumed
+from and not written over. A save holds the store's lock across its write
+and sync; a read never takes it, since the file is replaced by rename
+(`TestClaudeTUIRuntimeNativeCheckpointFindSkipsSaveLock`). The native Claude
+Code of a scoped request never compacts by itself, header or not
+(`DISABLE_AUTO_COMPACT=1`, and `idleCompaction: false` in the run's
+settings): a compaction would make its session a summary, not the prefix
+its checkpoint names (`TestClaudeTUIRuntimeInteractiveNoHeaderConversationIsCompactionOwner`).
 
-A request goes on from the deepest point its history extends: by the
-conversation's key (any of the owner's conversations, so the same history
-under another session id is found too), else, in its own conversation, by
-a reply the client kept while it rewrote what came before. It goes on in
-that session itself when no run writes it and nothing was said in it after
-the point (`claimSession`, `transcriptEndsAt`), else in a copy of the
-session up to the point (`forkTranscript`), in the session's own cwd. Both
-send Anthropic the prefix it cached for that reply; only a rebuild writes
-the history again. Changed instructions rebuild. A side question, a
-compaction, an edit of an earlier turn and a retried cut-off turn each
-continue their own transcript; none takes another's place.
+A conversation with no session header has a stable cwd of its own from its
+first turn on (`tuiRuntimeNativeRootKey`: the scope plus the digest of its
+first message), instead of borrowing a shared stateless slot whose
+transcript is wiped. Because the cwd is part of the cached system prompt,
+deriving it from the conversation's root — not from anything that changes
+as the conversation grows — keeps it identical on every turn, so the
+cached prefix holds. A compacted or edited history has a new first message
+and so a new root, as intended.
 
-A request offering no tools that goes on from a point whose run had them
+A request goes on from the deepest checkpoint its history extends
+(`startLiteAtNativeCheckpoint`, tried after the idle process and before any
+rebuild): for each prefix ending at an assistant reply, deepest first, the
+checkpoint under that exact prefix in the request's scope. The suffix after
+it must be new user input only. It resumes that session in place when no
+run writes it and the transcript still ends at the checkpoint's row, else
+forks it there. Changed instructions rebuild. Only then is Anthropic sent
+the prefix it has cached; a request whose history matches no checkpoint is
+rebuilt from the request. This is what lets consecutive requests without a
+session header resume rather than rebuild (the au-exit case). Tests:
+`TestClaudeTUIRuntimeNativeCheckpointResume` (a cp-wrapper transcript, told
+apart from a rebuild by the first reply's row uuid) and the real
+`TestClaudeTUIRuntimeRealServe/no_header_after_the_TTL`.
+
+### Held tools (a compaction offering none)
+
+A request offering no tools that goes on from a session that had them
 (Codex's own compaction request carries none: openai/codex#37305) is run
-with that run's MCP definitions byte for byte, held: tool definitions are
-the head of the prefix Anthropic cached, so dropping them wrote the whole
-conversation to the cache again (au-exit 10-27: cache_read 0 and 1249,
-~130k written, on both compactions). A point records the hash of its run's
-definitions (`keepInteractiveTools`, kept by hash in
-`<config>/claude-tui/claude-interactive-tools/`, unused for 30 days they
-go). The turn is told no tools are available
-(`tuiRuntimeHeldToolsConstraint`); a call of a held tool is answered as not
-executed by `mcpCall` and its transcript row is never shown to the client.
-A turn with images, or one going on from the checkpoint or a parked copy,
-is not held.
+with that session's MCP definitions byte for byte, held: tool definitions
+are the head of the prefix Anthropic cached, so dropping them wrote the
+whole conversation to the cache again (au-exit 10-27: cache_read 0 and
+1249, ~130k written, on both compactions). A checkpoint records the hash of
+its run's definitions (`keepInteractiveTools`, kept by hash in
+`<config>/claude-tui/claude-interactive-tools/`; unused for 30 days they
+go), and a resumed no-tools turn loads them (`heldTools`). The turn is
+told no tools are available (`tuiRuntimeHeldToolsConstraint`); a call of a
+held tool is answered as not executed by `mcpCall` and its transcript row
+is never shown to the client. A turn with images is not held.
 
-Limits: points are made at complete replies only; a reply that called tools
-is found by call id in memory (`liteParkedBranch`, and `liteEarlierRound`
-for an hour after its round) and not after a restart.
-Each fork is a copy of its transcript's rows; nothing removes interactive
-transcripts yet. With the opt-in durable tool journal
-(`MAGPIE_CLAUDE_DURABLE_TOOL_JOURNAL=1`), the native lease is still one per
-conversation, so a second branch's start is refused while another runs.
-A binary from before points ignores their file: rolling back keeps working
-from the checkpoint.
+### The outer conversation's checkpoint
 
-The conversation's checkpoint (below) is still written and read when no
-point is deeper. A point's session resumed in place makes that checkpoint
-dirty only when it names the same session. Checkpoints live in
+The conversation's checkpoint (below) is still written and read for a
+session with a header when no native checkpoint is deeper. A point's
+session resumed in place makes that checkpoint dirty only when it names
+the same session. Checkpoints live in
 `<config>/claude-tui/claude-interactive-sessions.json`; one that doesn't
 read is refused, never taken for none, and those not used for 30 days go.
 The safeguards beta is resolved before matching a live run, so unchanged
@@ -456,6 +480,58 @@ a tool runs neither refuses the results with 409 nor lets the run go. That
 turn's checkpoint is the run's mode, so the conversation's next turn is the
 one rebuilt.
 
+## A process kept for the next turn
+
+A run started for a request whose turn may be followed by its
+conversation's next (`claudeTuiIdleSeconds` > 0; not a schema answer, a
+read-only recovery or a repaired tool round) launches the wrapper with
+`--desplega-serve`. The wrapper then takes its turns as control lines on
+stdin, one JSON object a line (`serve-protocol.ts`): `{"op":"submit",
+"segment","input"}`, `{"op":"shutdown"}`. It emits `bridge_ready` once
+Claude Code's input box takes a prompt again and `bridge_accepted` for
+each turn typed in, beside each turn's ordinary stream-json lines and its
+terminal result. `dispatchServe` reads that stream for the process's whole
+life and hands each native turn's lines to a reader of its own
+(`readInteractiveOneTurn`), so a turn's end is not the process's; the
+Stop hook names the turn in flight in its `stop-event.json` (the run
+folder's `turn` file), so a Stop left from an earlier turn never completes
+a later one. While a serve run waits at its input box, the wrapper turns
+off Claude Code's own idle actions (`IDLE_QUIET_SETTINGS`: prompt
+suggestions, the away recap, idle compaction), any of which could type
+into the box a prompt is pasted in or move the session's last row.
+
+After a complete non-tool reply, the run is kept idle
+(`tuiRuntimeSubscriptionBridge.hot`, by the strict prefix digest its
+session now ends at) for `claudeTuiIdleSeconds` (default 60s, 0 keeps
+none). The next request is typed into that same process only when it goes
+on from exactly that prefix: the request's history up to the reply, the
+reply as its client was told it (recorded by `tuiRuntimeReplyRecorder`),
+then new user input — matched by `tuiRuntimePrefixOf` over
+`tuiRuntimePrefixScope(owner, caller key)`, so no outer session header is
+needed and two callers of one account never continue each other's native
+session. The launch must also match what a typed-in turn cannot change
+(`tuiRuntimeHotConfig`: account, caller, model, instructions and their
+place, effort, thinking, the MCP tool definitions byte for byte, native
+search, safeguards); a mismatch starts a new native session instead. One
+process serves one request: a claim removes it from the pool before
+anything is typed in.
+
+A turn the client gave up on, a failed one, a read-only-signaled one, or
+one whose session end is in any doubt is never kept: its process is ended
+and its cut points stay as they were. A cancellation acts only on the
+turn it belongs to (`letGoServeTurn`, by turn number), so a late cancel
+never kills a turn already handed to the next request. An idle process
+still counts in `claudeRoom` (it is not a served HTTP request), is the
+first let go when another needs room (`tuiRuntimeLetGoIdleForRoom`), is
+bounded per bridge (`tuiRuntimeServeIdleMost`), and its TTL timer carries
+a generation so a stale timer never kills a newer wait or a claimed turn.
+Nothing is said to Claude Code while it waits, and the wait is not tied to
+the upstream cache's TTL. Tests: `TestClaudeTUIRuntimeServeNextTurnSameProcess`,
+`TestClaudeTUIRuntimeServeStrictPrefix`, `TestClaudeTUIRuntimeServeIdleTTL`,
+`TestClaudeTUIRuntimeServeClaimBeatsTTL`, `TestClaudeTUIRuntimeServeLateCancel`,
+`TestClaudeTUIRuntimeServeIdleBounds`, and the real
+`TestClaudeTUIRuntimeRealServe`.
+
 ## Prompt-cache continuity
 
 A stable supported session header lets a completed conversation resume its
@@ -539,7 +615,7 @@ go test -tags nogui ./internal/claudebridge/ -count=1
 (cd internal/claudetui/wrapper && $BUN test)
 # the real Claude Code, tmux and Bun against a local stand-in for Anthropic
 MAGPIE_CLAUDE_TUI_REAL=1 MAGPIE_TUI_BUN=<bun> MAGPIE_TUI_CLAUDE=<claude> \
-  MAGPIE_TUI_MAGPIE=<a built magpie> go test -run '^TestClaudeTUIRuntimeRealClaudeTUI$' ./internal/gateway/
+  MAGPIE_TUI_MAGPIE=<a built magpie> go test -run '^TestClaudeTUIRuntimeReal' ./internal/gateway/
 ```
 
 `TestClaudeTUIRuntimeRealClaudeTUI/cache_prefix` compares the real CLI's outgoing tools,
@@ -547,6 +623,13 @@ system instructions (apart from its billing metadata), and previous message
 content before and after a checkpoint resume. Cache marks can move to a later
 boundary; equivalent plain-text string and block-array forms are normalized.
 The stand-in supplies no evidence of Anthropic's server-side cache hits.
+
+`TestClaudeTUIRuntimeRealServe` keeps the real Claude Code for the next
+turn: the next turn is typed into the same process (same upstream session
+id and message prefix), nothing is asked of Anthropic while it waits, and
+once its TTL ends the process the next turn resumes the native session
+from the reply's cut point. It asserts same-process continuation, not
+Anthropic's live cache hit rate.
 
 `claude-mode.test.cjs` exercises the Providers editor's mode selection,
 persistence across reload, failed saves and restoration to standard in

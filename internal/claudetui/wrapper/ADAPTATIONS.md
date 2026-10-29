@@ -114,5 +114,15 @@ magpie embeds this wrapper in its Claude TUI bridge
 - `json-schema.ts` checks a schema and a reply within bounds before zod
   sees them (`JSON_LIMITS`), and says at most 8 issues.
 - The native tmux ownership marker records the run's socket.
+- `--desplega-serve` keeps a run for more than one turn: prompts arrive as
+  control lines on stdin (`serve-protocol.ts`), the Stop hook names the turn
+  in flight (`stampedStopEvent`, the run folder's `turn` file), and while it
+  waits the wrapper turns off Claude Code's own idle actions
+  (`IDLE_QUIET_SETTINGS`: prompt suggestions, the away recap, idle
+  compaction). `test/serve.test.ts` tests these.
+- `--fork-session` is refused (`BLOCKED_OPTIONS`), and its path through the
+  transcript tail is removed: magpie forks a session by copying its
+  transcript and resumes the copy, so a resumed run always tails the
+  session it names.
 - Dependencies: `zod` 4.6.6, locked in `bun.lock`, built into
   `dist/claude-bridge.js`; `test/magpie.test.ts` tests the changes.

@@ -307,6 +307,14 @@ type Settings struct {
 	// takes the budget of a Claude Code run (claudeRunBudget). It is this
 	// machine's, not taken from another's settings.
 	ClaudeTuiMaxRSSMiB int `json:"claudeTuiMaxRSSMiB,omitempty"`
+	// ClaudeTuiIdleSeconds is how long a Claude TUI run whose turn ended
+	// with a complete reply keeps its Claude Code for the conversation's
+	// next turn, which then goes on in the same process. Unset waits 60
+	// seconds; 0 keeps none, and every run ends with its reply. An idle
+	// process holds its place among claudeRunsMost, and is the first let
+	// go when another needs it. It is this machine's, not taken from
+	// another's settings.
+	ClaudeTuiIdleSeconds *int `json:"claudeTuiIdleSeconds,omitempty"`
 	// RefusalRetries is how many more times a request the vendor's safety
 	// filter refused, with nothing said, is asked of another account or
 	// routing group member (#248), unset for every one left. 0 hands the
@@ -1136,6 +1144,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.RedactModel, s.RedactModelName, s.RedactModelScore = cur.RedactModel, cur.RedactModelName, cur.RedactModelScore
 	s.ClaudeRunsMost = cur.ClaudeRunsMost
 	s.ClaudeTuiMaxRSSMiB = cur.ClaudeTuiMaxRSSMiB
+	s.ClaudeTuiIdleSeconds = cur.ClaudeTuiIdleSeconds
 	s.RequestArchiveLocal, s.RequestArchiveLocalMB = cur.RequestArchiveLocal, cur.RequestArchiveLocalMB
 }
 

@@ -76,7 +76,9 @@ folder), not only be the account Claude Code itself is signed in to.
 
 `MAGPIE_CLAUDE_MCP_NAME` names the MCP server on TUI runs too.
 `MAGPIE_CLAUDE_IDLE_MAX` / `MAGPIE_CLAUDE_IDLE_TTL` apply to the standard
-bridge alone: a TUI run ends with its reply. `claudeTuiMaxRSSMiB` in
+bridge alone: a TUI run has its own idle wait, `claudeTuiIdleSeconds`
+(default 60s, 0 ends each run with its reply), over the wrapper's
+`--desplega-serve` multi-turn protocol. `claudeTuiMaxRSSMiB` in
 settings.json (this machine's own) bounds a TUI run's processes together,
 by default as large as a standard run may grow. To turn it off: every
 account back to `standard`, then restart.

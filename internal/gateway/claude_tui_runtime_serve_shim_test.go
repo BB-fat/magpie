@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // testRuntimeKeys holds each test runtime's bridge-auth-v1 key.
@@ -47,6 +49,8 @@ type tuiRuntimeAnthropicResponder struct {
 }
 
 func (a tuiRuntimeAnthropicResponder) Header() http.Header { return a.w.Header() }
+
+func (a tuiRuntimeAnthropicResponder) Client() provider.Protocol { return protoAnthropic }
 
 func (a tuiRuntimeAnthropicResponder) Fail(status int, msg string) (int, string) {
 	return writeError(a.w, protoAnthropic, status, msg), msg

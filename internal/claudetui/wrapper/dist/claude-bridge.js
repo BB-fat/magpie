@@ -326,7 +326,7 @@ __export(exports_coerce, {
 // src/cli.ts
 import { spawn, spawnSync } from "child_process";
 import { createInterface } from "readline";
-import { chmodSync, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync7, statSync as statSync2, writeFileSync as writeFileSync3 } from "fs";
+import { chmodSync, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync7, statSync as statSync2, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "fs";
 import { join as join6, resolve as resolve5, dirname as dirname6 } from "path";
 import { fileURLToPath } from "url";
 import { randomUUID as randomUUID3 } from "crypto";
@@ -411,6 +411,11 @@ function preAcceptProject(opts) {
 function canBypassPermissions(env, uid) {
   return uid !== 0 || env.IS_SANDBOX === "1" || Boolean(env.CLAUDE_CODE_BUBBLEWRAP);
 }
+var IDLE_QUIET_SETTINGS = {
+  promptSuggestionEnabled: false,
+  awaySummaryEnabled: false,
+  idleCompaction: false
+};
 function writeWorkdirSettings(workdir, opts = { bypassPermissions: true }) {
   const dir = join2(workdir, ".claude");
   mkdirSync(dir, { recursive: true });
@@ -427,6 +432,7 @@ function writeWorkdirSettings(workdir, opts = { bypassPermissions: true }) {
       delete settings.skipDangerousModePermissionPrompt;
     }
   }
+  Object.assign(settings, IDLE_QUIET_SETTINGS);
   writePrivateAtomic(file, JSON.stringify(settings, null, 2) + `
 `);
 }
@@ -823,6 +829,13 @@ var BLOCKED_OPTIONS = new Map([
       label: "--replay-user-messages",
       reason: "replay mode is not supported through this wrapper."
     }
+  ],
+  [
+    "--fork-session",
+    {
+      label: "--fork-session",
+      reason: "the wrapper tails the session it resumes; fork it by copying its transcript to a new session and resume that."
+    }
   ]
 ]);
 var CLAUDE_COMMANDS = new Map([
@@ -866,7 +879,6 @@ var OPTION_ARITY = new Map([
   ["--exclude-dynamic-system-prompt-sections", "none"],
   ["--fallback-model", "required"],
   ["--file", "variadic"],
-  ["--fork-session", "none"],
   ["--from-pr", "required"],
   ["-h", "none"],
   ["--help", "none"],
@@ -10432,19 +10444,33 @@ function recordRuntimeHook(inputText, env = process.env) {
   if (input.hook_event_name === "Stop") {
     if (evaluateJsonSchemaStopHook(inputText, env)?.decision === "block")
       return;
-    writeFileSync2(join4(env.CLAUDE_BRIDGE_RUN_DIR, "stop-event.json"), inputText.trim() + `
-`);
+    writeFileSync2(join4(env.CLAUDE_BRIDGE_RUN_DIR, "stop-event.json"), stampedStopEvent(inputText, env.CLAUDE_BRIDGE_RUN_DIR));
     return;
   }
   if (input.hook_event_name === "StopFailure") {
-    writeFileSync2(join4(env.CLAUDE_BRIDGE_RUN_DIR, "stop-event.json"), inputText.trim() + `
-`);
+    writeFileSync2(join4(env.CLAUDE_BRIDGE_RUN_DIR, "stop-event.json"), stampedStopEvent(inputText, env.CLAUDE_BRIDGE_RUN_DIR));
     return;
   }
   if (input.hook_event_name === "MessageDisplay") {
     appendFileSync(join4(env.CLAUDE_BRIDGE_RUN_DIR, "message-display.jsonl"), JSON.stringify(normalizeMessageDisplay(input)) + `
 `);
   }
+}
+var SERVE_TURN_FILE = "turn";
+function stampedStopEvent(inputText, runDir) {
+  let turn;
+  try {
+    turn = readFileSync6(join4(runDir, SERVE_TURN_FILE), "utf8").trim();
+  } catch {
+    return inputText.trim() + `
+`;
+  }
+  const input = parseHookInput(inputText);
+  if (!input || !turn)
+    return inputText.trim() + `
+`;
+  return JSON.stringify({ ...input, bridge_turn: turn }) + `
+`;
 }
 function evaluateJsonSchemaStopHook(inputText, env = process.env) {
   if (env.CLAUDE_BRIDGE_SCHEMA_STOP_HOOK !== "1" || !env.CLAUDE_BRIDGE_JSON_SCHEMA_PATH) {
@@ -10539,6 +10565,38 @@ function resolveMaxSchemaStopBlocks(env) {
   if (!Number.isFinite(value) || value < 1)
     return DEFAULT_MAX_SCHEMA_STOP_BLOCKS;
   return Math.floor(value);
+}
+
+// src/serve-protocol.ts
+var SEGMENT_RE = /^[A-Za-z0-9-]{1,64}$/;
+function parseServeControl(line) {
+  let value;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return { error: "control line is not JSON" };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { error: "control line is not an object" };
+  }
+  const control = value;
+  switch (control.op) {
+    case "shutdown":
+      return { op: "shutdown" };
+    case "submit":
+      if (typeof control.segment !== "string" || !SEGMENT_RE.test(control.segment)) {
+        return { error: "submit needs a segment of letters, digits and dashes" };
+      }
+      if (typeof control.input !== "string" || control.input === "") {
+        return { error: "submit needs a non-empty input" };
+      }
+      return { op: "submit", segment: control.segment, input: control.input };
+    default:
+      return { error: `unknown control op ${JSON.stringify(control.op)}` };
+  }
+}
+function stopEventIsTurns(event, segment) {
+  return typeof event.bridge_turn === "string" && event.bridge_turn === segment;
 }
 
 // src/native-api-error.ts
@@ -10997,6 +11055,7 @@ var desplegaVerbose = args.desplegaVerbose;
 var printMode = args.print;
 var outputFormat = args.outputFormat;
 var desplegaFormat = hasDesplegaFlag("format");
+var serveMode = printMode && hasDesplegaFlag("serve");
 if (hasDesplegaFlag("internal-json-schema-stop-hook")) {
   await runJsonSchemaStopHook();
   process.exit(0);
@@ -11008,11 +11067,16 @@ if (hasDesplegaFlag("internal-runtime-hook")) {
 var targetCwd = resolveTargetCwd();
 var transcriptsBefore = await listAllTranscriptPaths();
 var initialMessage = args.initialPrompt;
-if (printMode && !initialMessage && !process.stdin.isTTY) {
+if (printMode && !serveMode && !initialMessage && !process.stdin.isTTY) {
   initialMessage = (await new Response(Bun.stdin.stream()).text()).trimEnd();
 }
 var replyOnResume = Boolean(claudeResumeSessionId(args.claudeArgs) && args.claudeArgs.includes("--reply-on-resume"));
-if (printMode && !initialMessage && !replyOnResume) {
+if (serveMode && (initialMessage || replyOnResume)) {
+  process.stderr.write(`claude-bridge: --desplega-serve takes its prompts as control lines on stdin, not a prompt argument or --reply-on-resume.
+`);
+  process.exit(2);
+}
+if (printMode && !serveMode && !initialMessage && !replyOnResume) {
   process.stderr.write(`claude-bridge: -p/--print requires a prompt argument or piped stdin.
 `);
   process.stderr.write("Run `bun ./src/cli.ts --help` for wrapper usage.\n");
@@ -11021,10 +11085,9 @@ if (printMode && !initialMessage && !replyOnResume) {
 var jsonSchema = loadPrintJsonSchema();
 var forwardedClaudeArgs = jsonSchema ? mergeAppendSystemPrompt(args.claudeArgs, makeJsonSchemaSystemPrompt(jsonSchema.compact)) : args.claudeArgs;
 var resumedSessionId = claudeResumeSessionId(forwardedClaudeArgs);
-var forkedSession = Boolean(resumedSessionId && forwardedClaudeArgs.includes("--fork-session"));
 var resumedTranscriptPathBeforeLaunch = null;
 var resumedTranscriptBaselineRows = null;
-if (resumedSessionId && !forkedSession) {
+if (resumedSessionId) {
   try {
     resumedTranscriptPathBeforeLaunch = await findTranscriptBySessionId(resumedSessionId);
     if (resumedTranscriptPathBeforeLaunch) {
@@ -11093,6 +11156,11 @@ var claudeStreamEmittedCount = 0;
 var claudeVersionFromTranscript;
 var transcriptProjectFolder;
 var lastApiErrorStatus = null;
+var serveTurn = null;
+var serveTurnsDone = 0;
+var serveTranscriptPath = null;
+var serveQueue = [];
+var SERVE_SETTLE_TIMEOUT_MS = envDurationMs("CLAUDE_BRIDGE_SERVE_SETTLE_TIMEOUT_MS", 30000);
 var rlRef = null;
 var stdoutLine = (obj) => {
   if (printMode) {
@@ -11379,7 +11447,10 @@ function finishPrintResult(resultText) {
     process.stdout.write(JSON.stringify(makeClaudeCompatResult(resultText, structured)) + `
 `);
   }
-  shutdown();
+  if (serveMode)
+    settleServeTurn();
+  else
+    shutdown();
 }
 function makeClaudeCompatResult(resultText, structured) {
   return makeClaudeResultEvent({
@@ -11457,6 +11528,119 @@ ${details.rawResponse}
   }
   shutdown(1);
 }
+function resetTurnState() {
+  lastAssistantText = "";
+  lastAssistantRow = null;
+  lastTurnDurationMs = undefined;
+  pendingPrintResultText = "";
+  pendingPrintFailure = null;
+  nativeApiErrorTurn = new NativeApiErrorTurn;
+  pendingNativeApiFailure = null;
+  printDone = false;
+  claudeInitEmitted = false;
+  claudeStreamEmittedCount = 0;
+  lastApiErrorStatus = null;
+}
+function writeServeEvent(event) {
+  process.stdout.write(JSON.stringify(event) + `
+`);
+}
+function startServeControl() {
+  const rl = createInterface({ input: process.stdin, terminal: false, crlfDelay: Infinity });
+  rl.on("line", (line) => {
+    if (!line.trim())
+      return;
+    const control = parseServeControl(line);
+    if ("error" in control) {
+      failPrint(`gateway control refused: ${control.error}`);
+      return;
+    }
+    if (control.op === "shutdown") {
+      shutdown();
+      return;
+    }
+    serveQueue.push({ segment: control.segment, input: control.input });
+    pumpServeQueue();
+  });
+  rl.on("close", () => shutdown());
+}
+function pumpServeQueue() {
+  if (!claudeReady || serveTurn || shuttingDown || serveQueue.length === 0)
+    return;
+  const next = serveQueue.shift();
+  startServeTurn(next.segment, next.input);
+}
+function serveTurnBaseline() {
+  if (serveTurnsDone === 0) {
+    if (resumedSessionId)
+      return resumedTranscriptBaselineRows;
+    return 0;
+  }
+  if (!serveTranscriptPath)
+    return null;
+  try {
+    return readFileSync7(serveTranscriptPath, "utf8").split(`
+`).filter(Boolean).length;
+  } catch {
+    return null;
+  }
+}
+function startServeTurn(segment, input) {
+  resetTurnState();
+  serveTurn = { segment, prompt: input, baselineRows: serveTurnBaseline() };
+  try {
+    if (existsSync5(stopEventPath))
+      unlinkSync3(stopEventPath);
+    writeFileSync3(join6(runDir, SERVE_TURN_FILE), segment + `
+`);
+  } catch (err) {
+    failPrint(`cannot ready the run folder for a turn: ${err.message}`);
+    return;
+  }
+  if (!sendUserMessage(input))
+    return;
+  writeServeEvent({ type: "bridge_accepted", segment });
+  waitForPrintTurnEnd();
+}
+async function settleServeTurn() {
+  const deadline = Date.now() + SERVE_SETTLE_TIMEOUT_MS;
+  while (!ctrl.signal.aborted) {
+    const pane = capturePane();
+    if (paneTakesInput(pane))
+      break;
+    if (Date.now() > deadline) {
+      printDone = false;
+      failPrint("Claude Code did not take input again after its turn.");
+      return;
+    }
+    await sleep2(100);
+  }
+  if (ctrl.signal.aborted)
+    return;
+  serveTurn = null;
+  serveTurnsDone++;
+  writeServeEvent({ type: "bridge_ready", turns: serveTurnsDone });
+  pumpServeQueue();
+}
+function paneTakesInput(pane) {
+  if (!claudePaneReady(pane) || paneHasPendingInput(pane))
+    return false;
+  return !/esc to interrupt/i.test(pane);
+}
+async function watchServeIdle() {
+  while (!ctrl.signal.aborted) {
+    await sleep2(500);
+    if (!claudeReady || serveTurn)
+      continue;
+    const exitStatus = readClaudeExitStatus();
+    if (exitStatus !== null || !tmuxSessionExists()) {
+      process.stderr.write(`[claude-bridge] Claude Code ended between turns (status ${exitStatus ?? "unknown"})
+`);
+      shutdown(1);
+      return;
+    }
+  }
+}
 function startTmux() {
   const claudeArgs = [
     ...bypassPermissions ? ["--dangerously-skip-permissions"] : [],
@@ -11523,8 +11707,10 @@ function startTmux() {
   autoAcceptStartupPrompts();
   waitForClaudeReady();
   startTranscriptTail();
-  if (printMode)
+  if (printMode && !serveMode)
     waitForPrintTurnEnd();
+  if (serveMode)
+    watchServeIdle();
   if (!printMode)
     printBanner();
 }
@@ -11616,6 +11802,8 @@ function readRuntimeStopEvent() {
     return null;
   try {
     const event = JSON.parse(readFileSync7(stopEventPath, "utf8"));
+    if (serveMode && !(serveTurn && stopEventIsTurns(event, serveTurn.segment)))
+      return null;
     return event.hook_event_name === "Stop" || event.hook_event_name === "StopFailure" ? event : null;
   } catch {
     return null;
@@ -11630,7 +11818,14 @@ function runtimeStopFailureMessage(stopEvent) {
   return "Claude StopFailure hook fired before the Stop hook produced a result.";
 }
 function currentTurnTranscriptRows(rows) {
-  if (!forkedSession && resumedSessionId) {
+  if (serveMode) {
+    if (!serveTurn)
+      return null;
+    if (serveTurn.baselineRows !== null)
+      return transcriptRowsAfterBaseline(rows, serveTurn.baselineRows);
+    return transcriptRowsFromLastUserPrompt(rows, serveTurn.prompt);
+  }
+  if (resumedSessionId) {
     if (resumedTranscriptBaselineRows !== null) {
       return transcriptRowsAfterBaseline(rows, resumedTranscriptBaselineRows);
     }
@@ -11638,23 +11833,20 @@ function currentTurnTranscriptRows(rows) {
       return null;
     return transcriptRowsFromLastUserPrompt(rows, initialMessage);
   }
-  if (!forkedSession)
-    return rows;
-  if (!initialMessage)
-    return null;
-  return transcriptRowsFromLastUserPrompt(rows, initialMessage);
+  return rows;
 }
 async function hydrateTranscriptFromStopEvent(stopEvent) {
   const transcriptPath = stopEvent.transcript_path;
   if (!transcriptPath)
     return;
   transcriptSessionId = sessionIdFromPath(transcriptPath);
+  serveTranscriptPath = transcriptPath;
   try {
     const allRows = await readTranscript(transcriptPath);
     const rows = currentTurnTranscriptRows(allRows);
     if (!rows) {
       pendingPrintFailure = {
-        message: "Fork transcript did not contain the submitted prompt; refusing inherited-history replay."
+        message: "Transcript did not contain the submitted turn; refusing inherited-history replay."
       };
       return;
     }
@@ -11719,7 +11911,7 @@ async function emitClaudeStreamResult(stopEvent, resultText) {
       const allRows = await readTranscript(stopEvent.transcript_path);
       const rows = currentTurnTranscriptRows(allRows);
       if (!rows) {
-        failPrint("Fork transcript did not contain the submitted prompt; refusing inherited-history replay.");
+        failPrint("Transcript did not contain the submitted turn; refusing inherited-history replay.");
         return false;
       }
       emitClaudeStreamCatchUp(rows);
@@ -11741,7 +11933,8 @@ async function emitClaudeStreamResult(stopEvent, resultText) {
     uuid: randomUUID3()
   })) + `
 `, () => resolve()));
-  shutdown();
+  if (!serveMode)
+    shutdown();
   return true;
 }
 function emitMessageDisplayEvents() {
@@ -11924,6 +12117,11 @@ async function waitForClaudeReady() {
         return;
       claudeReady = true;
       desplegaDebug("claude pane ready");
+      if (serveMode) {
+        writeServeEvent({ type: "bridge_ready", turns: 0 });
+        pumpServeQueue();
+        return;
+      }
       if (!flushPendingMessages())
         promptIfReady();
       return;
@@ -11975,7 +12173,7 @@ async function startTranscriptTail() {
   const compatStreamJsonPrint = printMode && outputFormat === "stream-json" && !desplegaFormat;
   let transcriptPath;
   try {
-    transcriptPath = (!forkedSession && resumedSessionId ? resumedTranscriptPathBeforeLaunch ?? await findTranscriptBySessionId(resumedSessionId) : null) ?? (compatStreamJsonPrint && !forkedSession ? await waitForRuntimeTranscriptPath(1500) : null) ?? await waitForFreshTranscriptForCwd(targetCwd, transcriptsBefore, ctrl.signal);
+    transcriptPath = (resumedSessionId ? resumedTranscriptPathBeforeLaunch ?? await findTranscriptBySessionId(resumedSessionId) : null) ?? (compatStreamJsonPrint ? await waitForRuntimeTranscriptPath(1500) : null) ?? await waitForFreshTranscriptForCwd(targetCwd, transcriptsBefore, ctrl.signal);
   } catch (err) {
     if (printMode) {
       desplegaDebug("live transcript discovery failed; falling back to Stop hook result", {
@@ -11997,7 +12195,9 @@ async function startTranscriptTail() {
   transcriptSessionId = sessionId;
   stdoutLine({ type: "transcript_open", path: transcriptPath, session_id: sessionId });
   if (compatStreamJsonPrint) {
-    await tailTranscriptLines(transcriptPath, (line) => {
+    await tailTranscriptLines(transcriptPath, (line, index) => {
+      if (serveMode && !serveRowInTurn(index))
+        return;
       let row;
       try {
         row = JSON.parse(line);
@@ -12006,10 +12206,13 @@ async function startTranscriptTail() {
       }
       handleTranscriptRow(row, line);
       emitClaudeStreamRow(row);
-    }, ctrl.signal, Boolean(resumedSessionId));
+    }, ctrl.signal, serveMode ? false : Boolean(resumedSessionId));
     return;
   }
   await tailTranscript(transcriptPath, (row, _index, rawLine) => handleTranscriptRow(row, rawLine), ctrl.signal);
+}
+function serveRowInTurn(index) {
+  return serveTurn !== null && !printDone && serveTurn.baselineRows !== null && index >= serveTurn.baselineRows;
 }
 async function waitForRuntimeTranscriptPath(timeoutMs) {
   const startedAt = Date.now();
@@ -12143,3 +12346,5 @@ process.on("SIGTERM", () => shutdown());
 startTmux();
 if (!printMode)
   startRepl();
+else if (serveMode)
+  startServeControl();

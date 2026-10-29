@@ -76,6 +76,13 @@ const BLOCKED_OPTIONS = new Map<string, { label: string; reason: string }>([
       reason: "replay mode is not supported through this wrapper.",
     },
   ],
+  [
+    "--fork-session",
+    {
+      label: "--fork-session",
+      reason: "the wrapper tails the session it resumes; fork it by copying its transcript to a new session and resume that.",
+    },
+  ],
 ]);
 
 const CLAUDE_COMMANDS = new Map<string, string>([
@@ -120,7 +127,6 @@ const OPTION_ARITY = new Map<string, OptionArity>([
   ["--exclude-dynamic-system-prompt-sections", "none"],
   ["--fallback-model", "required"],
   ["--file", "variadic"],
-  ["--fork-session", "none"],
   ["--from-pr", "required"],
   ["-h", "none"],
   ["--help", "none"],

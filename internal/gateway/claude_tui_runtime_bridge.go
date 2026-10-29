@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // runtimeTUI owns the bridge a gateway's TUI requests are answered by.
@@ -18,6 +20,9 @@ type tuiRuntimeResponder interface {
 	Header() http.Header
 	Fail(status int, msg string) (int, string)
 	Relay(req *tuiRuntimeRequest, events <-chan Event, abort func(), ended func(said, stop string, ok bool)) (int, string)
+	// Client is the API the client speaks, which decides how its next
+	// request holds the reply (tuiRuntimeReplyRecorder).
+	Client() provider.Protocol
 }
 
 // Responder is how the gateway answers a TUI request's client.
@@ -29,6 +34,8 @@ type tuiRuntimeOutput interface {
 	// Relay answers with events, as the gateway's relay does: abort when
 	// there is no answer to give, ended once one was given.
 	Relay(events <-chan Event, stream bool, abort func(), ended func(said, stop string, ok bool)) (int, string)
+	// Client is the API the client speaks.
+	Client() provider.Protocol
 }
 
 type tuiRuntimeGatewayResponder struct{ tuiRuntimeOutput }

@@ -201,10 +201,10 @@ export function transcriptRowsAfterBaseline(
 }
 
 /**
- * A Claude --resume ... --fork-session transcript contains copied history
- * before the newly submitted turn. Return only the final occurrence of that
- * submitted user prompt and the rows after it, so compatibility output never
- * replays inherited assistant/tool rows. null is fail-closed: without the
+ * A resumed transcript whose length before launch isn't known contains
+ * earlier history before the newly submitted turn. Return only the final
+ * occurrence of that submitted user prompt and the rows after it, so
+ * compatibility output never replays inherited assistant/tool rows. null is fail-closed: without the
  * submitted prompt there is no safe boundary between inherited and new rows.
  */
 export function transcriptRowsFromLastUserPrompt(

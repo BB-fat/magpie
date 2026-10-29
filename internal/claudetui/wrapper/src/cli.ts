@@ -14,7 +14,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -53,7 +53,8 @@ import {
   installUserContextHooks,
 } from "./hook-install.ts";
 import { makePrintErrorResult } from "./print-result.ts";
-import { runJsonSchemaStopHook, runRuntimeHook } from "./stop-hook.ts";
+import { runJsonSchemaStopHook, runRuntimeHook, SERVE_TURN_FILE } from "./stop-hook.ts";
+import { parseServeControl, stopEventIsTurns } from "./serve-protocol.ts";
 import { NativeApiErrorTurn, type NativeApiFailure } from "./native-api-error.ts";
 import { buildClaudeLaunchCommand, interactiveMcpBackgroundEnvArgs, nativeAutoCompactionLaunchEnv } from "./launch-command.ts";
 import { writeNativeTmuxGuard } from "./native-tmux-guard.ts";
@@ -102,6 +103,9 @@ const desplegaVerbose = args.desplegaVerbose;
 const printMode = args.print;
 const outputFormat: OutputFormat = args.outputFormat;
 const desplegaFormat = hasDesplegaFlag("format");
+// --desplega-serve keeps the run for more than one turn: its prompts come
+// on stdin as control lines (serve-protocol.ts), not as the whole stdin.
+const serveMode = printMode && hasDesplegaFlag("serve");
 
 if (hasDesplegaFlag("internal-json-schema-stop-hook")) {
   await runJsonSchemaStopHook();
@@ -120,11 +124,15 @@ const targetCwd = resolveTargetCwd();
 const transcriptsBefore = await listAllTranscriptPaths();
 
 let initialMessage = args.initialPrompt;
-if (printMode && !initialMessage && !process.stdin.isTTY) {
+if (printMode && !serveMode && !initialMessage && !process.stdin.isTTY) {
   initialMessage = (await new Response(Bun.stdin.stream()).text()).trimEnd();
 }
 const replyOnResume = Boolean(claudeResumeSessionId(args.claudeArgs) && args.claudeArgs.includes("--reply-on-resume"));
-if (printMode && !initialMessage && !replyOnResume) {
+if (serveMode && (initialMessage || replyOnResume)) {
+  process.stderr.write("claude-bridge: --desplega-serve takes its prompts as control lines on stdin, not a prompt argument or --reply-on-resume.\n");
+  process.exit(2);
+}
+if (printMode && !serveMode && !initialMessage && !replyOnResume) {
   process.stderr.write("claude-bridge: -p/--print requires a prompt argument or piped stdin.\n");
   process.stderr.write("Run `bun ./src/cli.ts --help` for wrapper usage.\n");
   process.exit(2);
@@ -138,10 +146,9 @@ const forwardedClaudeArgs = jsonSchema
     )
   : args.claudeArgs;
 const resumedSessionId = claudeResumeSessionId(forwardedClaudeArgs);
-const forkedSession = Boolean(resumedSessionId && forwardedClaudeArgs.includes("--fork-session"));
 let resumedTranscriptPathBeforeLaunch: string | null = null;
 let resumedTranscriptBaselineRows: number | null = null;
-if (resumedSessionId && !forkedSession) {
+if (resumedSessionId) {
   try {
     resumedTranscriptPathBeforeLaunch = await findTranscriptBySessionId(resumedSessionId);
     if (resumedTranscriptPathBeforeLaunch) {
@@ -233,7 +240,7 @@ let lastAssistantRow: TranscriptRow | null = null;
 let lastTurnDurationMs: number | undefined;
 let pendingPrintResultText = "";
 let pendingPrintFailure: { message: string; rawResponse?: string } | null = null;
-const nativeApiErrorTurn = new NativeApiErrorTurn();
+let nativeApiErrorTurn = new NativeApiErrorTurn();
 let pendingNativeApiFailure: NativeApiFailure | null = null;
 let printDone = false;
 let messageDisplayOffset = 0;
@@ -245,6 +252,18 @@ let claudeStreamEmittedCount = 0;
 let claudeVersionFromTranscript: string | undefined;
 let transcriptProjectFolder: string | undefined;
 let lastApiErrorStatus: number | null = null;
+
+// A serve run's turn in flight: the gateway's name for it, its prompt, and
+// the transcript row its own rows begin at (null: at the last row holding
+// its prompt, when that row isn't known). One turn runs at a time.
+type ServeTurn = { segment: string; prompt: string; baselineRows: number | null };
+let serveTurn: ServeTurn | null = null;
+let serveTurnsDone = 0;
+let serveTranscriptPath: string | null = null;
+const serveQueue: { segment: string; input: string }[] = [];
+// How long Claude Code's input box may take to be empty and idle again
+// once a turn's result is out.
+const SERVE_SETTLE_TIMEOUT_MS = envDurationMs("CLAUDE_BRIDGE_SERVE_SETTLE_TIMEOUT_MS", 30_000);
 
 let rlRef: import("node:readline").Interface | null = null;
 const stdoutLine = (obj: Record<string, unknown>): void => {
@@ -559,7 +578,8 @@ function finishPrintResult(resultText: string): void {
   } else if (outputFormat === "json") {
     process.stdout.write(JSON.stringify(makeClaudeCompatResult(resultText, structured)) + "\n");
   }
-  shutdown();
+  if (serveMode) void settleServeTurn();
+  else shutdown();
 }
 
 function makeClaudeCompatResult(
@@ -647,6 +667,131 @@ function failPrint(message: string, details: { rawResponse?: string } = {}): voi
   shutdown(1);
 }
 
+// resetTurnState forgets what the last turn read: its reply, its failure
+// and how much of it was streamed.
+function resetTurnState(): void {
+  lastAssistantText = "";
+  lastAssistantRow = null;
+  lastTurnDurationMs = undefined;
+  pendingPrintResultText = "";
+  pendingPrintFailure = null;
+  nativeApiErrorTurn = new NativeApiErrorTurn();
+  pendingNativeApiFailure = null;
+  printDone = false;
+  claudeInitEmitted = false;
+  claudeStreamEmittedCount = 0;
+  lastApiErrorStatus = null;
+}
+
+function writeServeEvent(event: Record<string, unknown>): void {
+  process.stdout.write(JSON.stringify(event) + "\n");
+}
+
+function startServeControl(): void {
+  const rl = createInterface({ input: process.stdin, terminal: false, crlfDelay: Infinity });
+  rl.on("line", line => {
+    if (!line.trim()) return;
+    const control = parseServeControl(line);
+    if ("error" in control) {
+      failPrint(`gateway control refused: ${control.error}`);
+      return;
+    }
+    if (control.op === "shutdown") {
+      shutdown();
+      return;
+    }
+    serveQueue.push({ segment: control.segment, input: control.input });
+    pumpServeQueue();
+  });
+  // the gateway closing stdin, or going, ends the run
+  rl.on("close", () => shutdown());
+}
+
+function pumpServeQueue(): void {
+  if (!claudeReady || serveTurn || shuttingDown || serveQueue.length === 0) return;
+  const next = serveQueue.shift()!;
+  startServeTurn(next.segment, next.input);
+}
+
+// The row a turn's rows begin at: for the first, where print mode finds
+// it (the resumed session's length before launch, the whole of a new
+// one); after that, the session's length as the turn is
+// typed, the last turn having ended in it.
+function serveTurnBaseline(): number | null {
+  if (serveTurnsDone === 0) {
+    if (resumedSessionId) return resumedTranscriptBaselineRows;
+    return 0;
+  }
+  if (!serveTranscriptPath) return null;
+  try {
+    return readFileSync(serveTranscriptPath, "utf8").split("\n").filter(Boolean).length;
+  } catch {
+    return null;
+  }
+}
+
+function startServeTurn(segment: string, input: string): void {
+  resetTurnState();
+  serveTurn = { segment, prompt: input, baselineRows: serveTurnBaseline() };
+  try {
+    // a Stop of no turn, or of the last, completes nothing: the hook names
+    // this turn in its event (stampedStopEvent)
+    if (existsSync(stopEventPath)) unlinkSync(stopEventPath);
+    writeFileSync(join(runDir, SERVE_TURN_FILE), segment + "\n");
+  } catch (err) {
+    failPrint(`cannot ready the run folder for a turn: ${(err as Error).message}`);
+    return;
+  }
+  if (!sendUserMessage(input)) return; // failTmuxSend ended the run
+  writeServeEvent({ type: "bridge_accepted", segment });
+  void waitForPrintTurnEnd();
+}
+
+// settleServeTurn waits for Claude Code to take a prompt again once the
+// turn's result is out: its input box empty and no turn running. Only then
+// is the next turn typed in.
+async function settleServeTurn(): Promise<void> {
+  const deadline = Date.now() + SERVE_SETTLE_TIMEOUT_MS;
+  while (!ctrl.signal.aborted) {
+    const pane = capturePane();
+    if (paneTakesInput(pane)) break;
+    if (Date.now() > deadline) {
+      printDone = false;
+      failPrint("Claude Code did not take input again after its turn.");
+      return;
+    }
+    await sleep(100);
+  }
+  if (ctrl.signal.aborted) return;
+  serveTurn = null;
+  serveTurnsDone++;
+  writeServeEvent({ type: "bridge_ready", turns: serveTurnsDone });
+  pumpServeQueue();
+}
+
+// paneTakesInput says Claude Code waits at an empty input box with no turn
+// running: the bottom-most prompt line holds nothing, and no spinner offers
+// to interrupt.
+function paneTakesInput(pane: string): boolean {
+  if (!claudePaneReady(pane) || paneHasPendingInput(pane)) return false;
+  return !/esc to interrupt/i.test(pane);
+}
+
+// watchServeIdle ends a serve run whose Claude Code or tmux went away while
+// no turn ran: nothing else would see it until the next turn was typed.
+async function watchServeIdle(): Promise<void> {
+  while (!ctrl.signal.aborted) {
+    await sleep(500);
+    if (!claudeReady || serveTurn) continue;
+    const exitStatus = readClaudeExitStatus();
+    if (exitStatus !== null || !tmuxSessionExists()) {
+      process.stderr.write(`[claude-bridge] Claude Code ended between turns (status ${exitStatus ?? "unknown"})\n`);
+      shutdown(1);
+      return;
+    }
+  }
+}
+
 function startTmux(): void {
   // BILLING INVARIANT: never pass `-p`/`--print`, Agent SDK flags, or
   // headless `--output-format stream-json` to Claude. Claude Code computes
@@ -720,7 +865,8 @@ function startTmux(): void {
   void autoAcceptStartupPrompts();
   void waitForClaudeReady();
   void startTranscriptTail();
-  if (printMode) void waitForPrintTurnEnd();
+  if (printMode && !serveMode) void waitForPrintTurnEnd();
+  if (serveMode) void watchServeIdle();
   if (!printMode) printBanner();
 }
 
@@ -748,6 +894,7 @@ type RuntimeStopEvent = {
   message?: unknown;
   reason?: unknown;
   error?: unknown;
+  bridge_turn?: unknown;
 };
 
 async function waitForPrintTurnEnd(): Promise<void> {
@@ -835,6 +982,7 @@ function readRuntimeStopEvent(): RuntimeStopEvent | null {
   if (!existsSync(stopEventPath)) return null;
   try {
     const event = JSON.parse(readFileSync(stopEventPath, "utf8")) as RuntimeStopEvent;
+    if (serveMode && !(serveTurn && stopEventIsTurns(event, serveTurn.segment))) return null;
     return event.hook_event_name === "Stop" || event.hook_event_name === "StopFailure" ? event : null;
   } catch {
     return null;
@@ -851,34 +999,36 @@ function runtimeStopFailureMessage(stopEvent: RuntimeStopEvent): string {
 }
 
 function currentTurnTranscriptRows(rows: TranscriptRow[]): TranscriptRow[] | null {
+  if (serveMode) {
+    if (!serveTurn) return null;
+    if (serveTurn.baselineRows !== null) return transcriptRowsAfterBaseline(rows, serveTurn.baselineRows);
+    return transcriptRowsFromLastUserPrompt(rows, serveTurn.prompt);
+  }
   // Ordinary --resume appends to a transcript that already existed before this
   // wrapper launched. Prefer that pre-launch row boundary: Claude Code may
   // normalize a large pasted prompt in the persisted user row, so exact prompt
   // matching can reject an otherwise complete turn at Stop-hook catch-up.
-  if (!forkedSession && resumedSessionId) {
+  if (resumedSessionId) {
     if (resumedTranscriptBaselineRows !== null) {
       return transcriptRowsAfterBaseline(rows, resumedTranscriptBaselineRows);
     }
     if (!initialMessage) return null;
     return transcriptRowsFromLastUserPrompt(rows, initialMessage);
   }
-  // A fork creates a new transcript containing inherited rows, so there is no
-  // old-file baseline to trust; retain the fail-closed prompt boundary there.
-  if (!forkedSession) return rows;
-  if (!initialMessage) return null;
-  return transcriptRowsFromLastUserPrompt(rows, initialMessage);
+  return rows;
 }
 
 async function hydrateTranscriptFromStopEvent(stopEvent: RuntimeStopEvent): Promise<void> {
   const transcriptPath = stopEvent.transcript_path;
   if (!transcriptPath) return;
   transcriptSessionId = sessionIdFromPath(transcriptPath);
+  serveTranscriptPath = transcriptPath;
   try {
     const allRows = await readTranscript(transcriptPath);
     const rows = currentTurnTranscriptRows(allRows);
     if (!rows) {
       pendingPrintFailure = {
-        message: "Fork transcript did not contain the submitted prompt; refusing inherited-history replay.",
+        message: "Transcript did not contain the submitted turn; refusing inherited-history replay.",
       };
       return;
     }
@@ -962,7 +1112,7 @@ async function emitClaudeStreamResult(stopEvent: RuntimeStopEvent, resultText: s
       const allRows = await readTranscript(stopEvent.transcript_path);
       const rows = currentTurnTranscriptRows(allRows);
       if (!rows) {
-        failPrint("Fork transcript did not contain the submitted prompt; refusing inherited-history replay.");
+        failPrint("Transcript did not contain the submitted turn; refusing inherited-history replay.");
         return false;
       }
       emitClaudeStreamCatchUp(rows);
@@ -994,8 +1144,9 @@ async function emitClaudeStreamResult(stopEvent: RuntimeStopEvent, resultText: s
   // stream-json compatibility has already emitted its terminal result. Tear
   // down the one-shot PTY here instead of relying on the caller to signal us;
   // otherwise a fast HTTP client can finish while the detached tmux/Claude
-  // session survives the wrapper turn.
-  shutdown();
+  // session survives the wrapper turn. A serve run waits for its next turn
+  // instead (finishPrintResult settles it).
+  if (!serveMode) shutdown();
   return true;
 }
 
@@ -1188,6 +1339,11 @@ async function waitForClaudeReady(): Promise<void> {
       if (ctrl.signal.aborted) return;
       claudeReady = true;
       desplegaDebug("claude pane ready");
+      if (serveMode) {
+        writeServeEvent({ type: "bridge_ready", turns: 0 });
+        pumpServeQueue();
+        return;
+      }
       if (!flushPendingMessages()) promptIfReady();
       return;
     }
@@ -1243,10 +1399,10 @@ async function startTranscriptTail(): Promise<void> {
   let transcriptPath: string;
   try {
     transcriptPath =
-      (!forkedSession && resumedSessionId
+      (resumedSessionId
         ? resumedTranscriptPathBeforeLaunch ?? await findTranscriptBySessionId(resumedSessionId)
         : null) ??
-      (compatStreamJsonPrint && !forkedSession ? await waitForRuntimeTranscriptPath(1_500) : null) ??
+      (compatStreamJsonPrint ? await waitForRuntimeTranscriptPath(1_500) : null) ??
       await waitForFreshTranscriptForCwd(targetCwd, transcriptsBefore, ctrl.signal);
   } catch (err) {
     if (printMode) {
@@ -1271,7 +1427,10 @@ async function startTranscriptTail(): Promise<void> {
   if (compatStreamJsonPrint) {
     await tailTranscriptLines(
       transcriptPath,
-      (line: string) => {
+      (line: string, index: number) => {
+        // A serve run reads its session from the start, and each turn takes
+        // only its own rows: an earlier turn's, read late, are not its.
+        if (serveMode && !serveRowInTurn(index)) return;
         let row: TranscriptRow;
         try {
           row = JSON.parse(line) as TranscriptRow;
@@ -1282,7 +1441,7 @@ async function startTranscriptTail(): Promise<void> {
         emitClaudeStreamRow(row);
       },
       ctrl.signal,
-      Boolean(resumedSessionId)
+      serveMode ? false : Boolean(resumedSessionId)
     );
     return;
   }
@@ -1291,6 +1450,10 @@ async function startTranscriptTail(): Promise<void> {
     (row: TranscriptRow, _index: number, rawLine: string) => handleTranscriptRow(row, rawLine),
     ctrl.signal
   );
+}
+
+function serveRowInTurn(index: number): boolean {
+  return serveTurn !== null && !printDone && serveTurn.baselineRows !== null && index >= serveTurn.baselineRows;
 }
 
 async function waitForRuntimeTranscriptPath(timeoutMs: number): Promise<string | null> {
@@ -1433,3 +1596,4 @@ process.on("SIGINT", () => shutdown());
 process.on("SIGTERM", () => shutdown());
 startTmux();
 if (!printMode) startRepl();
+else if (serveMode) startServeControl();
