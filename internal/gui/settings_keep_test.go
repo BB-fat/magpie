@@ -188,6 +188,8 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.CodexAsyncCompact, was.CodexAsyncCompactPercent = true, 70
 	was.ClaudeRunsMost = 3
 	was.ClaudeTuiMaxRSSMiB = 2048
+	idle := 0
+	was.ClaudeTuiIdleSeconds = &idle
 	was.RequestArchiveLocal, was.RequestArchiveLocalMB = true, 256
 	was.ProxyCustom = "http://me:secret@proxy.example:8080"
 	if err := settings.Save(was); err != nil {

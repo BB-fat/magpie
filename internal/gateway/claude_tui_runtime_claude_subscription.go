@@ -39,6 +39,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/claudebridge"
 	"github.com/yetone/magpie/internal/provider"
 	"hash"
@@ -139,9 +140,12 @@ type tuiRuntimeSubscriptionBridge struct {
 	// checkpoint already delivered) from a parked, failed or executing
 	// one. In-memory only, like outerTurns.
 	liveOuter map[string]*tuiRuntimeSubscriptionRun
-	baseURL   string
-	sweep     sync.Once
-	swept     sync.Map // Claude Code's project folders sweepSessions went through
+	// hot is each process idle for its conversation's next turn, by the
+	// prefix its session ends at (native_serve.go)
+	hot     map[tuiRuntimePrefixDigest][]*tuiRuntimeSubscriptionRun
+	baseURL string
+	sweep   sync.Once
+	swept   sync.Map // Claude Code's project folders sweepSessions went through
 }
 
 // A run left for its conversation's next turn waits idleLongest at most,
@@ -397,6 +401,29 @@ type tuiRuntimeSubscriptionRun struct {
 	// the client was told them: a client that names them by ids of its own
 	// (AmpCode) has its results paired with them by position (remap)
 	shown []tuiRuntimeShownCall
+
+	// A serve run's wrapper takes more than one turn (native_serve.go).
+	// serveIn is its control input, written under serveMu; turnOut takes
+	// the native turn in flight's lines, turnDone closes when its reader
+	// is done; turnsSent counts the turns typed in, turnsReady those the
+	// wrapper is done with. turnReply is the reply the turn's client was
+	// told. hotTip is the prefix the session ends at once its reply is
+	// kept, hotConfig what the process was started with; hotIdle says
+	// it waits in its bridge's pool, in wait hotGen since hotSince.
+	serve      bool
+	serveMu    sync.Mutex
+	serveIn    io.WriteCloser
+	turnOut    *io.PipeWriter
+	turnDone   chan struct{}
+	turnsSent  int
+	turnsReady int
+	turnReply  Message
+	hotTip     *tuiRuntimePrefixDigest
+	hotConfig  tuiRuntimeHotConfig
+	hotIdle    bool
+	hotGen     uint64
+	hotSince   time.Time
+	hotTimer   *time.Timer
 }
 
 // shownCall is one of a reply's calls of the client's tools, as the client
@@ -1026,9 +1053,10 @@ func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop str
 			r.abort()
 			return
 		}
-		// A PTY wrapper exits after a complete turn, so there is no live stdin
-		// to keep idle. Persist only the canonical outer conversation's inner
-		// Claude checkpoint; helpers have outerSession == "" and cannot write it.
+		// A one-turn PTY wrapper exits after a complete turn; a serve run's
+		// waits for its next (afterServeTurn). Persist only the canonical
+		// outer conversation's inner Claude checkpoint; helpers have
+		// outerSession == "" and cannot write it.
 		reply := Message{Role: "assistant", Parts: []Part{{Kind: Text, Text: said}}}
 		msgs := append(req.Messages[:len(req.Messages):len(req.Messages)], reply)
 		conv := ""
@@ -1038,18 +1066,6 @@ func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop str
 		r.mu.Lock()
 		sessionID, outerSession, threadKey := r.sessionID, r.outerSession, r.threadKey
 		r.mu.Unlock()
-		r.mu.Lock()
-		row, work, toolsHash := r.lastRow, r.workKey, r.toolsHash
-		r.mu.Unlock()
-		if outerSession != "" && sessionID != "" && conv != "" && row != "" && work != "" {
-			if err := tuiRuntimeSaveInteractivePoint(conv, tuiRuntimeInteractivePoint{
-				SessionID: sessionID, Row: row, Work: work, Outer: tuiRuntimeInteractiveSessionStateKey(r.owner, outerSession),
-				Model: r.model, InstructionKey: tuiRuntimeInstructionKey(req), ReplyKey: tuiRuntimeAssistantReplyKey(reply),
-				ToolsHash: toolsHash,
-			}); err != nil {
-				log.Printf("Claude interactive cut point not saved: %v", err)
-			}
-		}
 		if outerSession != "" && sessionID != "" && conv != "" {
 			err := r.bridge.saveInteractiveSession(r.owner, outerSession, tuiRuntimeInteractiveSessionEntry{
 				SessionID: sessionID, Model: r.model, ThreadKey: threadKey,
@@ -1070,6 +1086,17 @@ func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop str
 				r.mu.Unlock()
 				r.bridge.noteLiteCompletedToolTurn(r.owner, outerSession, req, said)
 			}
+		}
+		// Record the strict-prefix boundary, with or without a session
+		// header: the next request whose history extends this exact prefix
+		// resumes this native session (resumed in place or forked), even
+		// after this process is gone. Only a complete reply is a boundary.
+		// Done before afterServeTurn, which consumes the kept reply.
+		r.saveNativeCheckpoint(req)
+		if r.serve {
+			// its session ends at this reply, where it is kept for the
+			// conversation's next turn, or its process ended
+			r.afterServeTurn(req)
 		}
 		return
 	case r.stdin == nil:
@@ -3179,7 +3206,12 @@ func (r *tuiRuntimeSubscriptionRun) finish() {
 	r.controls = nil
 	ch := r.segment
 	r.segment = nil
+	in := r.serveIn
+	r.serveIn = nil
 	r.mu.Unlock()
+	if in != nil {
+		_ = in.Close()
+	}
 	for _, waiter := range pending {
 		close(waiter)
 	}
@@ -3313,6 +3345,9 @@ func (b *tuiRuntimeSubscriptionBridge) removeRun(run *tuiRuntimeSubscriptionRun)
 		run.nativeLease = nil
 	}
 	b.mu.Lock()
+	run.mu.Lock()
+	run.leaveIdleLocked()
+	run.mu.Unlock()
 	delete(b.runs, run.token)
 	tuiRuntimeSettings.DropCallback(run.token)
 	if run.idleKey != "" && b.idle[run.idleKey] == run {
@@ -3372,6 +3407,7 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 	// a run started lean has the caller's instructions as its system
 	// prompt (tuiRuntimeLeanSystem), not in its first message
 	req.leanPrompt = tuiRuntimeLeanPrompt()
+	req.scope = tuiRuntimePrefixScope(owner, access.Caller(r.Context()).KeyID)
 	if err := tuiRuntimeValidateInteractiveOutboundCredentials(body, r.Header); err != nil {
 		return out.Fail(http.StatusBadRequest, err.Error())
 	}
@@ -3811,9 +3847,14 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 	// it never handed over
 	began := time.Now()
 	var letting atomic.Bool
+	turn := run.turn()
 	gone := context.AfterFunc(r.Context(), func() {
 		letting.Store(true)
 		log.Printf("%s run on %s stopped: the client went away %s into the reply", name, model, time.Since(began).Round(time.Millisecond))
+		if run.serve {
+			run.letGoServeTurn(events, turn)
+			return
+		}
 		run.letGoFor(events)
 	})
 	defer gone()
@@ -3822,10 +3863,14 @@ func (rt *tuiRuntime) serveMessagesInner(out tuiRuntimeResponder, r *http.Reques
 			run.abort()
 		}
 	}
-	return out.Relay(req, events, abort, func(said, stop string, ok bool) {
+	reply := tuiRuntimeNewReplyRecorder(out.Client())
+	relayed := reply.tee(events)
+	defer tuiRuntimeDrain(relayed)
+	return out.Relay(req, relayed, abort, func(said, stop string, ok bool) {
 		if !gone() {
 			return // the client went first: letGo has the run
 		}
+		run.noteTurnReply(reply.message())
 		run.ended(req, said, stop, ok)
 	})
 }

@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/yetone/magpie/internal/access"
 )
 
 // A client of the Messages API sends its whole conversation with every
@@ -105,6 +107,7 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	}
 	req.Model = model
 	req.leanPrompt = tuiRuntimeLeanPrompt()
+	req.scope = tuiRuntimePrefixScope(owner, access.Caller(r.Context()).KeyID)
 	outerSession = tuiRuntimeLiteOuterSession(outerSession, r.Header)
 	// Auto mode's own classifier: refused before any native run starts.
 	if tuiRuntimeAutoModeClassifier(req) {
@@ -192,9 +195,17 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 		}
 		defer release()
 	}
-	run, events, err := rt.bridge.startLite(r.Context(), req, model, owner, outerSession, configDir)
-	if err != nil {
-		return out.Fail(tuiRuntimeStartStatus(err), "Claude Code: "+err.Error())
+	// the idle process whose session ends where the request's history does
+	// takes its new turn; else a native session is started for it
+	run, events, hot := rt.bridge.startHot(req, model, owner, outerSession, configDir)
+	if hot {
+		log.Printf("Claude interactive went on in the idle process at the request's prefix")
+	} else {
+		var err error
+		run, events, err = rt.bridge.startLite(r.Context(), req, model, owner, outerSession, configDir)
+		if err != nil {
+			return out.Fail(tuiRuntimeStartStatus(err), "Claude Code: "+err.Error())
+		}
 	}
 	defer run.releaseHTTP()
 	run.mu.Lock()
@@ -215,9 +226,16 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	run.heard(req.Messages)
 	began := time.Now()
 	var letting atomic.Bool
+	// the native turn this request owns: a later request's turn in the same
+	// process is not this client's to end
+	turn := run.turn()
 	gone := context.AfterFunc(r.Context(), func() {
 		letting.Store(true)
 		log.Printf("Claude Code run on %s stopped: the client went away %s into the reply", model, time.Since(began).Round(time.Millisecond))
+		if run.serve {
+			run.letGoServeTurn(events, turn)
+			return
+		}
 		// A stateless run belongs to no conversation that could take it up
 		// again: it is stopped, not kept waiting for its client.
 		if outerSession == "" {
@@ -232,10 +250,14 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 			run.abort()
 		}
 	}
-	return out.Relay(req, events, abort, func(said, stop string, ok bool) {
+	reply := tuiRuntimeNewReplyRecorder(out.Client())
+	relayed := reply.tee(events)
+	defer tuiRuntimeDrain(relayed)
+	return out.Relay(req, relayed, abort, func(said, stop string, ok bool) {
 		if !gone() {
 			return
 		}
+		run.noteTurnReply(reply.message())
 		run.ended(req, said, stop, ok)
 	})
 }
@@ -510,6 +532,13 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 		}
 		return run, events, err
 	}
+	// A native checkpoint keyed by the strict content prefix, not a session
+	// header: the deepest reply the request's history extends, resumed in
+	// place or forked there. With or without a session header, this keeps
+	// the prefix Anthropic cached for that reply instead of rebuilding.
+	if run, events, err, ok := b.startLiteAtNativeCheckpoint(ctx, req, model, owner, outerSession, configDir); ok {
+		return run, events, err
+	}
 	if outerSession != "" {
 		if id, prompt, images, work, ok := b.liteParkedBranch(owner, outerSession, model, configDir, req); ok {
 			log.Printf("Claude interactive resuming the conversation's own session with its tool results")
@@ -525,10 +554,6 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 			copied.resumedCopy, copied.workKey = true, work
 			return b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
 		}
-		point, pointSince, havePoint := tuiRuntimeInteractivePoint{}, []Message(nil), false
-		if tuiRuntimeClaudeDesktopTurnCompanionSuffix(req) == nil {
-			point, pointSince, havePoint = tuiRuntimeFindInteractivePoint(owner, outerSession, model, req)
-		}
 		saved, savedOK, err := b.loadInteractiveSession(owner, outerSession)
 		if err != nil {
 			return nil, nil, err
@@ -539,14 +564,6 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 			saved, since, status = b.restoreInteractiveSession(owner, outerSession, req)
 		}
 		legacy := status == tuiRuntimeInteractiveRestoreExact || status == tuiRuntimeInteractiveRestoreReplyAnchor || status == tuiRuntimeInteractiveRestoreCompanion
-		// The deeper of the two goes on; a point also when they are level,
-		// since it can be forked if its session is busy.
-		if havePoint && (!legacy || status != tuiRuntimeInteractiveRestoreCompanion && len(pointSince) <= len(since)) {
-			if run, events, err, ok := b.startLiteAtPoint(ctx, req, model, owner, outerSession, configDir, point, pointSince); ok {
-				b.anchorOuterThread(owner, outerSession, req)
-				return run, events, err
-			}
-		}
 		if legacy {
 			if release, ok := b.claimSession(saved.SessionID); ok {
 				defer release()
@@ -564,12 +581,17 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 	return b.startInteractiveRebuild(ctx, req, model, owner, outerSession, configDir)
 }
 
-// startLiteAtPoint goes on from point with since, the messages after it:
-// in its session when no run writes it and nothing was said in it after
-// the point, else in a copy of the session up to the point. Changed
-// instructions rebuild: the old ones are in the session's first prompt.
-// It reports false, starting nothing, when the session can't be read.
-func (b *tuiRuntimeSubscriptionBridge) startLiteAtPoint(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string, point tuiRuntimeInteractivePoint, since []Message) (*tuiRuntimeSubscriptionRun, <-chan Event, error, bool) {
+// startLiteAtNativeCheckpoint goes on from the deepest native checkpoint the
+// request's history extends, in the request's isolation scope: resumed in
+// its session when no run writes it and nothing was said after the
+// checkpoint's row, else forked there. It needs no session header. Changed
+// instructions rebuild. It reports false, starting nothing, when there is no
+// such checkpoint or its session can't be read.
+func (b *tuiRuntimeSubscriptionBridge) startLiteAtNativeCheckpoint(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, error, bool) {
+	point, since, ok := tuiRuntimeFindNativeCheckpoint(req, model)
+	if !ok {
+		return nil, nil, nil, false
+	}
 	if point.InstructionKey != tuiRuntimeInstructionKey(req) {
 		log.Printf("Claude interactive rebuilding native session: external instructions changed")
 		run, events, err := b.startInteractiveRebuild(ctx, req, model, owner, outerSession, configDir)
@@ -592,7 +614,7 @@ func (b *tuiRuntimeSubscriptionBridge) startLiteAtPoint(ctx context.Context, req
 	if release, ok := b.claimSession(point.SessionID); ok {
 		defer release()
 		if tuiRuntimeTranscriptEndsAt(configDir, work, point.SessionID, point.Row) {
-			log.Printf("Claude interactive resuming the native session at the reply the request goes on from")
+			log.Printf("Claude interactive resuming the native session at the strict-prefix checkpoint")
 			copied.pointResume = true
 			run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, point.SessionID, images, false)
 			return run, events, err, true
@@ -600,10 +622,10 @@ func (b *tuiRuntimeSubscriptionBridge) startLiteAtPoint(ctx context.Context, req
 	}
 	id, err := tuiRuntimeForkTranscript(configDir, work, point.SessionID, point.Row)
 	if err != nil {
-		log.Printf("Claude interactive could not fork the native session at the reply the request goes on from: %v", err)
+		log.Printf("Claude interactive could not fork the native session at the strict-prefix checkpoint: %v", err)
 		return nil, nil, nil, false
 	}
-	log.Printf("Claude interactive forking the native session at the reply the request goes on from")
+	log.Printf("Claude interactive forking the native session at the strict-prefix checkpoint")
 	copied.resumedCopy = true
 	run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
 	return run, events, err, true

@@ -73,6 +73,42 @@ printf '%s\n' '{"type":"system","subtype":"init","session_id":"desktop-compactio
 	}
 }
 
+// A scoped conversation with no session header is checkpointed at its
+// client's prefix and resumed from it, so its native Claude Code never
+// compacts by itself either.
+func TestClaudeTUIRuntimeInteractiveNoHeaderConversationIsCompactionOwner(t *testing.T) {
+	tuiRuntimeFakeClaude(t)
+	script := `#!/bin/sh
+printf '%s\n' "${DISABLE_AUTO_COMPACT-unset}" > "$COMPACTION_ENV_CAPTURE"
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"no-header-compaction-test"}' '{"type":"assistant","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn"}}' '{"type":"result","subtype":"success","session_id":"no-header-compaction-test","result":"OK"}'`
+	wrapper := filepath.Join(t.TempDir(), "wrapper")
+	if err := os.WriteFile(wrapper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	tuiRuntimeSetWrapper(t, wrapper)
+	path := filepath.Join(t.TempDir(), "env")
+	t.Setenv("COMPACTION_ENV_CAPTURE", path)
+	t.Setenv("DISABLE_AUTO_COMPACT", "0")
+	b := tuiRuntimeNewSubscriptionBridge()
+	defer tuiRuntimeBridges.Delete(b)
+	req := &tuiRuntimeRequest{Request: Request{Model: "claude-opus-5-5", Messages: []Message{{Role: "user", Parts: []Part{{Kind: Text, Text: "hello"}}}}}}
+	req.scope = tuiRuntimePrefixScope("owner", "")
+	run, events, err := b.startInteractiveOneTurn(context.Background(), req, req.Model, "", "owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.abort()
+	for range events {
+	}
+	value, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(value)) != "1" {
+		t.Fatalf("private Claude may compact a no-header conversation it is checkpointed for: %q", value)
+	}
+}
+
 func TestClaudeTUIRuntimeInteractiveClientCompactionEnvIsolation(t *testing.T) {
 	parent := []string{"PATH=/usr/bin", "DISABLE_AUTO_COMPACT=0", "CUSTOM_TOOL=keep"}
 	for _, tc := range []struct {
