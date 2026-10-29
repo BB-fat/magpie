@@ -4761,14 +4761,33 @@ func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name 
 func bridgeTools(req *Request) []bridgeTool {
 	tools := make([]bridgeTool, 0, len(req.Tools))
 	for _, t := range req.Tools {
-		if req.ToolChoice == "none" || (strings.HasPrefix(req.ToolChoice, "name:") && t.Name != strings.TrimPrefix(req.ToolChoice, "name:")) {
+		if !toolChoiceOffers(req.ToolChoice, t.Name) {
 			continue
 		}
-		schema := t.Schema
-		if len(schema) == 0 {
-			schema = json.RawMessage(`{"type":"object","properties":{}}`)
-		}
-		tools = append(tools, bridgeTool{Name: bridgeToolName(t.Name), Description: t.Description, InputSchema: schema})
+		tools = append(tools, bridgeToolDef(t))
 	}
 	return tools
+}
+
+// toolChoiceOffers says whether tool_choice lets the agent call tool name.
+func toolChoiceOffers(choice, name string) bool {
+	return choice != "none" && (!strings.HasPrefix(choice, "name:") || name == strings.TrimPrefix(choice, "name:"))
+}
+
+// bridgeToolDefs are all the caller's tools as the MCP helper defines them,
+// whatever tool_choice offers this turn.
+func bridgeToolDefs(req *Request) []bridgeTool {
+	tools := make([]bridgeTool, 0, len(req.Tools))
+	for _, t := range req.Tools {
+		tools = append(tools, bridgeToolDef(t))
+	}
+	return tools
+}
+
+func bridgeToolDef(t Tool) bridgeTool {
+	schema := t.Schema
+	if len(schema) == 0 {
+		schema = json.RawMessage(`{"type":"object","properties":{}}`)
+	}
+	return bridgeTool{Name: bridgeToolName(t.Name), Description: t.Description, InputSchema: schema}
 }
