@@ -50,6 +50,7 @@
     <a class="toc-only" href="/docs/docker">Docker</a>
     <a class="toc-only" href="/docs/privacy">Privacy</a>
     <a class="toc-only" href="/docs/masking">Privacy masking</a>
+    <a class="toc-only" href="/docs/mcp-router">MCP router</a>
     <a href="/docs/import">Add to magpie</a>
     <a href="/docs/integrate">Integrate</a>
     <a href="https://github.com/yetone/magpie-releases/releases">Releases</a>
@@ -123,7 +124,7 @@ magpie provider refresh office   <span class="c"># fetch its list again</span></
       <li><b>Every API.</b> A request goes on in the API the agent spoke (Anthropic Messages and token counting, Responses, Chat Completions). A model that the shared magpie’s provider serves on another API only is turned into that API once, never on both computers. Responses go over HTTP, SSE included, not WebSocket.</li>
       <li><b>Images and video.</b> Its image and video models are found by themselves and served through its image generation and edit, and video, APIs.</li>
       <li><b>System One.</b> Its decision models (Jev, Clef, and models with names of your own) are set up at its <code>/v1/systemone</code> and appear as decision models, not chat models. Refresh the provider’s list to find new ones. A bare <code>office</code> asks the first decision model listed.</li>
-      <li><b>Embeddings, rerank and speech to text</b> go to its matching APIs. They stay in agents’ lists as they are on the remote; being listed doesn’t make them able to hold a conversation.</li>
+      <li><b>Embeddings, rerank, speech to text and text to speech</b> go to its matching APIs. They stay in agents’ lists as they are on the remote; being listed doesn’t make them able to hold a conversation.</li>
       <li><b>Prices.</b> Each model costs here what the shared magpie counts it at (a price set there by hand, else its provider’s list price), so the two computers count the same. A price you set here comes first.</li>
     </ul>
 
@@ -157,6 +158,7 @@ magpie provider refresh office   <span class="c"># fetch its list again</span></
     <a href="/docs/docker">Docker</a>
     <a href="/docs/privacy">Privacy</a>
     <a href="/docs/masking">Privacy masking</a>
+    <a href="/docs/mcp-router">MCP router</a>
     <a href="/docs/import">Add to magpie</a>
     <a href="/docs/integrate">Integrate</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>

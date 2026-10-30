@@ -54,11 +54,17 @@ const FEED = `<?xml version="1.0" encoding="UTF-8"?>
 </feed>`;
 // what the worker sent PostHog
 const captured = [];
+// what the worker passed on to PostHog for the pages' snippet (relay)
+const relayed = [];
 globalThis.fetch = async (u, init = {}) => {
   u = String(u);
   if (u === "https://us.i.posthog.com/i/v0/e/") {
     captured.push(JSON.parse(init.body));
     return new Response("{}");
+  }
+  if (/^https:\/\/us(-assets)?\.i\.posthog\.com\//.test(u)) {
+    relayed.push({ u, method: init.method, headers: new Headers(init.headers), body: init.body && (await new Response(init.body).text()) });
+    return new Response("relayed");
   }
   if (u.startsWith("https://api.github.com/")) {
     seen.push(new Headers(init.headers));
@@ -166,6 +172,18 @@ test("docs: the bare docs paths open each language's guide", async () => {
   }
 });
 
+test("docs: the MCP hub's old pages go to the MCP router's, keeping the query", async () => {
+  const env = { ASSETS: { fetch: async () => new Response("asset") } };
+  for (const [from, to] of [["/docs/mcp-hub", "/docs/mcp-router"], ["/docs/mcp-hub.html", "/docs/mcp-router"], ["/docs/zh/mcp-hub/", "/docs/zh/mcp-router"], ["/docs/ja/mcp-hub.html?x=1", "/docs/ja/mcp-router?x=1"]]) {
+    const res = await worker.fetch(new Request("https://usemagpie.ai" + from), env, ctx);
+    assert.equal(res.status, 301, from);
+    const got = new URL(res.headers.get("Location"));
+    assert.equal(got.pathname + got.search, to, from);
+  }
+  const res = await worker.fetch(new Request("https://usemagpie.ai/docs/mcp-router"), env, ctx);
+  assert.equal(await res.text(), "asset");
+});
+
 // #661: the update window showed no notes while GitHub's API limited the
 // worker, and the failure was kept for five minutes.
 const ask = (path, env = {}) => worker.fetch(new Request("https://usemagpie.ai" + path), env, ctx);
@@ -263,6 +281,64 @@ test("download: a platform's link goes to that asset of the latest release", asy
   assert.equal(res.headers.get("Location"), "https://dl/x");
   assert.equal((await ask("/download/nothing-like-it")).status, 404);
 });
+
+test("download: each link followed is counted, with the platform, the country and a browser or a command", async () => {
+  captured.length = 0;
+  const req = new Request("https://usemagpie.ai/download/linux", { headers: { "User-Agent": "curl/8.7.1" } });
+  req.cf = { country: "BR" };
+  assert.equal((await worker.fetch(req, {}, ctx)).status, 302);
+  await new Promise((ok) => setTimeout(ok, 0));
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].event, "magpie site download");
+  assert.deepEqual(captured[0].properties, { link: "linux", file: "magpie-linux-amd64", client: "command", country: "BR", $process_person_profile: false });
+  captured.length = 0;
+  await worker.fetch(new Request("https://usemagpie.ai/download/linux", { headers: { "User-Agent": "Mozilla/5.0 (Macintosh)" } }), {}, ctx);
+  await new Promise((ok) => setTimeout(ok, 0));
+  assert.equal(captured[0].properties.client, "browser");
+  // a HEAD, or a file the release doesn't have, isn't counted
+  captured.length = 0;
+  await worker.fetch(new Request("https://usemagpie.ai/download/linux", { method: "HEAD" }), {}, ctx);
+  await ask("/download/nothing-like-it");
+  await new Promise((ok) => setTimeout(ok, 0));
+  assert.deepEqual(captured, []);
+});
+
+test("install.sh: each fetch is counted", async () => {
+  const env = { ASSETS: { fetch: async () => new Response("#!/bin/sh\n", { headers: { "Content-Type": "text/x-sh" } }) } };
+  captured.length = 0;
+  const res = await worker.fetch(new Request("https://usemagpie.ai/install.sh", { headers: { "User-Agent": "curl/8.7.1" } }), env, ctx);
+  assert.equal(await res.text(), "#!/bin/sh\n");
+  await new Promise((ok) => setTimeout(ok, 0));
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].event, "magpie site install script");
+  assert.equal(captured[0].properties.client, "command");
+});
+
+test("relay: the snippet's requests reach PostHog with the visitor's address and without the site's cookies", async () => {
+  relayed.length = 0;
+  const post = new Request("https://usemagpie.ai/r/e/?ip=0&ver=1.442.1", {
+    method: "POST",
+    body: "gzipped",
+    headers: { Cookie: "lang=zh", "CF-Connecting-IP": "203.0.113.7", "Content-Type": "text/plain", "User-Agent": "Mozilla/5.0" },
+  });
+  assert.equal(await (await worker.fetch(post, {}, ctx)).text(), "relayed");
+  await worker.fetch(new Request("https://usemagpie.ai/r/static/array.js"), {}, ctx);
+  await worker.fetch(new Request("https://usemagpie.ai/r/array/phc_x/config.js"), {}, ctx);
+  await worker.fetch(new Request("https://usemagpie.ai/r/flags/?v=2"), {}, ctx);
+  assert.deepEqual(relayed.map((r) => r.u), [
+    "https://us.i.posthog.com/e/?ip=0&ver=1.442.1",
+    "https://us-assets.i.posthog.com/static/array.js",
+    "https://us-assets.i.posthog.com/array/phc_x/config.js",
+    "https://us.i.posthog.com/flags/?v=2",
+  ]);
+  const [e] = relayed;
+  assert.equal(e.method, "POST");
+  assert.equal(e.body, "gzipped");
+  assert.equal(e.headers.get("X-Forwarded-For"), "203.0.113.7");
+  assert.equal(e.headers.get("Cookie"), null);
+  assert.equal(e.headers.get("User-Agent"), "Mozilla/5.0");
+});
+
 
 test("docs: an English docs page sends a browser that prefers Chinese or Japanese to its own, until a language is picked", async () => {
   const have = new Set(["/docs/start", "/docs/zh/start", "/docs/ja/start", "/docs/only-en"]);

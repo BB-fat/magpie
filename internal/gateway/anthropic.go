@@ -77,6 +77,21 @@ func (b aBlock) MarshalJSON() ([]byte, error) {
 // ephemeral marks a prompt-cache breakpoint.
 var ephemeral = map[string]string{"type": "ephemeral"}
 
+// addedMark is the mark anthropicBody puts on what it marks for the cache:
+// Anthropic's default five minutes, or an hour for a request whose turns
+// are often further apart (Request.hourMarks) to a Claude model. A 1h write
+// costs 2x the input price where a 5m one costs 1.25x, and a read 0.1x or
+// less: one turn after a pause of 5 to 60 minutes, read where it would
+// have been written again, pays for the dearer writes of dozens of
+// requests in quick succession. Every mark it adds has the same TTL, so
+// none comes after a shorter one, which Anthropic refuses.
+func addedMark(r *Request, model string) map[string]string {
+	if r.hourMarks && anthropicModel.MatchString(model) {
+		return cacheMark1h()
+	}
+	return ephemeral
+}
+
 type aRequest struct {
 	Model        string          `json:"model"`
 	System       json.RawMessage `json:"system,omitempty"`
@@ -179,22 +194,22 @@ func readAnthropic(body []byte, clientMarks, facts bool) (*Request, error) {
 				before := len(msg.Parts)
 				switch b.Type {
 				case "text":
-					msg.Parts = append(msg.Parts, Part{Kind: Text, Text: b.Text})
+					msg.Parts = append(msg.Parts, Part{Kind: Text, Text: b.Text, block: true})
 				case "image":
 					if b.Source != nil {
-						msg.Parts = append(msg.Parts, Part{Kind: Image, MediaType: b.Source.MediaType, Data: b.Source.Data, URL: b.Source.URL})
+						msg.Parts = append(msg.Parts, Part{Kind: Image, MediaType: b.Source.MediaType, Data: b.Source.Data, URL: b.Source.URL, block: true})
 					}
 				case "tool_use":
-					msg.Parts = append(msg.Parts, Part{Kind: ToolCall, ID: anthropicInID(b.ID), Name: b.Name, Args: b.Input})
+					msg.Parts = append(msg.Parts, Part{Kind: ToolCall, ID: anthropicInID(b.ID), Name: b.Name, Args: b.Input, block: true})
 				case "tool_result":
 					if facts {
 						msg.Parts = append(msg.Parts, Part{Kind: ToolResult, CallID: anthropicInID(b.ToolUseID)})
 						break
 					}
 					out, images := toolOutput(b.Content)
-					msg.Parts = append(msg.Parts, Part{Kind: ToolResult, CallID: anthropicInID(b.ToolUseID), Text: out, Images: images, IsError: b.IsError, Loads: toolRefs(b.Content)})
+					msg.Parts = append(msg.Parts, Part{Kind: ToolResult, CallID: anthropicInID(b.ToolUseID), Text: out, Images: images, IsError: b.IsError, Loads: toolRefs(b.Content), block: true})
 				case "thinking":
-					msg.Parts = append(msg.Parts, Part{Kind: Thinking, Text: b.Thinking, Signature: b.Signature})
+					msg.Parts = append(msg.Parts, Part{Kind: Thinking, Text: b.Thinking, Signature: b.Signature, block: true})
 				case "redacted_thinking":
 					// Claude's reasoning its safety systems sealed: it
 					// goes back to Messages whole, and is nothing to
@@ -203,7 +218,7 @@ func readAnthropic(body []byte, clientMarks, facts bool) (*Request, error) {
 						_ = decodeJSON(m.Content, &raws)
 					}
 					if i < len(raws) {
-						msg.Parts = append(msg.Parts, Part{Kind: Thinking, Sealed: raws[i], SealedBy: sealAnthropic})
+						msg.Parts = append(msg.Parts, Part{Kind: Thinking, Sealed: raws[i], SealedBy: sealAnthropic, block: true})
 					}
 				}
 				if clientMarks && !(mi == len(a.Messages)-1 && i == len(blocks)-1) {
@@ -415,8 +430,9 @@ var anthropicModel = regexp.MustCompile(`(?i)(?:^|[/.:-])claude-`)
 // "…requires adaptive thinking; thinking.type="disabled" (including
 // reasoning.effort=none) is not allowed (2013)", and Volcengine Ark's
 // glm-5.3 "thinking.type `disabled` is not supported by this model"
-// (#1141).
-var alwaysThinks = regexp.MustCompile(`(?i)always engages in thinking|thinking (?:can ?not|can't) be (?:disabled|turned off)|enable_thinking[^"]{0,60}restricted to true|始终(?:支持|开启|启用)?思考|思考[^"]{0,20}(?:不可|无法|不能)关闭|requires adaptive thinking\W+thinking\.type\W+disabled\W+\(including reasoning\.effort=none\) is not allowed|thinking\.type \x60disabled\x60 is not supported by this model`)
+// (#1141). Kimi Code (China)'s K3.1 answers "…does not support disabled
+// thinking mode" (#3739).
+var alwaysThinks = regexp.MustCompile(`(?i)always engages in thinking|thinking (?:can ?not|can't) be (?:disabled|turned off)|enable_thinking[^"]{0,60}restricted to true|始终(?:支持|开启|启用)?思考|思考[^"]{0,20}(?:不可|无法|不能)关闭|requires adaptive thinking\W+thinking\.type\W+disabled\W+\(including reasoning\.effort=none\) is not allowed|thinking\.type \x60disabled\x60 is not supported by this model|does not support disabled thinking mode`)
 
 // refusesThinkingOff is an Anthropic endpoint turning away a request
 // with thinking turned off (thinking.type disabled): a model that always
@@ -882,6 +898,7 @@ func buildAnthropic(r *Request, model string) []byte {
 // signature goes as its text instead of being left out. host is the
 // upstream's (outputEffortAt).
 func anthropicBody(r *Request, model, host string, replay bool) []byte {
+	r = responseInstructions(r)
 	if r.Format != nil && r.Format.schema() == nil {
 		// output_config.format takes a schema only: any JSON object is
 		// asked for in words
@@ -955,11 +972,12 @@ func anthropicBody(r *Request, model, host string, replay bool) []byte {
 	// which only adds to it, reads it from the cache; thinking can't be
 	// marked. Two marks at most, with the one Claude's sign-in adds kept
 	// within Anthropic's four.
+	mark := addedMark(r, model)
 	if n := len(msgs); n > 0 {
 		c := msgs[n-1].Content
 		for i := len(c) - 1; i >= 0; i-- {
 			if c[i].Type != "thinking" && c[i].Type != "redacted_thinking" {
-				c[i].CacheControl = ephemeral
+				c[i].CacheControl = mark
 				break
 			}
 		}
@@ -969,7 +987,7 @@ func anthropicBody(r *Request, model, host string, replay bool) []byte {
 	if r.System != "" {
 		// the tools and system prompt, the same every turn, are cached
 		// apart from the conversation
-		out["system"] = []aBlock{{Type: "text", Text: r.System, CacheControl: ephemeral}}
+		out["system"] = []aBlock{{Type: "text", Text: r.System, CacheControl: mark}}
 	}
 	maxTokens := r.MaxTokens
 	if maxTokens <= 0 {
@@ -1057,7 +1075,7 @@ func anthropicBody(r *Request, model, host string, replay bool) []byte {
 			tools = append(tools, map[string]any{"name": t.Name, "description": t.Description, "input_schema": schema})
 		}
 		if r.System == "" && len(tools) > 0 {
-			tools[len(tools)-1]["cache_control"] = ephemeral
+			tools[len(tools)-1]["cache_control"] = mark
 		}
 		if r.WebSearch {
 			tools = append(tools, map[string]any{"type": "web_search_20250305", "name": "web_search", "max_uses": 5})
@@ -1083,7 +1101,7 @@ func anthropicBody(r *Request, model, host string, replay bool) []byte {
 			out["tool_choice"] = tc
 		}
 	}
-	b, _ := json.Marshal(out)
+	b, _ := marshalBody(out, "messages")
 	return b
 }
 
@@ -1539,7 +1557,11 @@ func (e *anthropicEncoder) thinking() {
 		e.close()
 		e.fresh = false
 	}
-	e.openBlock(Thinking, map[string]any{"thinking": ""})
+	// signed empty where it starts, as Anthropic's own stream starts one:
+	// its signature_delta, if any, comes before the block's stop, and a
+	// client that reads the field as required (Grok Build) turns a block
+	// without it away (thinking_signature.go)
+	e.openBlock(Thinking, map[string]any{"thinking": "", "signature": ""})
 }
 
 func (e *anthropicEncoder) delta(d map[string]any) {

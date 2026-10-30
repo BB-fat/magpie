@@ -2,7 +2,8 @@ package provider
 
 // A daily check-in, whichever vendor's: WorkBuddy's (workbuddy_checkin.go)
 // and Trae CN's (trae_checkin.go). Each account in use is checked in once
-// a Beijing day, except Qoder's campaigns, rechecked every 30 minutes,
+// a Beijing day, except Qoder's campaigns and ZCode's gift plans,
+// rechecked every 30 minutes,
 // and an answer that may be the vendor's day before (provisional, #3326),
 // asked again every 30 minutes until a claim or an answer from noon on.
 // A press asks the vendor again for a done, inactive or ineligible one.
@@ -97,8 +98,9 @@ func (c checkiner) checkinNow(ctx context.Context, soon bool) []WorkBuddyCheckin
 			settled = false
 		}
 		// and the loop asks again an answer that may be the vendor's
-		// day before (#3326)
-		if settled && prev.provisional() {
+		// day before (#3326), unless the vendor said when its day turns
+		// (ValidUntil, held to in settled)
+		if settled && prev.provisional() && prev.ValidUntil.IsZero() {
 			settled = now.Sub(prev.At) < wbCheckinEvery
 		}
 		if c.recheck {
@@ -112,7 +114,11 @@ func (c checkiner) checkinNow(ctx context.Context, soon bool) []WorkBuddyCheckin
 			out = append(out, prev.shown())
 			continue
 		}
-		r := a.do(ctx)
+		// through the account's own proxy, else its provider's, as its
+		// usage is read (loginQuota), never the global one past them: a
+		// provider set to direct whose check-in went out through the
+		// global proxy was refused there (#2777)
+		r := a.do(ViaLogin(ctx, a.provider, a.User))
 		r.Day, r.At = day, now
 		if r.Offline && seen && prev.Day == day && prev.Offline {
 			r.Tries = prev.Tries + 1

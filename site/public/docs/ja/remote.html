@@ -50,6 +50,7 @@
     <a class="toc-only" href="/docs/ja/docker">Docker</a>
     <a class="toc-only" href="/docs/ja/privacy">プライバシー</a>
     <a class="toc-only" href="/docs/ja/masking">プライバシーマスキング</a>
+    <a class="toc-only" href="/docs/ja/mcp-router">MCP ルーター</a>
     <a href="/docs/ja/import">magpie に追加</a>
     <a href="/docs/integrate">アプリ連携</a>
     <a href="https://github.com/yetone/magpie-releases/releases">リリース</a>
@@ -123,7 +124,7 @@ magpie provider refresh office   <span class="c"># 一覧を再取得</span></pr
       <li><b>すべての API。</b>リクエストはエージェントが使った API のまま転送されます（Anthropic Messages とトークン計数、Responses、Chat Completions）。共有側のプロバイダが別の API でしか提供しないモデルは、変換が 1 回だけ行われ、両方のコンピューターで変換されることはありません。Responses は WebSocket ではなく HTTP（SSE を含む）で送られます。</li>
       <li><b>画像と動画。</b>画像・動画モデルは自動で見つかり、向こうの画像生成・編集・動画 API を通して使えます。</li>
       <li><b>System One。</b>決定モデル（Jev、Clef、自分で名前を付けたモデル）は向こうの <code>/v1/systemone</code> につながり、チャットモデルではなく決定モデルとして現れます。新しいものはプロバイダの一覧を更新すると見つかります。<code>office</code> だけを指定すると一覧の最初の決定モデルに問い合わせます。</li>
-      <li><b>Embeddings、rerank、音声の文字起こし</b>は向こうの対応する API に送られます。エージェントの一覧ではリモートでの扱いのままです。一覧にあっても会話に使えるわけではありません。</li>
+      <li><b>Embeddings、rerank、音声の文字起こしと音声合成</b>は向こうの対応する API に送られます。エージェントの一覧ではリモートでの扱いのままです。一覧にあっても会話に使えるわけではありません。</li>
       <li><b>価格。</b>各モデルは共有する magpie の計算どおり（向こうで手動設定した価格、なければプロバイダの定価）になるので、2 台の集計は一致します。このコンピューターで設定した価格が優先されます。</li>
     </ul>
 
@@ -157,6 +158,7 @@ magpie provider refresh office   <span class="c"># 一覧を再取得</span></pr
     <a href="/docs/ja/docker">Docker</a>
     <a href="/docs/ja/privacy">プライバシー</a>
     <a href="/docs/ja/masking">プライバシーマスキング</a>
+    <a href="/docs/ja/mcp-router">MCP ルーター</a>
     <a href="/docs/ja/import">magpie に追加</a>
     <a href="/docs/integrate">アプリ連携</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>

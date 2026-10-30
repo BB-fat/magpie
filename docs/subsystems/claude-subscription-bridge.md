@@ -53,6 +53,8 @@ to use an http:// proxy. The `settings.json` env that magpie writes for the
 user's own Claude Code sessions leaves a SOCKS proxy out (see
 [Providers and accounts](providers-accounts.md)).
 
+A saved account added by a setup-token (see [Providers and accounts](providers-accounts.md)) has no sign-in in its config directory. `inClaudeDir`, which builds the env of every run in a saved account's directory (a turn's run, the warm-up, `askClaude`, `/usage`), drops any `CLAUDE_CODE_OAUTH_TOKEN` it was given and sets it to `provider.ClaudeDirToken(configDir)` when that directory is a token account's: the token reaches the real Claude Code there and nowhere else, never on its command line, never in a log, and never to Claude Code's own account. magpie asks Anthropic nothing with it; the entrypoint and everything else about the run are as for any account.
+
 The helper offers each of the client's tools under `bridgeToolName`
 (`bridgeTools`), which Claude Code calls `mcp__<server>__<name>`. With no
 `MAGPIE_CLAUDE_MCP_NAME`, `<server>` is `magpie` (`internal/claudebridge`,
@@ -122,7 +124,10 @@ cache.
 
 A client can send `X-Magpie-Cache-Marks: client` on a `/v1/messages`
 request to a Claude subscription. Without that header, the bridge behaves
-as before. Chat Completions and Responses ignore the header. The mode is
+as before — except Claude Code's auto mode classifier, whose own marks are
+kept like an opted-in client's when they are valid, and dropped as before when
+they are not (#3835). Chat Completions and Responses
+ignore the header. The mode is
 part of the run's identity, including rewritten conversations and tool-result
 handoffs: opted-in and ordinary requests never share a run.
 
@@ -137,6 +142,7 @@ to the client. `claude_cache.go` validates the marks before run selection;
 | Top-level `cache_control` | Sets the request-level tail through `CLAUDE_CODE_EXTRA_BODY`. |
 | Last message block | Sets the same request-level tail. |
 | Earlier message block, new run | Ends a block at that point in the rendered history with the same TTL. |
+| Earlier message block without a mark, new run | Ends a block there too, so a mark that moved on with the conversation's growth leaves the old boundary in place for Anthropic's prefix check (#3835). |
 | Earlier message block, running or saved run | Dropped and reported; the existing history cannot be edited. |
 | Tool definition | Dropped and reported; Claude Code owns the tools. |
 | Bridge history-chunk mark | Uses only a free slot and never a longer TTL than a preceding mark. |
@@ -599,9 +605,38 @@ a Mac client of a Linux gateway). Since every tool is the caller's,
 `renderClaudePrompt` ends the caller's instructions with
 `envElsewhereNote`: the environment they describe is where every tool
 runs, and goes before one given earlier. It names no app or vendor, since
-it goes upstream. A lean run (`claudeLeanPrompt`) and a caller that names
-no folder are not told it. Not measured: how many tool calls it saves on
-a real run.
+it goes upstream. Not measured: how many tool calls it saves on a real
+run.
+
+A caller on another computer (`Request.remoteCaller`, not `local`) that
+names no folder (`Request.envUnknown`) has only Claude Code's environment
+to go on, and that is the gateway's. packinggoods on Discord, a Mac
+client of a Windows gateway, had every command wrapped in PowerShell.
+Such a caller's instructions end with `envUnknownNote`: the environment
+given elsewhere is not where the tools run, so no platform, shell or path
+is taken from it. A caller with no instructions of its own gets the
+block for the note alone. A caller on this computer that names no folder
+is told nothing more: Claude Code's platform and shell are its own.
+
+Claude Code has no option to leave its environment out. In 2.1.312 it
+is a `<system-reminder>` in the run's first message, before magpie's
+text, with `--system-prompt-file` too; the SDK's `excludeDynamicSections`
+only moves it there. So a lean run (`claudeLeanPrompt`) is told the same
+in its system prompt (`leanSystem`), the named-folder note worded as
+`envElsewhereLeanNote` since the environment comes after it there
+(`envNote` picks the note).
+
+Claude Code 2.1.296 and later, as a client, give their own environment
+the same way: a `{role: "system"}` message after the user's first, not
+in the system prompt. For such a caller (`Request.envInTurns`, from
+`clientNamedWorkPlace`) "the environment these instructions describe"
+pointed at instructions that describe none, while the caller's came
+after them as a message (packinggoods again, after v0.1.2093). Its
+instructions, or a lean run's system prompt, end with `envTurnsNote`
+instead: of the environments the conversation gives, the last one is
+where every tool runs. The run's own is always the first, at the start
+of its first message, so the last is the caller's. Not measured: whether
+a real model on a Windows gateway then stops writing PowerShell.
 
 Nothing else of the folder reaches the run. `--setting-sources ""` loads
 no CLAUDE.md, settings or skills from it. Auto memory is off, and

@@ -17,6 +17,7 @@ import (
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/pluginrt"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 	"golang.org/x/term"
 )
 
@@ -494,9 +495,16 @@ func pluginLogin(ctx context.Context, name, method string) error {
 			return err
 		}
 		if a.URL != "" {
-			fmt.Println("Sign in in your browser. If it didn't open, go to:")
+			// the user may keep sign-in pages to a browser of their own; a
+			// page the plugin's CLI opened itself is open either way
+			linkOnly := settings.Load().SignInLinkOnly && !a.Opened
+			if linkOnly {
+				fmt.Println("Open this link in the browser you sign in with:")
+			} else {
+				fmt.Println("Sign in in your browser. If it didn't open, go to:")
+			}
 			fmt.Println(faint.Render(a.URL))
-			if !a.Opened {
+			if !a.Opened && !linkOnly {
 				openInBrowser(a.URL)
 			}
 		}

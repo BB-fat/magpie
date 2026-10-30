@@ -52,6 +52,13 @@ type QuotaWindow struct {
 	// day. Smart routing takes it for the window's renewal (cdredfox on X).
 	RunsOutAt *time.Time `json:"runsOutAt,omitempty"`
 	RunsOut   float64    `json:"runsOut,omitempty"`
+	// Balance is how much is left of the window in Unit, when the vendor
+	// tells only that: a prepaid wallet, with no total to take a share of
+	// (SuperMagic's points, #3950). Used is then no reading (0); the GUI
+	// says the figure left, and routing knows the account by it and puts
+	// the one with the most left first among a provider's accounts in the
+	// same unit (Allowance.Left). nil when not told.
+	Balance *float64 `json:"balance,omitempty"`
 	// Family is the model family a per-model window belongs to (Antigravity's
 	// "Gemini 3.1 Pro (High)" is Gemini's), for the GUI to show one figure a
 	// family, the tightest; each window is still here, and routing reads
@@ -104,6 +111,10 @@ type QuotaWindow struct {
 	// (WithWindowStarts): with ResetsAt it places an even pace through the
 	// window, which the card's Pace number is measured from (fflake33).
 	StartsAt *time.Time `json:"startsAt,omitempty"`
+	// TrayKind is, for the GUI only, how Settings names the window among
+	// those the menu bar can show (gui.withTrayKinds): "5h", "7d",
+	// "month"; empty on one the menu bar leaves out.
+	TrayKind string `json:"trayKind,omitempty"`
 	// matches further scopes pools whose membership isn't one model word.
 	matches func(string) bool
 	// partial is set on the windows of a reading that may leave some out:
@@ -134,6 +145,10 @@ type SubscriptionQuota struct {
 	// BalanceTrend is the Balance over time, as magpie read it, and when
 	// it runs out at that pace (balance_history.go)
 	BalanceTrend *BalanceTrend `json:"balanceTrend,omitempty"`
+	// SharedBalance is set on each key of a provider found to read one
+	// account's balance with others (balance_shared.go): the name of the
+	// first of them, whose card shows it once for all
+	SharedBalance string `json:"sharedBalance,omitempty"`
 	// Until is when the plan's paid time ends: it renews then when Renew
 	// is "auto", is over when "off", and either when "" (the vendor
 	// doesn't say which).
@@ -213,6 +228,9 @@ type SubscriptionQuota struct {
 	// In-process read order, separate from the vendor's ReadAt and never
 	// persisted: restarting starts a new sequence.
 	readSeq uint64
+	// wideBalance marks a balance that is the account's, not the key's
+	// own (balanceAccountWide)
+	wideBalance bool
 	// glmPlan marks a key's quota read from the GLM Coding Plan endpoint,
 	// including custom providers. Only these can share ZCode's allowance.
 	glmPlan bool
@@ -765,12 +783,15 @@ func AskUsage() {
 
 // claudeWindows is the allowance of the Claude account user, read by
 // Claude Code's own /usage. The account Claude Code is signed in to
-// (active) is read when the user asked since it last was, or when the last
-// reading's claudeUsageWait is up and Claude Code was used since. A saved
-// account is read only when its card is refreshed (savedRefresh), by Claude
-// Code run in the account's own config directory (readSavedClaudeUsage),
-// Claude Code's own sign-in left as it is (#1630). Any other time it is
-// what was kept.
+// (active) is read when the user asked since it last was, when the last
+// reading's claudeUsageWait (claudeNearOutWait near out) is up and Claude
+// Code was used since, or when Claude Code was refused for its limit
+// since. A saved
+// account is read only when its card is refreshed (savedRefresh), or when
+// the switch off a spent account has no reading of it (spareRead), by
+// Claude Code run in the account's own config directory
+// (readSavedClaudeUsage), Claude Code's own sign-in left as it is (#1630).
+// Any other time it is what was kept.
 // magpie itself never asks Anthropic.
 func claudeWindows(ctx context.Context, user string, active bool) ([]QuotaWindow, error) {
 	key := strings.ToLower(user)
@@ -780,10 +801,18 @@ func claudeWindows(ctx context.Context, user string, active bool) ([]QuotaWindow
 	c.Lock()
 	e, ok := c.m[key]
 	c.Unlock()
+	// the account Claude Code is on is read sooner near out
+	// (claudeWaitOf), and at once once Claude Code was refused for its
+	// limit since (claudeLimitHitAfter, #4443)
 	due := e.tried.IsZero() || claudeAsked.Load() != 0 && asked > e.asked ||
-		active && now.Sub(e.tried) >= e.wait && (e.heard.After(e.tried) || claudeUsedSince(e.tried))
+		active && now.Sub(e.tried) >= claudeWaitOf(e, now) && (e.heard.After(e.tried) || claudeUsedSince(e.tried)) ||
+		active && claudeLimitHitAfter(e.tried)
+	// a saved account the switch off a spent one has no reading of
+	// (spareRead): read once, and again only after a wait while its read
+	// keeps failing, never every look
+	spare := !active && spareRead(ctx) && e.ws == nil && (e.tried.IsZero() || now.Sub(e.tried) >= e.wait)
 	// nor, with allowances read only when asked, one nobody asked for
-	read := (active || savedRefresh(ctx, user)) && due && now.Sub(e.tried) >= claudeAskFloor && !holding(ctx)
+	read := ((active || savedRefresh(ctx, user)) && due || spare) && now.Sub(e.tried) >= claudeAskFloor && !holding(ctx)
 	c.Lock()
 	// one reading an ask or a wait, its first caller's; the others keep
 	// to it
@@ -808,6 +837,9 @@ func claudeWindows(ctx context.Context, user string, active bool) ([]QuotaWindow
 			return e.windows(now), nil
 		case active:
 			return []QuotaWindow{}, errClaudeNotAsked
+		case claudeTokenAccount(user):
+			// a refresh wouldn't read it either (readSavedClaudeUsage)
+			return []QuotaWindow{}, errClaudeSetupToken
 		default:
 			return []QuotaWindow{}, errClaudeSaved
 		}
@@ -882,6 +914,24 @@ func savedRefresh(ctx context.Context, user string) bool {
 	return ok && wasAsked(ctx) && r.wants("claude", user)
 }
 
+type spareReadKey struct{}
+
+// readingSpare is ctx for the switch off a spent account (NextLogin)
+// reading a saved Claude account it has nothing on: with Claude Code kept
+// to its own sign-in (switch-only), no request of a saved account passes
+// magpie to tell its allowance, and one never signed in to in Claude Code
+// since had no reading at all, so the switch found no account with room
+// and never moved (cn_Vincentzyx on X).
+func readingSpare(ctx context.Context) context.Context {
+	return context.WithValue(ctx, spareReadKey{}, true)
+}
+
+// spareRead says ctx is readingSpare's.
+func spareRead(ctx context.Context) bool {
+	b, _ := ctx.Value(spareReadKey{}).(bool)
+	return b
+}
+
 // elapsed is ws as of now: a window that has reset since it was read
 // starts again from nothing.
 func elapsed(ws []QuotaWindow, now time.Time) []QuotaWindow {
@@ -951,7 +1001,7 @@ func codexWindows(ctx context.Context, token, accountID string) (plan string, ou
 	var data codexUsage
 	base := strings.TrimSuffix(CodexBase, "/codex")
 	out = []QuotaWindow{}
-	if err = accountJSON(ctx, base+"/wham/usage", token, map[string]string{"chatgpt-account-id": accountID}, &data); err != nil {
+	if err = accountJSON(ctx, base+"/wham/usage", token, codexAccountHeaders(accountID), &data); err != nil {
 		return "", out, nil, "", false, err
 	}
 	if c := data.Credits; c != nil && c.Has && !c.Unlimited {

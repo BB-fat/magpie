@@ -141,7 +141,13 @@ test("compat.js is the first of the page's own scripts", async () => {
   const all = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map((m) => m[1]);
   const srcs = all.filter((s) => s !== "boot.js" && s !== "theme.js" && s !== "omarchy.js");
   assert.equal(srcs[0], "compat.js", "loaded first: " + srcs.join(", "));
-  for (const f of await scripts()) assert(all.includes(f), f + " is not loaded by index.html");
+  // webfonts.js is imported by app.js in a browser tab only, cfgblocked.js
+  // when magpie can't write its folder, signsheets.js when a sign-in asks a
+  // value first, ruleedit.js on a masking rule's Edit, ratewindows.js when
+  // a provider editor draws its rate windows, traywindows.js when the menu
+  // bar shows a card, autoresetown.js when Settings draws Codex's auto-use
+  // rows; the checks above still read them
+  for (const f of await scripts()) if (!["webfonts.js", "cfgblocked.js", "signsheets.js", "ruleedit.js", "ratewindows.js", "traywindows.js", "autoresetown.js"].includes(f)) assert(all.includes(f), f + " is not loaded by index.html");
 });
 
 test("the styles hold up in Safari 15.0", async () => {

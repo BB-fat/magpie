@@ -47,6 +47,7 @@ var notAnAgent = map[string]string{
 	"TMUX_TMPDIR":                               "the same",
 	"GIT_SSH":                                   "the user's own SSH program for git, which a skill fetched with their git keeps",
 	"GIT_SSH_COMMAND":                           "the same, as a command",
+	"XDG_CURRENT_DESKTOP":                       "the desktop the user runs, which says whether xdg-mime's answer about an app's links is the whole one (agent.OpenAppLink), not a folder",
 	"TZ":                                        "the machine's time zone, which a routing rule's hours fall back to (c888ef272), not a folder",
 }
 

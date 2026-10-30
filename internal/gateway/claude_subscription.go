@@ -426,28 +426,37 @@ func clientWorkDir(req *Request) string {
 // clientNamedWorkDir is the working directory the caller's instructions
 // name, as they write it, wherever it is; "" when they name none.
 func clientNamedWorkDir(req *Request) string {
-	texts := []string{req.System}
+	dir, _ := clientNamedWorkPlace(req)
+	return dir
+}
+
+// clientNamedWorkPlace is clientNamedWorkDir, and whether the caller
+// named it in a message rather than in its instructions: Claude Code
+// 2.1.296 and later give their environment as a {role: "system"} message
+// after the user's first, so the run is told it in the conversation,
+// after the caller's instructions (envTurnsNote).
+func clientNamedWorkPlace(req *Request) (dir string, inTurns bool) {
+	look := func(t string, turn bool) {
+		for _, m := range clientCwdPattern.FindAllStringSubmatch(t, -1) {
+			for _, g := range m[1:] {
+				if g = strings.Trim(strings.TrimSpace(g), "`'\""); g != "" {
+					dir, inTurns = g, turn
+				}
+			}
+		}
+	}
+	look(req.System, false)
 	for _, m := range req.Messages {
 		if m.Role == "assistant" {
 			continue
 		}
 		for _, p := range m.Parts {
 			if p.Kind == Text {
-				texts = append(texts, p.Text)
+				look(p.Text, true)
 			}
 		}
 	}
-	dir := ""
-	for _, t := range texts {
-		for _, m := range clientCwdPattern.FindAllStringSubmatch(t, -1) {
-			for _, g := range m[1:] {
-				if g = strings.Trim(strings.TrimSpace(g), "`'\""); g != "" {
-					dir = g
-				}
-			}
-		}
-	}
-	return dir
+	return dir, inTurns
 }
 
 var clientCwdPattern = regexp.MustCompile(`(?m)(?:Primary working directory|^\s*(?:-\s*)?Working directory|Current working directory): *([^\r\n]+)$|<cwd>([^<\r\n]+)</cwd>`)
@@ -596,6 +605,9 @@ func (c claudeCLI) env(env []string, configDir string) []string {
 	if configDir != "" {
 		names = append(slices.Clone(names), "CLAUDE_CONFIG_DIR/p")
 	}
+	if slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, "CLAUDE_CODE_OAUTH_TOKEN=") }) {
+		names = append(slices.Clone(names), "CLAUDE_CODE_OAUTH_TOKEN")
+	}
 	if c.wsl.Root {
 		// asRoot's, for a distro whose user is root
 		names = append(slices.Clone(names), "IS_SANDBOX")
@@ -719,16 +731,6 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		mcpServer: map[string]any{"command": exe, "args": []string{"claude-mcp-helper", callbackPath, toolsPath}},
 	}})
 	args := claudeCLIArgs(model, string(mcpConfig), req.Effort, req.WebSearch)
-	if req.leanPrompt {
-		// in a file of the run's own: instructions can be longer than
-		// Windows lets a command line be
-		systemPath := filepath.Join(tmp, "system.md")
-		if err := os.WriteFile(systemPath, []byte(leanSystem(req)), 0o600); err != nil {
-			cleanup()
-			return nil, nil, err
-		}
-		args = append(args, "--system-prompt-file", binary.file(systemPath))
-	}
 	if req.ThinkOff {
 		// the client turned thinking off, as Claude Code's auto mode
 		// classifier and its small asks do: a run at Claude Code's own
@@ -750,7 +752,24 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	client := work != ""
 	if !client {
 		work, err = claudeWorkDir()
-		req.envElsewhere = clientNamedWorkDir(req) != ""
+		named, inTurns := clientNamedWorkPlace(req)
+		req.envElsewhere = named != ""
+		req.envInTurns = inTurns
+		// a caller on another computer that names no folder: Claude Code's
+		// environment is this computer's, and the tools run on the
+		// caller's (packinggoods on Discord: a Mac client of a Windows
+		// gateway had its commands wrapped in PowerShell)
+		req.envUnknown = !req.envElsewhere && req.remoteCaller
+	}
+	if req.leanPrompt {
+		// in a file of the run's own: instructions can be longer than
+		// Windows lets a command line be
+		systemPath := filepath.Join(tmp, "system.md")
+		if err := os.WriteFile(systemPath, []byte(leanSystem(req)), 0o600); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		args = append(args, "--system-prompt-file", binary.file(systemPath))
 	}
 	var sessions []string
 	switch {
@@ -2059,15 +2078,22 @@ func inClaudeDir(env []string, configDir string) []string {
 	if configDir == "" {
 		return env
 	}
-	out := make([]string, 0, len(env)+1)
+	out := make([]string, 0, len(env)+2)
 	for _, e := range env {
 		switch k, _, _ := strings.Cut(e, "="); k {
-		case "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR":
+		case "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN":
 			continue
 		}
 		out = append(out, e)
 	}
-	return append(out, "CLAUDE_CONFIG_DIR="+configDir)
+	out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
+	// an account added by a setup-token: Claude Code takes the token as
+	// `claude setup-token` says to, in its environment, for this account's
+	// directory alone; never on the command line, nor logged
+	if tok := provider.ClaudeDirToken(configDir); tok != "" {
+		out = append(out, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
+	}
+	return out
 }
 
 func cleanClaudeEnv(env []string) []string {
@@ -2746,7 +2772,7 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 	var blocks []map[string]any
 	var text strings.Builder
 	// a lean run has them as its system prompt (leanSystem)
-	if !req.leanPrompt && (req.System != "" || clientOSLine(req) != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:")) {
+if !req.leanPrompt && (req.System != "" || clientOSLine(req) != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:") || envNote(req) != "") {
 		text.WriteString("<external_system_instructions>\n")
 		system := withoutBillingHeader(req.System)
 		pos := 0
@@ -2765,10 +2791,8 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 			}
 		}
 		text.WriteString(system[pos:])
-		text.WriteString(clientOSLine(req))
-		if req.envElsewhere {
-			text.WriteString(envElsewhereNote)
-		}
+text.WriteString(clientOSLine(req))
+		text.WriteString(envNote(req))
 		text.WriteString(toolChoiceAsk(req))
 		text.WriteString("\n</external_system_instructions>\n\n")
 		// The caller's instructions are a block of their own, marked for the
@@ -2870,6 +2894,47 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 // app and no vendor: it goes to the vendor with the prompt.
 const envElsewhereNote = "\n\nThe environment these instructions describe (working directory, platform, OS, shell, git status) is the one every tool runs in. Where an environment given before them differs, go by these instructions; nothing has changed and there is no need to check."
 
+// envElsewhereLeanNote is envElsewhereNote for a lean run, whose
+// instructions are its system prompt: Claude Code gives its environment
+// after them, in the run's first message, not before.
+const envElsewhereLeanNote = "\n\nThe environment these instructions describe (working directory, platform, OS, shell, git status) is the one every tool runs in. Where an environment given elsewhere in this conversation differs, go by these instructions; nothing has changed and there is no need to check."
+
+// envUnknownNote follows the caller's instructions when the caller is on
+// another computer and names no folder: Claude Code's environment (its
+// platform, OS, shell and folder) is the gateway's, which no tool runs
+// on, and a model told only that one wrapped the caller's commands in the
+// gateway's shell. It names no app and no vendor.
+const envUnknownNote = "\n\nThe environment given elsewhere in this conversation (its working directory, platform, OS and shell) is not the one the tools run on: don't take a platform, shell or path for a tool call from it."
+
+// envTurnsNote is envElsewhereNote, in either mode, for a caller whose
+// environment is in its messages, not its instructions (Claude Code
+// 2.1.296 and later, req.envInTurns). envElsewhereNote pointed the model
+// at instructions that describe no environment, while the caller's own
+// came after them as a message, and the gateway's Claude Code gave its
+// own before them all (packinggoods on Discord: a Mac client of a
+// Windows gateway still had commands wrapped in PowerShell). The run's
+// own environment is always the first one given, at the start of its
+// first message, and the caller's comes after it, so the last one given
+// is the caller's. It names no app and no vendor.
+const envTurnsNote = "\n\nOf the environments given in this conversation (working directory, platform, OS, shell, git status), the last one given is the one every tool runs in. Where an earlier one differs, go by the last; nothing has changed and there is no need to check."
+
+// envNote is what a run is told after the caller's instructions of where
+// its tools run: "" for a run in the caller's own folder, or for a caller
+// on this computer that names none.
+func envNote(req *Request) string {
+	switch {
+	case req.envElsewhere && req.envInTurns:
+		return envTurnsNote
+	case req.envElsewhere && req.leanPrompt:
+		return envElsewhereLeanNote
+	case req.envElsewhere:
+		return envElsewhereNote
+	case req.envUnknown:
+		return envUnknownNote
+	}
+	return ""
+}
+
 func toolChoiceAsk(req *Request) string {
 	switch {
 	case req.ToolChoice == "required":
@@ -2883,10 +2948,11 @@ func toolChoiceAsk(req *Request) string {
 // leanSystem is a lean run's system prompt (ClaudeLeanPrompt): the
 // caller's instructions without the client Claude Code's billing line, as
 // renderClaudePrompt tells them to a run that keeps Claude Code's own,
-// with its tool choice. Claude Code still puts its billing line and its
+// with where its tools run (envNote) and its tool choice. Claude Code
+// still puts its billing line and its
 // identity line before it, and marks it for the cache itself.
 func leanSystem(req *Request) string {
-	return strings.TrimSpace(withoutBillingHeader(req.System) + clientOSLine(req) + toolChoiceAsk(req))
+return strings.TrimSpace(withoutBillingHeader(req.System) + clientOSLine(req) + envNote(req) + toolChoiceAsk(req))
 }
 
 // historyChunk is how many messages of the history renderClaudePrompt puts
@@ -3106,10 +3172,18 @@ func renderCachedParts(blocks []map[string]any, text *strings.Builder, parts []P
 		case Image:
 			blocks = imageBlocks(blocks, text, p)
 		}
-		if cached && p.cache != "" {
+		// A client block ends its rendered block even without a mark of its
+		// own: the mark a client put on this position last round has moved
+		// on with the conversation's growth, and with the boundary merged
+		// into the next marked block Anthropic's prefix check — which looks
+		// back over block boundaries, not into them — finds the old write
+		// no more and the whole history is written again (#3835)
+		if cached && (p.cache != "" || p.block) {
 			blocks = closeBlocks(blocks, text)
 			text.Reset()
-			blocks[len(blocks)-1]["cache_control"] = cacheMark(p.cache)
+			if p.cache != "" {
+				blocks[len(blocks)-1]["cache_control"] = cacheMark(p.cache)
+			}
 		}
 	}
 	return blocks
@@ -4423,6 +4497,13 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	var err error
 	if name == "Claude Code" && wantsClientCache(r, from) {
 		req, err = parseAnthropicRequest(body, true)
+	} else if name == "Claude Code" && classifierClientCache(from, body) {
+		// the classifier never asked for its marks through magpie's
+		// header: a set the bridge can't keep (a TTL order Anthropic
+		// would refuse) goes the default way, as before, not refused
+		if req, err = parseAnthropicRequest(body, true); err != nil {
+			req, err = parse(from, body)
+		}
 	} else {
 		req, err = parse(from, body)
 	}
@@ -4436,6 +4517,9 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	// a client that places its own cache marks keeps Claude Code's prompt:
 	// its system marks are placed in the run's first message (#1717)
 	req.leanPrompt = name == "Claude Code" && req.clientCache == nil && settings.Load().ClaudeLeanPrompt
+	// the tools of a caller on another computer run there, not where
+	// Claude Code runs (envUnknownNote)
+	req.remoteCaller = !local(r)
 	if req.Format != nil && req.Format.schema() == nil {
 		// --json-schema takes a schema only: any JSON object is asked for
 		// in words

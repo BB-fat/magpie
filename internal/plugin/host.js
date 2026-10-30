@@ -256,9 +256,39 @@ function proxied(env) {
   }
   return env
 }
+// And a program started with no folder of its own runs in workDir, not
+// the host's: the host runs in magpie's config folder, beside
+// settings.json and providers.json, so whatever a program saved by a
+// relative name went there, and a tool told to write "providers.json"
+// would write over magpie's. The chat page plugin (magpie-chat) starts
+// the user's MCP servers this way and runs their tools for a model,
+// whose fetched pages and saved files (jiakun_zhao on 𝕏 asked whose
+// page_<hash>.html and magpie_*.md files they had found) belong in a
+// folder of their own. A folder the plugin gives is kept.
+const workDir = path.join(process.cwd(), "plugin-work")
+let workReady = false
+function workCwd() {
+  if (!workReady) {
+    try {
+      fs.mkdirSync(workDir, { recursive: true })
+      workReady = true
+    } catch {
+      return undefined
+    }
+  }
+  return workDir
+}
 const guard = (o) => {
   if (o != null && typeof o !== "object") return o
   o = { ...o }
+  if (o.cwd == null || o.cwd === "") {
+    const d = workCwd()
+    if (d) {
+      o.cwd = d
+      // and PWD with it, which a shell script reads for its folder
+      if (process.platform !== "win32") o.env = { ...(o.env ?? process.env), PWD: d }
+    }
+  }
   o.env = proxied(o.env)
   if (Array.isArray(o.stdio)) {
     o.stdio = [...o.stdio]
@@ -551,10 +581,11 @@ function asked(input, init) {
 }
 
 // MAGPIE_ONLY are the headers magpie tells a plugin's fetch where the agent
-// that asked works with (WorkDirHeader and WorkGitHeader in
-// internal/provider): for the plugin to read, never for its vendor, so a
-// plugin that sends on the headers it was given sends them nowhere.
-const MAGPIE_ONLY = ["x-magpie-work-dir", "x-magpie-work-git"]
+// that asked works (WorkDirHeader and WorkGitHeader in internal/provider)
+// and that a queue needn't be waited out (FallbackHeader): for the plugin
+// to read, never for its vendor, so a plugin that sends on the headers it
+// was given sends them nowhere.
+const MAGPIE_ONLY = ["x-magpie-work-dir", "x-magpie-work-git", "x-magpie-fallback"]
 
 function unsaid(input, init) {
   if (input instanceof Request && MAGPIE_ONLY.some((k) => input.headers.has(k))) {
@@ -1037,10 +1068,23 @@ function uidOf(a) {
   return typeof a?.uid === "string" ? a.uid : ""
 }
 
+// renamedBy tells a sign-in to an account a plugin once named another way:
+// the same uid, and one of the two named by that uid, so the uid is the
+// account's own id (#4473: officeace-auth 0.1.14 named an account by its
+// masked phone, uid its Huawei domain id; the CodeArts plugin names it by
+// the domain id). A uid alone is not enough: Kiro keeps how an account was
+// signed in to as its uid, "google" for every Google sign-in.
+function renamedBy(now, was) {
+  const uid = uidOf(now)
+  return !!uid && uidOf(was) === uid && whoOf(now) !== whoOf(was) && (whoOf(now) === uid || whoOf(was) === uid)
+}
+
 // settle keeps a sign-in just saved at key once: one to an account already
-// signed in (the same account id and, where both have one, the same uid,
-// else the same secret) replaces that one's and goes. It gives where it is
-// kept.
+// signed in (the same account id and, where both have one, the same uid;
+// the same uid that one of them is named by; else the same secret)
+// replaces that one's and goes. It gives where it is kept. An account
+// named another way before keeps its account id, which the user's name
+// for it, its proxy and gateway keys are kept by.
 function settle(provider, key) {
   const k = changeAuth((all) => {
     const now = all[key]
@@ -1051,8 +1095,9 @@ function settle(provider, key) {
       if (k === key) continue
       const was = all[k]
       const other = uidOf(now) && uidOf(was) && uidOf(now) !== uidOf(was)
-      if ((who && whoOf(was) === who && !other) || (!who && !whoOf(was) && secret && secretOf(was) === secret)) {
-        all[k] = now
+      const renamed = renamedBy(now, was)
+      if ((who && whoOf(was) === who && !other) || renamed || (!who && !whoOf(was) && secret && secretOf(was) === secret)) {
+        all[k] = renamed && typeof was.accountId === "string" && was.accountId ? { ...now, accountId: was.accountId } : now
         delete all[key]
         return k
       }
@@ -1674,6 +1719,11 @@ function kinds(c) {
   return out.length ? out : undefined
 }
 
+// kindsSaid is whether a capabilities.input or .output says yes or no to a kind
+// at all: one that says no to each (an embedding's {"text": false}, #3279)
+// gives no kinds, and is not one that said nothing.
+const kindsSaid = (c) => !!c && typeof c === "object" && MODALITIES.some((k) => typeof c[k] === "boolean")
+
 // fromModelsDev is a models.dev model as OpenCode's provider list has it.
 function fromModelsDev(p, m) {
   return {
@@ -1764,13 +1814,18 @@ async function info(id, key, strict, limit) {
     // would be asked with the serving plugin's account
     if (server && h.spec !== server && signsIn(h.spec).includes(id)) continue
     const k = key ?? accountsOf(readAuth(), id)[0] ?? id
+    // the wait for a due renewal spends the hook's own budget: one
+    // provider then costs one listWait in a listing, not listWait plus
+    // the renewal wait — the sum (15s + 20s) took a single provider past
+    // refreshDeadline, and the whole listing with it (#4065)
+    const began = Date.now()
     await fresh(id, k)
     const all = readAuth()
     try {
       const given = JSON.parse(JSON.stringify(out))
       const l = { tried: false, lastOk: false }
       const ask = () => listing.run(l, () => inScope(id, k, () => ph.models(given, { auth: authCopy(k) })))
-      const next = limit > 0 ? await inTime(ask, limit, "the plugin's model list") : await ask()
+      const next = limit > 0 ? await inTime(ask, Math.max(limit - (Date.now() - began), 0), "the plugin's model list") : await ask()
       // a hook that asked its vendor, got no list and gave back the one it
       // was given fell back: magpie keeps the list it had, as a built-in
       // whose fetch failed keeps the one it fetched last; so does one that
@@ -1947,13 +2002,18 @@ async function providers({ proxies } = {}) {
     const keys = accountsOf(stored, id)
     const through = (k) => proxies?.[id]?.[k ?? keys[0] ?? ""] ?? proxies?.[id]?.[""] ?? ""
     const gen = infoGen
-    const p = await via.run(through(), () => info(id, undefined, false, listWait))
-    keepInfo(keys[0] ?? id, p, gen)
-    // each account's own models, as the built-ins read each account's: a
-    // plan may serve fewer, or others, than the first account's. One that
-    // can't be read is taken to have them all, or the ones it was last
-    // told to have, as a built-in account whose fetch failed keeps its own.
-    const own = await Promise.all(keys.slice(1).map((k) => via.run(through(k), () => info(id, k, true, listWait)).then((q) => (keepInfo(k, q, gen), q)).catch((e) => ({ failed: true, listError: e?.message ?? String(e) }))))
+    // every account is listed side by side, each hook given listWait: a
+    // second account no longer waits behind the first, where two
+    // listWaits back to back took one provider past refreshDeadline twice
+    // over (#4065)
+    const [p, own] = await Promise.all([
+      via.run(through(), () => info(id, undefined, false, listWait)).then((q) => (keepInfo(keys[0] ?? id, q, gen), q)),
+      // each account's own models, as the built-ins read each account's: a
+      // plan may serve fewer, or others, than the first account's. One that
+      // can't be read is taken to have them all, or the ones it was last
+      // told to have, as a built-in account whose fetch failed keeps its own.
+      Promise.all(keys.slice(1).map((k) => via.run(through(k), () => info(id, k, true, listWait)).then((q) => (keepInfo(k, q, gen), q)).catch((e) => ({ failed: true, listError: e?.message ?? String(e) })))),
+    ])
     const models = { ...p.models }
     for (const q of own) for (const [k, m] of Object.entries(q?.models ?? {})) models[k] ??= m
     const ids = (q) => Object.values(q.models).filter((m) => m.status !== "deprecated").map((m) => m.id)
@@ -2004,6 +2064,7 @@ async function providers({ proxies } = {}) {
           // every kind it takes and gives, not image alone (#1595)
           inputs: kinds(m.capabilities?.input),
           outputs: kinds(m.capabilities?.output),
+          outputsSaid: kindsSaid(m.capabilities?.output),
           released: m.release_date ?? "",
           cost: m.cost,
           variants: Object.keys(m.variants ?? {}),
@@ -2381,7 +2442,11 @@ async function load({ provider, account, proxy }) {
 //       count as one), aside? (using it up doesn't
 //       stop the account), runsOutAt? (ISO or ms: when the soonest
 //       credits left in it are lost, apart from its reset, as WorkBuddy's
-//       packages end) / runsOut? (how many are lost then) }],
+//       packages end) / runsOut? (how many are lost then), balance?
+//       (how much is left, in unit, of a prepaid wallet with no total:
+//       sent without used, it is no share, yet routing knows the account
+//       and puts the one with the most left first among the provider's
+//       accounts in the same unit, #3950) }],
 //     signIn?: "expired" | "kept" | "renewed" (what the read means for the
 //       account's sign-in, as a model request's X-Magpie-Sign-In says;
 //       without it an error saying to sign in again marks the account and
@@ -2442,6 +2507,7 @@ async function usageOf(provider, account) {
       aside: !!w?.aside,
       runsOutAt: when(w?.runsOutAt),
       runsOut: Math.max(0, num(w?.runsOut)),
+      balance: typeof w?.balance === "number" && isFinite(w.balance) ? Math.max(0, w.balance) : null, // null: not said
     })),
   }
 }
@@ -2456,10 +2522,13 @@ async function usageOf(provider, account) {
 //       "ineligible" (the account can't take part) | "inactive" (no
 //       check-in running) | "captcha" (the vendor asks for a captcha: the
 //       user checks in in its own app; never solved) | "failed",
-//     credit? (what it gave), streak? (days in a row), message?
+//     credit? (what it gave), streak? (days in a row), message?,
+//     until? (when the vendor's own day turns: an RFC 3339 time or epoch
+//       milliseconds; Qoder's daily credits open at 10:00 UTC+8)
 //   }
 // magpie asks once a Beijing day per account while the user has it on, and
-// again later that day after a failure; a hook that throws is a failure.
+// again later that day after a failure, or at until; a hook that throws is
+// a failure.
 // Run in the account's scope, a token it renews is saved to that account.
 async function checkin({ provider, account, proxy }) {
   return via.run(proxy ?? "", () => checkinOf(provider, account))
@@ -2477,11 +2546,14 @@ async function checkinOf(provider, account) {
   const r = (await inScope(provider, key, () => a.checkin(async () => authCopy(key), JSON.parse(JSON.stringify(p))))) ?? {}
   const num = (v) => (typeof v === "number" && isFinite(v) ? Math.max(0, v) : 0)
   const message = typeof r.message === "string" ? r.message : ""
+  // a time that doesn't read is not told
+  const t = typeof r.until === "number" ? r.until : typeof r.until === "string" ? Date.parse(r.until) : NaN
+  const until = Number.isFinite(t) && t > 0 ? new Date(t).toISOString() : ""
   if (!checkinOutcomes.includes(r.outcome)) {
     const said = r.outcome === undefined || r.outcome === null ? "no outcome" : JSON.stringify(r.outcome)
-    return { outcome: "failed", credit: 0, streak: 0, message: message ? `the plugin answered ${said}: ${message}` : `the plugin answered ${said}` }
+    return { outcome: "failed", credit: 0, streak: 0, message: message ? `the plugin answered ${said}: ${message}` : `the plugin answered ${said}`, until }
   }
-  return { outcome: r.outcome, credit: num(r.credit), streak: Math.round(num(r.streak)), message }
+  return { outcome: r.outcome, credit: num(r.credit), streak: Math.round(num(r.streak)), message, until }
 }
 
 // sdkHeaders are what the AI SDK package the model is on sends of the key.

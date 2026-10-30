@@ -67,6 +67,15 @@ func chinaFirst(raw string) string {
 	return ""
 }
 
+// ChinaFirst is the mirror in China the 「国内镜像」 switch asks before raw,
+// "" with the switch off or when no mirror serves raw.
+func ChinaFirst(raw string) string {
+	if !China() {
+		return ""
+	}
+	return chinaFirst(raw)
+}
+
 // modelMirror is hf-mirror's copy of one of the local masking models'
 // files (internal/pii), "" for anything else of Hugging Face's. Those
 // files are fetched at the revision their sha256 were pinned at, and what
@@ -160,12 +169,32 @@ func distinct(urls ...string) []string {
 
 // Do sends req as usual and, when the official answer fails in a way a
 // mirror could answer, tries its mirrors in order. A request that carries
-// credentials is never sent to a mirror.
+// credentials is never sent to a mirror with them: GitHub's, whose only
+// one is the user's token, goes to a mirror without it (bare).
 func Do(c *http.Client, req *http.Request) (*http.Response, error) {
-	if !mirrorable(req) {
+	if !mirrorable(req) && !bare(req) {
 		return do(c, req, []string{req.URL.String()})
 	}
 	return do(c, req, URLs(req.URL.String()))
+}
+
+// bare is whether req's one credential is an Authorization header to
+// GitHub, whose answers come without it too, at the anonymous rate: a
+// mirror is then asked without the header, and never sees the token. A
+// GitHub token in Settings turned the mirror off for every request to
+// GitHub's API (MYCF711, #3923).
+func bare(req *http.Request) bool {
+	if req.URL == nil || req.Header.Get("Authorization") == "" {
+		return false
+	}
+	switch strings.ToLower(req.URL.Hostname()) {
+	case "github.com", "api.github.com", "raw.githubusercontent.com", "codeload.github.com":
+	default:
+		return false
+	}
+	r := req.Clone(req.Context())
+	r.Header.Del("Authorization")
+	return mirrorable(r)
 }
 
 // mirrorable is whether req may be sent to a mirror. Credentials stay with
@@ -207,7 +236,7 @@ func DoOfficial(c *http.Client, req *http.Request) (*http.Response, error) {
 // when the 「国内镜像」 switch is on, but never to a fallback mirror: for a
 // file nothing checks, which only a copy of the very file may stand in for.
 func DoFaithful(c *http.Client, req *http.Request) (*http.Response, error) {
-	if !mirrorable(req) {
+	if !mirrorable(req) && !bare(req) {
 		return DoOfficial(c, req)
 	}
 	return do(c, req, faithful(req.URL.String()))
@@ -229,6 +258,8 @@ func do(c *http.Client, req *http.Request, urls []string) (*http.Response, error
 			}
 			r.URL = u
 			r.Host = ""
+			// only a request bare allows has one here (Do)
+			r.Header.Del("Authorization")
 			if r.Body != nil {
 				if r.GetBody == nil {
 					break
