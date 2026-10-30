@@ -91,6 +91,10 @@ type Model struct {
 	// OpenCode's order: not image alone (#1595)
 	Inputs  []string `json:"inputs,omitempty"`
 	Outputs []string `json:"outputs,omitempty"`
+	// OutputsSaid is whether capabilities.output said yes or no to any
+	// kind: an embedding's {"text": false} gives no Outputs and is still
+	// said (#3279), where a model said nothing of gives none and isn't
+	OutputsSaid bool `json:"outputsSaid,omitempty"`
 	// Fast is set by the plugin on a model it runs in its vendor's fast
 	// mode when the request says service_tier "priority" (m.fast: Cursor's
 	// plugin from 0.2.2, for a model Cursor has a fast variant of)
@@ -1095,16 +1099,22 @@ type UsageWindow struct {
 	// apart from the window's reset (WorkBuddy's packages)
 	RunsOutAt string  `json:"runsOutAt"`
 	RunsOut   float64 `json:"runsOut"`
+	// Balance is how much is left in Unit, a prepaid wallet's reading,
+	// with no share to tell (#3950); nil when the plugin didn't say.
+	Balance *float64 `json:"balance"`
 }
 
 // Checkin is what came of an account's daily check-in, as the plugin's
 // auth.checkin said: Outcome is one of claimed, done, ineligible,
-// inactive, captcha and failed.
+// inactive, captcha and failed. Until (RFC 3339, "" when not told) is when
+// the vendor's own day turns and the answer stops holding: Qoder's daily
+// credits open at 10:00 UTC+8, not at Beijing midnight.
 type Checkin struct {
 	Outcome string  `json:"outcome"`
 	Credit  float64 `json:"credit"`
 	Streak  int     `json:"streak"`
 	Message string  `json:"message"`
+	Until   string  `json:"until"`
 }
 
 // AccountCheckin asks the plugin to check account of provider in for the

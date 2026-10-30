@@ -10,8 +10,11 @@ const ID = process.env.FAKE_ID || "fakeco"
 const born = Date.now()
 
 // fakeWho is who a team signs in as: team@fake, and a team named name/uid
-// is name@fake with that uid, as WorkBuddy's plugin keeps one
+// is name@fake with that uid, as WorkBuddy's plugin keeps one; a team
+// named =id is named by that id, its uid too, as the CodeArts plugin's
+// OfficeAce card names a new sign-in by the Huawei domain id (#4473)
 function fakeWho(team) {
+  if (team?.startsWith("=")) return { accountId: team.slice(1), uid: team.slice(1) }
   const [name, uid] = (team ?? "me").split("/")
   return uid ? { accountId: name + "@fake", uid } : { accountId: name + "@fake" }
 }
@@ -93,6 +96,22 @@ export const FakePlugin = async ({ client }) => ({
       cfg.provider[ID].models["sensenova-u1.5-lite"] = { name: "sensenova-u1.5-lite", limit: { context: 131072, output: 32768 } }
       cfg.provider[ID].models["flux-2"] = { name: "Flux 2", provider: { npm: "@ai-sdk/anthropic" }, limit: { context: 1000, output: 100 } }
     }
+    // $FAKE_GOOGLE: the provider's models are on Gemini's API, as XYenon's
+    // Google AI Studio plugin gives them all (@ai-sdk/google), so it has
+    // no OpenAI-compatible model
+    if (process.env.FAKE_GOOGLE) cfg.provider[ID].npm = "@ai-sdk/google"
+    // $FAKE_VIDEO: a video model, as a Gemini plugin lists Veo: it says it
+    // gives video, nothing else
+    if (process.env.FAKE_VIDEO) cfg.provider[ID].models["veo-3.1-generate-preview"] = { name: "Veo 3.1", modalities: { input: ["text", "image"], output: ["video"] }, limit: { context: 1000, output: 100 } }
+    // $FAKE_GEMINI_DRAWS: image models on Gemini's API, as XYenon's Google
+    // AI Studio plugin lists them: one named for images, one that only
+    // says it gives them, and an Imagen, which draws on :predict instead
+    if (process.env.FAKE_GEMINI_DRAWS) {
+      const g = { provider: { npm: "@ai-sdk/google" }, limit: { context: 3000, output: 300 } }
+      cfg.provider[ID].models["gemini-3-pro-image-preview"] = { ...g, name: "Nano Banana Pro", modalities: { input: ["text", "image"], output: ["text", "image"] } }
+      cfg.provider[ID].models["gemini-3-flash-canvas"] = { ...g, name: "Gemini 3 Flash Canvas", modalities: { input: ["text", "image"], output: ["text", "image"] } }
+      cfg.provider[ID].models["imagen-4.0-generate-001"] = { ...g, name: "Imagen 4", modalities: { input: ["text"], output: ["image"] } }
+    }
     // $FAKE_DEEPSEEK: a DeepSeek model, as Cline's cline-pass/deepseek-v4-pro
     if (process.env.FAKE_DEEPSEEK) cfg.provider[ID].models["deepseek-v4-pro"] = { name: "DeepSeek V4 Pro", limit: { context: 1000, output: 100 } }
     // $FAKE_GLM: a GLM model, as Cline's cline-pass/glm-5.3
@@ -142,6 +161,8 @@ export const FakePlugin = async ({ client }) => ({
       const levels = (l) => Object.fromEntries(l.map((e) => [e, { reasoningEffort: e }]))
       cfg.provider[ID].models["fake-off"] = { name: "Fake Off", reasoning: true, variants: levels(["none", "low", "high", "max"]), limit: { context: 1000, output: 100 } }
       cfg.provider[ID].models["fake-on"] = { name: "Fake On", reasoning: true, variants: levels(["low", "high", "max"]), limit: { context: 1000, output: 100 } }
+      // Trae's levels as Our Free Model's plugin lists them (nianshou5)
+      cfg.provider[ID].models["fake-trae"] = { name: "Fake Trae", reasoning: true, variants: levels(["light", "high", "extra_high"]), limit: { context: 1000, output: 100 } }
     }
     // $FAKE_ZEN: a model as opencode-zen-free 0.1.3's config hook writes
     // it, from models.opencode.ai on 2026-10-11 (#1595, tkhs101): it
@@ -182,7 +203,11 @@ export const FakePlugin = async ({ client }) => ({
         }),
       },
     ],
-    loader: async (getAuth, provider) => ({
+    loader: async (getAuth, provider) => {
+      // $FAKE_LOAD_WAIT: the loader takes that many ms (a sign-in renewed
+      // on a slow line), as a cold host's first request waits for it
+      if (process.env.FAKE_LOAD_WAIT) await new Promise((r) => setTimeout(r, Number(process.env.FAKE_LOAD_WAIT)))
+      return {
       apiKey: "dummy",
       baseURL: process.env.FAKE_BASE,
       async fetch(url, init) {
@@ -204,13 +229,26 @@ export const FakePlugin = async ({ client }) => ({
         // where magpie said the agent works, as the plugin read it; its own
         // headers go on too, as a plugin that sends on what it got sends
         // them, for the host to take off
-        for (const k of ["x-magpie-work-dir", "x-magpie-work-git"]) if (h.has(k)) h.set("x-saw-" + k.slice(9), h.get(k))
+        for (const k of ["x-magpie-work-dir", "x-magpie-work-git", "x-magpie-fallback"]) if (h.has(k)) h.set("x-saw-" + k.slice(9), h.get(k))
+        // $FAKE_QUEUE: that model is queued at the vendor, as Qoder's free
+        // models are: waited out (here until magpie gives up) unless magpie
+        // said it needn't be, then said at once with the queue's 503
+        if (process.env.FAKE_QUEUE && typeof init.body === "string" && JSON.parse(init.body).model === process.env.FAKE_QUEUE) {
+          if (h.get("x-magpie-fallback") === "1") {
+            return new Response(JSON.stringify({ error: { message: `FakeCo queued the request for ${process.env.FAKE_QUEUE}; try again in 30s`, type: "queued" } }), { status: 503, headers: { "content-type": "application/json", "retry-after": "30" } })
+          }
+          await new Promise((_, no) => {
+            const t = setTimeout(() => no(new Error("FakeCo's queue gave up")), 300e3)
+            init.signal?.addEventListener("abort", () => (clearTimeout(t), no(init.signal.reason)))
+          })
+        }
         // $FAKE_H2: the request goes on node:http2 to that origin, as
         // Cursor's plugin runs its chats
         if (process.env.FAKE_H2) return h2(process.env.FAKE_H2, new URL(url).pathname)
         return fetch(url, { ...init, headers: h })
       },
-    }),
+    }
+    },
     // magpie's: the account's allowance; "full@fake" has used its five
     // hours, which count only fake-claude
     usage: async (getAuth) => {
@@ -238,15 +276,17 @@ export const FakePlugin = async ({ client }) => ({
       // $FAKE_WINDOWS: a JSON file of each account's windows, read at
       // each reading, as a vendor's usage page says them now (Factory's
       // plugin with Standard usage only, plugins#349)
+      // an IAM id kept as the accountId, the phone told here (#4416)
+      const iam = a.accountId?.startsWith("iam::") ? "180****2361" : undefined
       if (process.env.FAKE_WINDOWS) {
         const fs = await import("node:fs")
         const ws = JSON.parse(fs.readFileSync(process.env.FAKE_WINDOWS, "utf8"))[a.accountId]
-        if (ws) return { plan: "Fake Pro", windows: ws }
+        if (ws) return { plan: "Fake Pro", windows: ws, user: iam }
       }
       const full = a.accountId === "full@fake"
       return {
         plan: "Fake Pro",
-        user: full ? "Full@Fake.example" : undefined,
+        user: full ? "Full@Fake.example" : iam,
         until: "2030-01-02T03:04:05Z",
         renew: "auto",
         resets: full ? { count: 3, byWindow: true, fiveHour: 2, weekly: 1, team: true, each: [{ window: "weekly" }, { until: "2031-01-02T00:00:00Z", window: "fiveHour" }, { until: 1924992000, window: "fiveHour" }] } : undefined,
@@ -265,13 +305,21 @@ export const FakePlugin = async ({ client }) => ({
     // account's name/uid, so two of one name tell apart), and the
     // answer said by the key: ck-claim gives 50 on a 3-day streak, ck-done
     // is in already, ck-captcha is asked a captcha, ck-throw can't reach
-    // the vendor, ck-odd answers no outcome magpie knows
+    // the vendor, ck-odd answers no outcome magpie knows, and ck-until
+    // answers what the test wrote to <FAKE_CHECKIN>.until ({outcome, until})
     ...(process.env.FAKE_CHECKIN
       ? {
           checkin: async (getAuth) => {
             const a = await getAuth()
             const fs = await import("node:fs")
             fs.appendFileSync(process.env.FAKE_CHECKIN, (a.key ?? (a.uid ? a.accountId + "/" + a.uid : a.accountId) ?? "") + "\n")
+            // $FAKE_CHECKIN_URL: the vendor's check-in, asked at
+            // <url>/<key>; a press it doesn't answer 200 failed (#2777)
+            if (process.env.FAKE_CHECKIN_URL) {
+              const r = await fetch(process.env.FAKE_CHECKIN_URL + "/" + a.key)
+              if (!r.ok) throw new Error(`FakeCo's check-in answered ${r.status}`)
+              return { outcome: "claimed", credit: 1 }
+            }
             switch (a.key) {
               case "ck-claim":
                 return { outcome: "claimed", credit: 50, streak: 3 }
@@ -283,6 +331,8 @@ export const FakePlugin = async ({ client }) => ({
                 throw new Error("FakeCo's check-in is down")
               case "ck-odd":
                 return { outcome: "yes", message: "the daily credits were refreshed" }
+              case "ck-until":
+                return JSON.parse(fs.readFileSync(process.env.FAKE_CHECKIN + ".until", "utf8"))
             }
             return { outcome: "inactive" }
           },
@@ -319,6 +369,20 @@ export const FakePlugin = async ({ client }) => ({
       if (process.env.FAKE_ZEN) {
         p.models["mimo-v2.6-flash-free"] = { ...p.models["fake-1"], id: "mimo-v2.6-flash-free", name: "MiMo V2.6 Flash Free", api: { ...p.models["fake-1"].api, id: "mimo-v2.6-flash-free" }, free: true, variants: {},
           capabilities: {"temperature":true,"reasoning":true,"attachment":true,"toolcall":true,"input":{"text":true,"image":true,"audio":true,"video":true,"pdf":false},"output":{"text":true,"image":false,"audio":false,"video":false,"pdf":false},"interleaved":{"field":"reasoning_content"}} }
+      }
+      // $FAKE_KINDS: models as XYenon's magpie-google-ai-studio lists them
+      // (#3279): the embedding as the report gives it (output text false,
+      // nothing else said), one not named an embedding, a TTS with its
+      // parseModels' outputs (audio alone), a model that talks and speaks,
+      // one that talks and draws
+      if (process.env.FAKE_KINDS) {
+        const as = (id, output) => ({ ...p.models["fake-1"], id, name: id, api: { ...p.models["fake-1"].api, id }, free: false,
+          capabilities: { ...p.models["fake-1"].capabilities, input: { text: true }, output } })
+        p.models["gemini-embedding-001"] = as("gemini-embedding-001", { text: false })
+        p.models["bge-m3"] = as("bge-m3", { text: false })
+        p.models["gemini-2.5-flash-preview-tts"] = as("gemini-2.5-flash-preview-tts", { text: false, image: false, audio: true, video: false, pdf: false })
+        p.models["gemini-2.5-flash-native-audio"] = as("gemini-2.5-flash-native-audio", { text: true, image: false, audio: true, video: false, pdf: false })
+        p.models["gemini-2.5-flash-image"] = as("gemini-2.5-flash-image", { text: true, image: true, audio: false, video: false, pdf: false })
       }
       // $FAKE_SEARCHER: one more model, that searches the web by itself
       // when asked in plain words, marked on the list the hook gives, as

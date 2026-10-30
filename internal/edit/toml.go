@@ -300,7 +300,7 @@ func GetTOMLTop(path, key string) (string, bool) {
 // getTOMLTopLines is GetTOMLTop for a file that isn't valid TOML: the first
 // line that looks like `key = value` before one that looks like a header.
 func getTOMLTopLines(path, key string) (string, bool) {
-	raw, err := Read(path)
+	raw, err := readHeld(path)
 	if err != nil || raw == nil {
 		return "", false
 	}
@@ -648,6 +648,7 @@ func tomlParseError(p *unstable.Parser, err error) error {
 // the document, so comments and formatting survive validation unchanged.
 func writeTOML(path string, lines []string) error {
 	orig, _ := Read(path)
+	lines = markTOML(lines, string(orig))
 	data := []byte(joinLinesLike(lines, string(orig)))
 	if err := validateTOML(data); err != nil {
 		return fmt.Errorf("%s: edited TOML is invalid: %w", path, err)

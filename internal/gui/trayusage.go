@@ -61,11 +61,70 @@ func trayWindows(q provider.SubscriptionQuota) []provider.QuotaWindow {
 	return ws
 }
 
-// trayUsageText is the menu bar's text for a card and the tooltip that
+// trayWindowKind names a window by how long it runs, as
+// settings.TrayWindows keeps a choice of them: "5h", "1d", "7d", "month",
+// which stay when the vendor renames or reorders its windows; where the
+// span isn't known, the vendor's name for it after "name:".
+func trayWindowKind(w provider.QuotaWindow) string {
+	d := w.Span
+	if d >= 28*24*time.Hour && d <= 31*24*time.Hour {
+		return "month"
+	}
+	if h := int64(d.Round(time.Hour) / time.Hour); h >= 24 && h%24 == 0 {
+		return fmt.Sprintf("%dd", h/24)
+	} else if h >= 1 {
+		return fmt.Sprintf("%dh", h)
+	}
+	if d > 0 {
+		return fmt.Sprintf("%dm", max(1, int64(d.Round(time.Minute)/time.Minute)))
+	}
+	return "name:" + strings.ToLower(strings.TrimSpace(w.Name))
+}
+
+// trayShownKinds are the kinds of ws a card's rows show, as chosen in
+// Settings (settings.TrayWindows): nil, every window, when none was chosen
+// or none chosen is among ws now, so a card is never left empty.
+func trayShownKinds(ws []provider.QuotaWindow, kinds []string) []string {
+	for _, w := range ws {
+		if slices.Contains(kinds, trayWindowKind(w)) {
+			return kinds
+		}
+	}
+	return nil
+}
+
+// withTrayKinds is qs with each window the menu bar can show named by its
+// kind (TrayKind), for Settings to offer them; qs and its windows, which
+// the caches share, are left as they were.
+func withTrayKinds(qs []provider.SubscriptionQuota) []provider.SubscriptionQuota {
+	out := make([]provider.SubscriptionQuota, len(qs))
+	for i, q := range qs {
+		if len(q.Windows) > 0 {
+			ws := slices.Clone(q.Windows)
+			for j := range ws {
+				if !ws[j].Aside && ws[j].Model == "" {
+					ws[j].TrayKind = trayWindowKind(ws[j])
+				}
+			}
+			q.Windows = ws
+		}
+		out[i] = q
+	}
+	return out
+}
+
+// trayUsageText is trayCardText with every window shown.
+func trayUsageText(q provider.SubscriptionQuota, now time.Time, left, pace bool) (label, tip string) {
+	return trayCardText(q, now, left, pace, nil)
+}
+
+// trayCardText is the menu bar's text for a card and the tooltip that
 // spells it out: each window's use, or what is left of it (left), and when
 // it starts again. With pace (settings.TrayPace) each window's Pace number
-// follows its figure, in both, as the Usage page's cards show it.
-func trayUsageText(q provider.SubscriptionQuota, now time.Time, left, pace bool) (label, tip string) {
+// follows its figure, in both, as the Usage page's cards show it. The text
+// has the windows of the kinds given alone (trayShownKinds); the tooltip
+// has them all.
+func trayCardText(q provider.SubscriptionQuota, now time.Time, left, pace bool, kinds []string) (label, tip string) {
 	if strings.HasPrefix(q.Provider, trayTotal) {
 		return q.Balance, q.Name // trayTotalCard's: its rows, and its tooltip
 	}
@@ -84,6 +143,7 @@ func trayUsageText(q provider.SubscriptionQuota, now time.Time, left, pace bool)
 	if q.ReadAt != nil && !q.ReadAt.After(now) {
 		readAt = *q.ReadAt
 	}
+	kinds = trayShownKinds(ws, kinds)
 	var short, long []string
 	for _, w := range ws {
 		used := math.Max(0, math.Min(100, w.Used))
@@ -99,7 +159,9 @@ func trayUsageText(q provider.SubscriptionQuota, now time.Time, left, pace bool)
 			row = pct + " " + trayPace(p, left)
 			paceNote = " · pace " + trayPace(p, left)
 		}
-		short = append(short, row)
+		if kinds == nil || slices.Contains(kinds, trayWindowKind(w)) {
+			short = append(short, row)
+		}
 		tipPct := pct
 		if used != math.Trunc(used) {
 			tipPct = fmt.Sprintf("%.1f%%", used)
@@ -436,13 +498,20 @@ func trayPlain(cells []trayCell) []trayCell {
 	return out
 }
 
-// trayUsageView is what the tray shows for the cards: a cell for each
-// that has a label, with its stable identity for clicks; labels joined by
-// " | " for a tray that shows text; and a tooltip spelling each out.
+// trayUsageView is trayCardsView with every window shown.
 func trayUsageView(cards []provider.SubscriptionQuota, now time.Time, left, pace bool) (cells []trayCell, label, tip string) {
+	return trayCardsView(cards, now, left, pace, nil)
+}
+
+// trayCardsView is what the tray shows for the cards: a cell for each
+// that has a label, with its stable identity for clicks; labels joined by
+// " | " for a tray that shows text; and a tooltip spelling each out. A
+// card's rows are the windows its provider's kinds in pick name
+// (settings.TrayWindows), all when it names none.
+func trayCardsView(cards []provider.SubscriptionQuota, now time.Time, left, pace bool, pick map[string][]string) (cells []trayCell, label, tip string) {
 	var labels, tips []string
 	for _, q := range cards {
-		l, t := trayUsageText(q, now, left, pace)
+		l, t := trayCardText(q, now, left, pace, pick[q.Provider])
 		if t != "" {
 			tips = append(tips, t)
 		}

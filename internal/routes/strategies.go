@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"cmp"
 	"sort"
 	"sync"
 	"time"
@@ -27,6 +28,62 @@ func tier(share float64) int {
 	return 0
 }
 
+// byLeft is how a pool's wallets go by what they have left (Seat.Left),
+// as a comparison of two seats by their index: of seats whose balance is
+// in one provider's one unit (Seat.LeftIn), the one with more left first;
+// a seat that told none after those that did. Points and another
+// vendor's points don't compare, so each kind is ordered only within the
+// places its own seats take: those places are the told seats' order by
+// before (nil: the pool's own order), each kind's seats are put in its
+// places by what they have left, and seats of two kinds keep before's
+// order between them. Before, a pool with two kinds was weighed by
+// nothing (nil), and a group of several providers' accounts spent the
+// small balances first (#4095, mycf_711). Nil when no seat told one.
+func byLeft(seats []Seat, before func(a, b Seat) bool) func(i, j int) int {
+	var told []int
+	for i, s := range seats {
+		if s.LeftIn != "" {
+			told = append(told, i)
+		}
+	}
+	if len(told) == 0 {
+		return nil
+	}
+	if before != nil {
+		sort.SliceStable(told, func(a, b int) bool { return before(seats[told[a]], seats[told[b]]) })
+	}
+	place := make([]int, len(seats))
+	for i := range place {
+		place[i] = len(seats) // told none: after every one that did
+	}
+	var kinds []string
+	places := map[string][]int{}
+	for p, i := range told {
+		in := seats[i].LeftIn
+		if _, ok := places[in]; !ok {
+			kinds = append(kinds, in)
+		}
+		places[in] = append(places[in], p)
+	}
+	for _, in := range kinds {
+		ps := places[in]
+		ids := make([]int, len(ps))
+		for k, p := range ps {
+			ids[k] = told[p]
+		}
+		sort.SliceStable(ids, func(a, b int) bool { return seats[ids[a]].Left > seats[ids[b]].Left })
+		for k, p := range ps {
+			place[ids[k]] = p
+		}
+	}
+	return func(i, j int) int { return cmp.Compare(place[i], place[j]) }
+}
+
+// fewerTokens is what Pace and LeastUsed go by after a wallet's balance:
+// what magpie sent a seat lately, the least first. It sets the places
+// wallets of two kinds keep between them (byLeft).
+func fewerTokens(a, b Seat) bool { return a.Tokens < b.Tokens }
+
 func identity(n int) []int {
 	idx := make([]int, n)
 	for i := range idx {
@@ -48,7 +105,8 @@ func identity(n int) []int {
 // renews, changes nothing. Renewing in the same hours, the one whose
 // credits left lapse first (Seat.Lapse) goes first: WorkBuddy's free
 // accounts all renew at the month's end, but the credits each was given
-// end on their own days (zhaocai_83020 on Discord). Those alike stay in their order, keeping the
+// end on their own days (zhaocai_83020 on Discord). Then, of prepaid
+// wallets (Seat.Left), the one with more left (#3950). Those alike stay in their order, keeping the
 // vendor's prompt cache warm. Past that, whichever has the most left, and
 // one all but used up only when nothing else can take it, one that goes
 // on on its credits first of those (spentBefore). Only the windows
@@ -59,6 +117,7 @@ func identity(n int) []int {
 // once: else, kept after those known, it would never answer and never be
 // known (Anthropic's usage endpoint can turn magpie away for hours).
 var Smart = Strategy{Order: func(_ string, seats []Seat) []int {
+	left := byLeft(seats, nil)
 	var fine, low, spent []int
 	for i, s := range seats {
 		switch tier(s.Used) {
@@ -96,7 +155,8 @@ var Smart = Strategy{Order: func(_ string, seats []Seat) []int {
 		// first, to the hour; one that tells none after those that do
 		x, y := a.Lapse.Truncate(time.Hour), b.Lapse.Truncate(time.Hour)
 		if x.Equal(y) {
-			return false
+			// then a wallet with more left (#3950)
+			return left != nil && left(fine[i], fine[j]) < 0
 		}
 		if x.IsZero() || y.IsZero() {
 			return y.IsZero()
@@ -137,9 +197,11 @@ var Rotate = Strategy{Order: func(pool string, seats []Seat) []int {
 
 // LeastUsed puts a subscription, or a key that reads its own windows, by the
 // share of its allowance used, as the vendor says; then, and for other
-// keys, by what magpie sent it lately. Of those all but used up, one that
+// keys, by what magpie sent it lately; prepaid wallets, which have no
+// share, by what they have left first (Seat.Left). Of those all but used up, one that
 // goes on on its credits goes first (spentBefore).
 var LeastUsed = Strategy{ByUse: true, Order: func(_ string, seats []Seat) []int {
+	left := byLeft(seats, fewerTokens)
 	idx := identity(len(seats))
 	sort.SliceStable(idx, func(a, b int) bool {
 		sa, sb := seats[idx[a]], seats[idx[b]]
@@ -148,6 +210,11 @@ var LeastUsed = Strategy{ByUse: true, Order: func(_ string, seats []Seat) []int 
 		}
 		if sa.Used != sb.Used {
 			return sa.Used < sb.Used
+		}
+		if left != nil {
+			if c := left(idx[a], idx[b]); c != 0 {
+				return c < 0
+			}
 		}
 		return sa.Tokens < sb.Tokens
 	})
@@ -166,7 +233,8 @@ var LeastUsed = Strategy{ByUse: true, Order: func(_ string, seats []Seat) []int 
 // that goes on on its credits first (spentBefore). Among the rest, one
 // not known that tells what it has left as it answers goes first while it
 // isn't, as in Smart, else it would never be known; then the pace, those
-// alike within a tenth by what magpie sent them lately, then in their
+// alike within a tenth by what a wallet has left (Seat.Left), then by what
+// magpie sent them lately, then in their
 // order, keeping the vendor's prompt cache warm. An account not known
 // counts as a whole week ahead of it; a key has no week, unless it reads
 // its own windows (a sub2api key's limits). A Codex account that spends a
@@ -198,6 +266,7 @@ var Pace = Strategy{ByUse: true, Order: func(_ string, seats []Seat) []int {
 			band[i] = band[byPace[k-1]]
 		}
 	}
+	left := byLeft(seats, fewerTokens)
 	idx := identity(len(seats))
 	sort.SliceStable(idx, func(a, b int) bool {
 		sa, sb := seats[idx[a]], seats[idx[b]]
@@ -213,6 +282,12 @@ var Pace = Strategy{ByUse: true, Order: func(_ string, seats []Seat) []int {
 			return sa.Learns
 		} else if band[idx[a]] != band[idx[b]] {
 			return band[idx[a]] < band[idx[b]]
+		} else if left != nil {
+			// a wallet's pace is a whole week's; the one with more left
+			// first (#3950)
+			if c := left(idx[a], idx[b]); c != 0 {
+				return c < 0
+			}
 		}
 		return sa.Tokens < sb.Tokens
 	})
@@ -270,6 +345,48 @@ var FreeFirst = Strategy{ByFree: true, Order: func(_ string, seats []Seat) []int
 	return append(free, paid...)
 }}
 
+// Cheapest sends a request where its model costs least at the request's
+// time: the priced seats by Cost (a million tokens in and a million out),
+// those that cost the same by CacheCost, then the seats whose price isn't
+// known, each kept in its listed order among those alike. A price that
+// changes with the hour (DeepSeek's off-peak half price, a provider's rate
+// window) is read at the request's time, so one model on several
+// providers goes to the one that bills least now: DeepSeek's own API off
+// its peak hours, another provider of the same model in them (liyuanzheng
+// and lam_em on Discord). Prices a hair apart (sameCost) count as the
+// same, so a rate's rounding doesn't reorder providers billing alike.
+//
+// Like FreeFirst it orders one tier only: a member's allowance, rests and
+// failover are as for every routing, and a provider or group in the group
+// routed its own way keeps it.
+var Cheapest = Strategy{ByPrice: true, Order: func(_ string, seats []Seat) []int {
+	idx := identity(len(seats))
+	sort.SliceStable(idx, func(a, b int) bool {
+		sa, sb := seats[idx[a]], seats[idx[b]]
+		if sa.Priced != sb.Priced {
+			return sa.Priced
+		}
+		if !sa.Priced {
+			return false
+		}
+		if !sameCost(sa.Cost, sb.Cost) {
+			return sa.Cost < sb.Cost
+		}
+		return !sameCost(sa.CacheCost, sb.CacheCost) && sa.CacheCost < sb.CacheCost
+	})
+	return idx
+}}
+
+// sameCost: two prices within a millionth of each other, or of a cent a
+// million tokens, are the same price.
+func sameCost(a, b float64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d <= 1e-6 || d <= 1e-6*max(a, b)
+}
+
 // Builtin are the routings besides Smart and their strategies, as
 // plugins/rotation registers them.
 var Builtin = map[string]Strategy{
@@ -280,4 +397,5 @@ var Builtin = map[string]Strategy{
 	provider.Weighted:  Weighted,
 	provider.FreeFirst: FreeFirst,
 	provider.Fastest:   Fastest,
+	provider.Cheapest:  Cheapest,
 }

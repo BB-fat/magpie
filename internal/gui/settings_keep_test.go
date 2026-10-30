@@ -134,6 +134,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		ModelAPIs:            map[string]string{"p/m": "anthropic"},
 		ModelSameAs:          map[string]string{"p/m": "deepseek-v4.1-flash"},
 		UsageAliases:         map[string]string{"deepseek-v4.1-flash": "deepseek-flash"},
+		UsageCleared:         []settings.UsageClear{{Provider: "p", Model: "m", At: 1761600000000}},
 		ModelKinds:           map[string]string{"p/m": "video"},
 		RedactRules:          []redact.Rule{{Kind: "prefix", Prefix: "oc_sk_"}},
 		RedactActions:        map[string]string{"API_KEY": "block", "EMAIL": "warn"},
@@ -153,6 +154,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		UsageOrder:           []string{"kimi", "codex"},
 		PanelUsageHidden:     []string{"deepseek"},
 		UsageAgentsHidden:    []string{"curl"},
+		UsageCardsHidden:     []string{"stepfun|balance"},
 		ClientAgents:         map[string]string{"hermes-codex-thread-bridge": "codex"},
 		PlainNames:           true,
 		PlainOwnNames:        true,
@@ -167,6 +169,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		ChinaMirror:          true,
 		CodexAutoReset:       []string{"me@example.com"},
 		CodexAutoResetOnly:   map[string]string{"me@example.com": "expiring"},
+		CodexResetLead:       180,
 		CodexNoCredits:       []string{"me@example.com"},
 		CodexWarmAtOf:        map[string]string{"me@example.com": "09:00"},
 		TextSize:             125,
@@ -174,6 +177,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		UpdateMirror:         "https://mirror.example/",
 		Window:               []int{900, 700},
 		WindowMaximised:      true,
+		WindowAt:             []int{-1440, 120},
 		FullContext:          true,
 		DesktopLongest:       true,
 		GuideHidden:          true,
@@ -183,7 +187,9 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		RedactModel:          true,
 		RedactModelName:      "astrlink-guard",
 		RedactModelScore:     map[string]float64{"astrlink-guard": 0.9},
+		RedactRouteTo:        "fake/m1",
 	}
+	was.RedactModelOff, was.RedactModelAuto = true, true
 	was.DesktopSubagentEffort = "high"
 	was.CodexAsyncCompact, was.CodexAsyncCompactPercent = true, 70
 	was.ClaudeRunsMost = 3
@@ -192,10 +198,17 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.ClaudeTuiIdleSeconds = &idle
 	was.RequestArchiveLocal, was.RequestArchiveLocalMB = true, 256
 	was.ProxyCustom = "http://me:secret@proxy.example:8080"
+	was.PanelShortcut = "Ctrl+Alt+K"
 	if err := settings.Save(was); err != nil {
 		t.Fatal(err)
 	}
 	if err := settings.SetGatewayConversations(true); err != nil {
+		t.Fatal(err)
+	}
+	// only SetSessionReads writes the agents whose sessions are read
+	if err := settings.SetSessionReads(func(*settings.SessionReads) *settings.SessionReads {
+		return &settings.SessionReads{Asked: true, Agents: map[string]bool{"claude": true, "codex": false}}
+	}); err != nil {
 		t.Fatal(err)
 	}
 	was = settings.Load()

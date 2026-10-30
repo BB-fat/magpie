@@ -261,7 +261,8 @@ func Writable(dir string) bool {
 }
 
 // Stage downloads the app in rel and unpacks it next to the installed
-// bundle, ready for Install. It returns the unpacked app.
+// bundle, ready for Install. It returns the unpacked app, a bundle whose
+// folder is named stagedName.
 func Stage(ctx context.Context, rel *Release, bundle string) (string, error) {
 	if err := guardSelfUpdate(); err != nil {
 		return "", err
@@ -280,13 +281,23 @@ func Stage(ctx context.Context, rel *Release, bundle string) (string, error) {
 		os.RemoveAll(dir)
 		return "", err
 	}
-	out := filepath.Join(dir, "app")
+	out := filepath.Join(dir, "unzip")
 	if b, err := proc.CommandContext(ctx, "ditto", "-x", "-k", zip, out).CombinedOutput(); err != nil {
 		os.RemoveAll(dir)
 		return "", fmt.Errorf("unzip: %v: %s", err, b)
 	}
 	os.Remove(zip)
-	app := filepath.Join(out, "magpie.app")
+	// the zip holds magpie.app, which leaves that name at once: a folder
+	// ending in .app beside the installed one is taken by LaunchServices
+	// for a second magpie, and Spotlight lists it after it is gone (#3965)
+	unzipped := filepath.Join(out, "magpie.app")
+	app := filepath.Join(dir, stagedName)
+	if err := os.Rename(unzipped, app); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	os.Remove(out)
+	unregister(unzipped) // in case it looked in that moment
 	if err := sameSigner(ctx, bundle, app); err != nil {
 		os.RemoveAll(dir)
 		return "", err
@@ -317,6 +328,15 @@ func team(ctx context.Context, app string) string {
 	return ""
 }
 
+// stagedName is what the new app is unpacked as in stageDir, and asideName
+// what the installed one is moved to while they are swapped. Neither ends
+// in .app, so LaunchServices never registers either as a second magpie
+// (#3965); the renames don't need the name, and stay on one volume.
+const (
+	stagedName = "payload"
+	asideName  = "old"
+)
+
 // stageDir is where an update is unpacked: beside what it replaces, so
 // installing it is a rename on one volume, or, where magpie may not write,
 // in its cache, to be moved in with the administrator's password.
@@ -334,7 +354,7 @@ func stageDir(dir string) string {
 // magpie's to change the error is a permission one (NeedsAdmin), and
 // InstallAsAdmin can do it instead.
 func Install(staged, bundle string) error {
-	old := filepath.Join(filepath.Dir(staged), "old.app")
+	old := filepath.Join(filepath.Dir(staged), asideName)
 	os.RemoveAll(old)
 	if err := os.Rename(bundle, old); err != nil {
 		return err
@@ -343,17 +363,17 @@ func Install(staged, bundle string) error {
 		os.Rename(old, bundle) // put it back
 		return err
 	}
-	os.RemoveAll(filepath.Dir(filepath.Dir(staged))) // .magpie-update
+	os.RemoveAll(filepath.Dir(staged)) // .magpie-update
 	return nil
 }
 
 // InstallAsAdmin is Install with the administrator's password, asked for
 // by the system.
 func InstallAsAdmin(staged, bundle string) error {
-	old := filepath.Join(filepath.Dir(staged), "old.app")
+	old := filepath.Join(filepath.Dir(staged), asideName)
 	err := asAdmin(swapScript(staged, bundle, old))
 	if err == nil {
-		os.RemoveAll(filepath.Dir(filepath.Dir(staged)))
+		os.RemoveAll(filepath.Dir(staged))
 	}
 	return err
 }
@@ -515,8 +535,8 @@ func ReplaceBinary(ctx context.Context, rel *Release) error {
 	return err
 }
 
-// StageBinary downloads the release's build for this binary next to it (or
-// to the cache, where magpie may not write there), ready for InstallBinary.
+// StageBinary downloads the release's build for this binary out of sight
+// (binaryStage), ready for InstallBinary.
 func StageBinary(ctx context.Context, rel *Release) (string, error) {
 	if err := guardSelfUpdate(); err != nil {
 		return "", err
@@ -529,22 +549,117 @@ func StageBinary(ctx context.Context, rel *Release) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tmp := exe + ".new"
-	if !Writable(filepath.Dir(exe)) {
-		dir := stageDir(filepath.Dir(exe))
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", err
-		}
-		tmp = filepath.Join(dir, filepath.Base(exe)+".new")
+	return stageBinaryFor(ctx, a, exe)
+}
+
+func stageBinaryFor(ctx context.Context, a Asset, exe string) (string, error) {
+	tmp, err := binaryStage(exe)
+	if err != nil {
+		return "", err
 	}
 	if err := download(ctx, a, tmp); err != nil {
+		dropStage(tmp)
 		return "", err
 	}
 	if err := os.Chmod(tmp, 0o755); err != nil {
 		os.Remove(tmp)
+		dropStage(tmp)
 		return "", err
 	}
 	return tmp, nil
+}
+
+// The GUI downloads an update when it is out and swaps it in at the next
+// restart, which may be days later. It was downloaded beside the program
+// as magpie.exe.new, so a magpie kept on the Desktop showed the download
+// there, and deleted, it came back with the next check (nianshou5 on
+// Discord). It is downloaded to magpie's cache now, in a folder of this
+// program's own, whenever a rename from there reaches the program's
+// folder, which is what puts it in; else (the cache on another volume)
+// into a hidden .magpie-update folder beside the program. Where magpie may
+// not write beside the program, it goes to the cache as before, to be
+// moved in with the administrator's password.
+
+// besideStage is the hidden folder beside the program an update is
+// downloaded into when no rename from the cache reaches the program.
+const besideStage = ".magpie-update"
+
+// stageCache is magpie's cache folder; tests set it.
+var stageCache = appdir.SystemCache
+
+// binaryStage is the file StageBinary downloads exe's new build to, its
+// folder made.
+func binaryStage(exe string) (string, error) {
+	dir, name := filepath.Dir(exe), filepath.Base(exe)+".new"
+	if !Writable(dir) {
+		d := stageDir(dir)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return "", err
+		}
+		return filepath.Join(d, name), nil
+	}
+	if d := cacheStage(exe); d != "" && os.MkdirAll(d, 0o755) == nil {
+		if renamesInto(d, dir) {
+			return filepath.Join(d, name), nil
+		}
+		os.Remove(d)
+	}
+	d := filepath.Join(dir, besideStage)
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		return "", err
+	}
+	hide(d)
+	return filepath.Join(d, name), nil
+}
+
+// cacheStage is exe's own folder in the cache for its downloads, "" with
+// no cache: two copies of magpie (a portable one and the installed one)
+// never share one.
+func cacheStage(exe string) string {
+	cache, err := stageCache()
+	if err != nil || cache == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(filepath.Clean(exe))))
+	return filepath.Join(cache, "update", hex.EncodeToString(sum[:6]))
+}
+
+// renamesInto says whether a file in from can be renamed into dir: the
+// same volume, which a move that can't fail half way needs.
+func renamesInto(from, dir string) bool {
+	f, err := os.CreateTemp(from, ".magpie-update-*")
+	if err != nil {
+		return false
+	}
+	f.Close()
+	to := filepath.Join(dir, filepath.Base(f.Name()))
+	if err := os.Rename(f.Name(), to); err != nil {
+		os.Remove(f.Name())
+		return false
+	}
+	os.Remove(to)
+	return true
+}
+
+// dropStage removes the folder a staged download was in once it is empty,
+// when it is one binaryStage made.
+func dropStage(staged string) {
+	d := filepath.Dir(staged)
+	if filepath.Base(d) == besideStage || (len(filepath.Base(d)) == 12 && filepath.Base(filepath.Dir(d)) == "update") {
+		os.Remove(d)
+	}
+}
+
+// stagedFiles are the places a download of exe's next build may be: where
+// binaryStage puts it, and beside exe as exe.new, where earlier versions
+// put it.
+func stagedFiles(exe string) []string {
+	name := filepath.Base(exe) + ".new"
+	out := []string{exe + ".new", filepath.Join(filepath.Dir(exe), besideStage, name)}
+	if d := cacheStage(exe); d != "" {
+		out = append(out, filepath.Join(d, name))
+	}
+	return out
 }
 
 // InstallBinary swaps a staged binary in for exe, the running one, which
@@ -568,6 +683,7 @@ func InstallBinaryAside(staged, exe string) (string, error) {
 		if !trialled.passed(staged) {
 			if err := canStart(staged); err != nil {
 				os.Remove(staged)
+				dropStage(staged)
 				return "", &BlockedError{Err: err}
 			}
 			trialled.note(staged)
@@ -595,9 +711,11 @@ func InstallBinaryAside(staged, exe string) (string, error) {
 			}
 		} else if !NeedsAdmin(err) { // kept for InstallBinaryAsAdmin
 			os.Remove(staged)
+			dropStage(staged)
 		}
 		return "", err
 	}
+	dropStage(staged)
 	return old, nil
 }
 
@@ -778,17 +896,30 @@ func Replaced(exe string, started os.FileInfo) bool {
 	return err == nil && started != nil && (now.Size() != started.Size() || !now.ModTime().Equal(started.ModTime()))
 }
 
-// RemoveStaleNew removes exe.new when it is exe over again: the update a
-// magpie left running from before it downloaded once more.
+// RemoveStaleNew removes a download of exe's next build (stagedFiles)
+// that is no newer than exe: exe over again (the update a magpie left
+// running from before it downloaded once more), or an older version a
+// swap never put in. A newer one, which a magpie still running may yet
+// put in, stays.
 func RemoveStaleNew(exe string) {
-	staged := exe + ".new"
-	a, err1 := os.Stat(exe)
-	b, err2 := os.Stat(staged)
-	if err1 != nil || err2 != nil || a.Size() != b.Size() {
-		return
+	mine := fileVersion(exe)
+	for _, staged := range stagedFiles(exe) {
+		if !exists(staged) {
+			continue
+		}
+		if v := fileVersion(staged); sameBytes(exe, staged) || (mine != 0 && v != 0 && v <= mine) {
+			os.Remove(staged)
+		}
+		dropStage(staged)
 	}
-	if ha, hb := fileHash(exe), fileHash(staged); ha != "" && ha == hb {
+}
+
+// removeStaged removes every download of exe's next build: what nothing
+// will put in.
+func removeStaged(exe string) {
+	for _, staged := range stagedFiles(exe) {
 		os.Remove(staged)
+		dropStage(staged)
 	}
 }
 

@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"slices"
@@ -40,7 +43,7 @@ type Result struct {
 // serves, signed with a key made for it and asking for a model that key
 // sees, and reports what came back.
 func (p Provider) Test(ctx context.Context) []Result {
-	ctx = p.ownRequests(p.Via(ctx), probelog.KindTest)
+	ctx = withUnreached(p.ownRequests(p.Via(ctx), probelog.KindTest))
 	if p.DecideOnly() {
 		return p.testDecide(ctx)
 	}
@@ -60,7 +63,8 @@ func (p Provider) Test(ctx context.Context) []Result {
 			return []Result{{Protocol: proto, Error: zenPublicNone}}
 		}
 		url, body := tiny(q, proto, UpstreamName(p, model))
-		return []Result{probe(ctx, q, proto, url, q.tested(asClient(client, proto, body)), model, testWait)}
+		ctx, b := q.tested(ctx, asClient(client, proto, body))
+		return []Result{probe(ctx, q, proto, url, b, model, testWait)}
 	}
 	if p.isClaudeAccount() {
 		return []Result{p.testClaude(ctx, p.testModel(p, Anthropic))}
@@ -70,6 +74,12 @@ func (p Provider) Test(ctx context.Context) []Result {
 	}
 	var out []Result
 	for _, proto := range p.Speaks() {
+		if p.IsVertex() && (proto == Chat || proto == Anthropic) {
+			// a partner model, and Claude, answer only once the project
+			// has turned them on in Model Garden: the provider is tested
+			// on Gemini, and such a model by its own test (TestModel)
+			continue
+		}
 		q, ok := p.keyFor(proto)
 		model := p.testModel(q, proto)
 		if !ok {
@@ -82,7 +92,8 @@ func (p Provider) Test(ctx context.Context) []Result {
 			continue
 		}
 		url, body := tiny(q, proto, UpstreamName(p, model))
-		out = append(out, probe(ctx, q, proto, url, q.tested(body), model, testWait))
+		ctx, b := q.tested(ctx, body)
+		out = append(out, probe(ctx, q, proto, url, b, model, testWait))
 	}
 	if len(out) == 0 && p.zenPublic() {
 		out = append(out, Result{Protocol: Chat, Error: zenPublicNone})
@@ -189,13 +200,22 @@ func (p Provider) mantleBase(base, model string) string {
 func tinyBody(q Provider, proto Protocol, model string) (url, body string) {
 	switch proto {
 	case Chat:
-		if q.IsBedrock() || q.IsAzure() {
+		if q.IsBedrock() || q.IsAzure() || OpenAIHost(HostOf(q.Base(Chat))) {
+			// OpenAI's own API, Azure's and Bedrock's turn max_tokens away
+			// on their reasoning models (GoxxKintBlade on X: every model
+			// of an OpenAI key red, "Use 'max_completion_tokens' instead")
 			return q.mantleBase(q.Chat, model) + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_completion_tokens":16}`, model)
 		}
-		return q.Chat + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_tokens":16}`, model)
+		return q.Base(Chat) + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_tokens":16}`, model)
 	case Responses:
 		return q.mantleBase(q.Responses, model) + "/responses", fmt.Sprintf(`{"model":%q,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"max_output_tokens":16}`, model)
 	case Anthropic:
+		if q.IsVertex() {
+			// Claude at the project, as Anthropic's Vertex SDK asks it
+			// (VertexClaudeRequest)
+			at, b, _ := VertexClaudeRequest("/v1/messages", fmt.Appendf(nil, `{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`, model))
+			return q.Base(Anthropic) + at, string(b)
+		}
 		return q.Anthropic + "/v1/messages", fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`, model)
 	case Gemini:
 		if q.IsVertex() {
@@ -211,11 +231,73 @@ func tinyBody(q Provider, proto Protocol, model string) (url, body string) {
 }
 
 // testWait is how long a probe waits for an answer; drawWait, for a
-// picture, which takes an images API longer than a word takes chat.
-const (
-	testWait = 20 * time.Second
-	drawWait = 2 * time.Minute
+// picture, which takes an images API longer than a word takes chat;
+// pluginTestWait, for a plugin's provider, whose fetch may renew the
+// sign-in or ask its vendor more than once before it answers, as it does
+// for the gateway, which gives it no such bound (mingxia_16024 on
+// Discord: every Qoder and WorkBuddy model's test ended at 20s while
+// agents were answered).
+// connectWait is how long a probe waits for its connection (a TLS
+// handshake done, through any proxy) before it gives up on the host: an
+// address nothing answers at is said in that time, not the whole wait's
+// (RIck on Discord: a failing test took too long to say so).
+var (
+	testWait       = 20 * time.Second
+	drawWait       = 2 * time.Minute
+	pluginTestWait = time.Minute
+	connectWait    = 10 * time.Second
 )
+
+// unreached is the hosts one test run couldn't connect to, with why
+// (host:port → string): its other requests there fail at once with the
+// same words instead of each waiting out its own connectWait. An answer
+// that is slow, or a model that doesn't answer, is the model's and is
+// never put here.
+type unreached struct{ sync.Map }
+
+type unreachedKey struct{}
+
+func withUnreached(ctx context.Context) context.Context {
+	if ctx.Value(unreachedKey{}) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, unreachedKey{}, &unreached{})
+}
+
+// errNoConnect is the cause a probe's request is ended with when its
+// connection wasn't had in connectWait.
+var errNoConnect = errors.New("no connection")
+
+// hostOnly reports whether err says the host can't be reached at all,
+// whatever is asked of it: its name doesn't resolve, nothing takes the
+// connection, the connection wasn't had in connectWait, or its
+// certificate isn't trusted.
+func hostOnly(err error) bool {
+	var dns *net.DNSError
+	var op *net.OpError
+	var cert *tls.CertificateVerificationError
+	return errors.Is(err, errNoConnect) || errors.As(err, &dns) || errors.As(err, &cert) || errors.As(err, &op) && op.Op == "dial"
+}
+
+// hostPort is u's host with its port, the scheme's when none is written.
+func hostPort(u *url.URL) string {
+	if u.Port() != "" {
+		return u.Host
+	}
+	if u.Scheme == "http" {
+		return net.JoinHostPort(u.Hostname(), "80")
+	}
+	return net.JoinHostPort(u.Hostname(), "443")
+}
+
+// connecting is ctx ended with errNoConnect when no connection was had
+// in connectWait; stop ends its timer.
+func connecting(ctx context.Context) (_ context.Context, stop func()) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	t := time.AfterFunc(connectWait, func() { cancel(errNoConnect) })
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { t.Stop() }})
+	return ctx, func() { t.Stop(); cancel(nil) }
+}
 
 // drawsOnImages is whether model is asked on p's images API, as the
 // gateway draws with it there: chat would be turned away, or answered in
@@ -245,7 +327,7 @@ func tinyDrawing(q Provider, model string) (url, body string) {
 // on the endpoint it's served on and with a key that sees it: whether each
 // answers, not only whether the vendor does. Results are in models' order.
 func (p Provider) TestModels(ctx context.Context, models []string) []Result {
-	ctx = p.ownRequests(p.Via(ctx), probelog.KindTest)
+	ctx = withUnreached(p.ownRequests(p.Via(ctx), probelog.KindTest))
 	out := make([]Result, len(models))
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
@@ -255,6 +337,11 @@ func (p Provider) TestModels(ctx context.Context, models []string) []Result {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			if err := context.Cause(ctx); err != nil {
+				// stopped, or out of time, before its turn came
+				out[i] = Result{Model: model, Error: "not asked: " + err.Error()}
+				return
+			}
 			out[i] = p.testOne(ctx, model)
 		}()
 	}
@@ -335,7 +422,8 @@ func (p Provider) testOne(ctx context.Context, model string) Result {
 		r := probe(ctx, q, proto, url, []byte(body), model, drawWait)
 		if !r.OK && ((r.Status == 404 || r.Status == 405) && HostOf(q.Chat) != "openrouter.ai" || r.Status == 400 && catalog.PointsToChat(r.Error)) {
 			url, body := tiny(q, proto, model)
-			if c := probe(ctx, q, proto, url, q.tested(body), model, testWait); c.OK {
+			ctx, b := q.tested(ctx, body)
+			if c := probe(ctx, q, proto, url, b, model, testWait); c.OK {
 				return c
 			}
 		}
@@ -404,7 +492,8 @@ func (p Provider) testOn(ctx context.Context, client string, proto Protocol, mod
 	if client != "" {
 		body = asClient(client, proto, body)
 	}
-	return probe(ctx, p, proto, url, p.tested(body), model, testWait)
+	ctx, b := p.tested(ctx, body)
+	return probe(ctx, p, proto, url, b, model, testWait)
 }
 
 // keyFor is p using the first key on that works with proto: one made for
@@ -541,11 +630,33 @@ func (p Provider) ownRequests(ctx context.Context, kind string) context.Context 
 // it: the vendor's error, a stream's error after its 200 too. Do would
 // write the status alone, so a failed test's row said nothing of why
 // (ysm119 on Discord: "no answer", and no error to find anywhere).
-func probe(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration) (r Result) {
+func probe(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration) Result {
+	r := probeOnce(ctx, p, proto, url, body, model, wait)
+	if proto == Chat && r.Status == http.StatusBadRequest {
+		// a vendor whose 400 names the other reply-length field as the
+		// one to send (a relay in front of OpenAI's reasoning models, or
+		// one that reads max_tokens alone) is asked once more with it, as
+		// the gateway asks it (forward)
+		if b, ok := WithTokenField(body, TokenFieldWanted([]byte(r.Error))); ok {
+			return probeOnce(ctx, p, proto, url, b, model, wait)
+		}
+	}
+	return r
+}
+
+func probeOnce(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration) (r Result) {
 	r = Result{Protocol: proto, Model: model}
 	if model == "" {
 		r.Error = "no model to try: expose one, or refresh the model list"
 		return r
+	}
+	if p.IsPlugin() {
+		// the plugin host started and the account's loader run (a
+		// sign-in renewed) under the caller's time, as a warm host
+		// answers the gateway, not the probe's: a cold host took the
+		// whole of it (mingxia_16024)
+		p.warmPlugin(ctx)
+		wait = max(wait, pluginTestWait)
 	}
 	ctx, cancel := context.WithTimeout(probelog.WithModel(ctx, model), wait)
 	defer cancel()
@@ -554,10 +665,25 @@ func probe(ctx context.Context, p Provider, proto Protocol, url string, body []b
 	if logged {
 		rctx = probelog.Taken(ctx)
 	}
+	if !p.IsPlugin() && (p.Account == nil || p.Account.transport == nil && p.Account.clientFor == nil) {
+		// a plugin's or an account's own client may make no connection
+		// that tells the trace
+		var stop func()
+		rctx, stop = connecting(rctx)
+		defer stop()
+	}
 	req, err := http.NewRequestWithContext(rctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		r.Error = err.Error()
 		return r
+	}
+	host := hostPort(req.URL)
+	dead, _ := ctx.Value(unreachedKey{}).(*unreached)
+	if dead != nil {
+		if why, ok := dead.Load(host); ok {
+			r.Error = why.(string)
+			return r
+		}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if proto == Anthropic {
@@ -574,6 +700,11 @@ func probe(ctx context.Context, p Provider, proto Protocol, url string, body []b
 	}
 	if client := testClient(ctx); client != "" {
 		clientHeaders(client, req.Header)
+	}
+	if p.IsPlugin() {
+		// a model its vendor has queued is said so at once, not waited
+		// out for minutes as an agent's turn is (Qoder's free models)
+		req.Header.Set(FallbackHeader, "1")
 	}
 	if err := p.Sign(ctx, req, proto, body); err != nil {
 		r.Error = err.Error()
@@ -630,6 +761,14 @@ func probe(ctx context.Context, p Provider, proto Protocol, url string, body []b
 	r.Millis = time.Since(start).Milliseconds()
 	if err != nil {
 		r.Error = strings.TrimPrefix(err.Error(), "Post \""+url+"\": ")
+		if context.Cause(rctx) == errNoConnect {
+			err, r.Error = errNoConnect, fmt.Sprintf("couldn't connect to %s in %s", req.URL.Host, connectWait)
+		} else if ctx.Err() == context.DeadlineExceeded {
+			r.Error = fmt.Sprintf("no answer in %s", time.Since(start).Round(time.Second))
+		}
+		if dead != nil && hostOnly(err) {
+			dead.Store(host, r.Error)
+		}
 		return r
 	}
 	defer res.Body.Close()
@@ -640,6 +779,9 @@ func probe(ctx context.Context, p Provider, proto Protocol, url string, body []b
 		if streams(body) {
 			if msg, failed := streamAnswer(res.Body); failed {
 				r.Error = msg
+				if ctx.Err() == context.DeadlineExceeded {
+					r.Error = fmt.Sprintf("no answer in %s", time.Since(start).Round(time.Second))
+				}
 				return r
 			}
 		}
@@ -663,7 +805,8 @@ func streams(body []byte) bool {
 // streamAnswer reads a streamed answer up to the first thing the model
 // says — a word, a thought or a tool call, in Chat's, Responses' or
 // Anthropic's events — and reports an error the stream gives before that.
-// A stream that ends with neither was answered, as a 200 always was.
+// A stream that ends with neither was answered, as a 200 always was; one
+// broken off, or held open past the probe's wait, was not.
 func streamAnswer(r io.Reader) (msg string, failed bool) {
 	sc := bufio.NewScanner(io.LimitReader(r, 1<<20))
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
@@ -709,6 +852,9 @@ func streamAnswer(r io.Reader) (msg string, failed bool) {
 				}
 			}
 		}
+	}
+	if err := sc.Err(); err != nil {
+		return "the stream broke off before the model answered: " + err.Error(), true
 	}
 	return "", false
 }
@@ -925,10 +1071,13 @@ func apiError(b []byte, fallback string) string {
 		return fallback
 	}
 	// a body in no shape known is shown as it is, cut short, so what the
-	// vendor said isn't lost; other markup says nothing worth showing
+	// vendor said isn't lost; other markup (an XML error, a page's
+	// fragment) by its words, its tags taken out
 	s := strings.Join(strings.Fields(string(b)), " ")
 	if strings.HasPrefix(s, "<") {
-		return fallback
+		if s = MarkupText(b); s == "" {
+			return fallback
+		}
 	}
 	if r := []rune(s); len(r) > 300 {
 		s = string(r[:300]) + "…"
@@ -1001,5 +1150,29 @@ func WebPage(b []byte) (string, bool) {
 	if title := PageTitle(t); title != "" {
 		return "a web page, not an API reply: “" + title + "”", true
 	}
+	// one with no title by its words, which may say why (a relay's "only
+	// … clients are allowed"), cut as a title is
+	if said := MarkupText(t); said != "" {
+		if r := []rune(said); len(r) > 120 {
+			said = string(r[:120]) + "…"
+		}
+		return "a web page, not an API reply: “" + said + "”", true
+	}
 	return "a web page, not an API reply", true
+}
+
+// unshown is markup whose words aren't a reader's: a script, a style
+// sheet, a comment, an XML declaration.
+var unshown = regexp.MustCompile(`(?is)<script[^>]*>.*?</script\s*>|<style[^>]*>.*?</style\s*>|<!--.*?-->|<\?.*?\?>|<!doctype[^>]*>`)
+
+// MarkupText is the words markup holds, as plain words: scripts, styles
+// and comments out, then every tag, entities read, whitespace folded, cut
+// to 300 runes. "" when it holds none.
+func MarkupText(b []byte) string {
+	s := unshown.ReplaceAllString(string(b), " ")
+	s = strings.Join(strings.Fields(html.UnescapeString(tagRe.ReplaceAllString(s, " "))), " ")
+	if r := []rune(s); len(r) > 300 {
+		s = string(r[:300]) + "…"
+	}
+	return s
 }

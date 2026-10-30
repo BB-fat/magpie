@@ -60,6 +60,23 @@ type Seat struct {
 	// TPS is how fast it wrote them, output tokens a second, 0 when not
 	// told (a reply let go in a burst tells none). Fastest goes by them.
 	TTFT, TPS float64
+	// Left is a prepaid wallet's balance, what it has left in its unit
+	// (provider.Allowance.Left, #3950), and LeftIn whose wallet that is:
+	// its provider and unit, empty when no balance was told. A wallet has
+	// no share and no renewal, so Used and Soon tie; Smart, Pace and
+	// LeastUsed then put the one with more left first, only among seats
+	// whose LeftIn is the same (byLeft): points are never weighed against
+	// another provider's, or another unit.
+	Left   float64
+	LeftIn string
+	// Priced: what its model costs on it now is known. Cost is then what
+	// a million tokens in and a million out cost at the request's time —
+	// the user's own price, else the list's, at its provider's rate and
+	// rate window, doubled in its vendor's peak hours (catalog.Price.In) —
+	// and CacheCost a million read from the cache. Its model free there
+	// costs 0. Cheapest goes by them.
+	Priced          bool
+	Cost, CacheCost float64
 }
 
 // Strategy orders a pool.
@@ -82,6 +99,11 @@ type Strategy struct {
 	// BySpeed: it weighs by TTFT and TPS, so the gateway reads each seat's
 	// recent speed, and the routing trace then shows it.
 	BySpeed bool
+	// ByPrice: it weighs by Priced, Cost and CacheCost, so the gateway
+	// prices each seat's model at the request's time, and the routing
+	// trace then shows it. Only when set: pricing reads each provider's
+	// model list and the user's prices.
+	ByPrice bool
 }
 
 var reg = struct {

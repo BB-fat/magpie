@@ -50,6 +50,7 @@
     <a class="toc-only" href="/docs/docker">Docker</a>
     <a class="toc-only" href="/docs/privacy">Privacy</a>
     <a class="toc-only" href="/docs/masking">Privacy masking</a>
+    <a class="toc-only" href="/docs/mcp-router">MCP router</a>
     <a href="/docs/import">Add to magpie</a>
     <a href="/docs/integrate">Integrate</a>
     <a href="https://github.com/yetone/magpie-releases/releases">Releases</a>
@@ -179,14 +180,15 @@
       <tr><td>Weekly pace <code>pace</code></td><td>The account with the most of its week left per hour until it renews — the one with the most to lose at its reset — so less of each member’s week is lost at its reset; an account with five hours and no week (Claude Enterprise) by what its five hours have left per hour until they renew, so almost always first. One at 90% or more waits until the others can’t answer. A key by the tokens sent it lately.</td></tr>
       <tr><td>By weight <code>weight</code></td><td>Each model takes its share of the requests by the weight set beside it in the group editor (1 to 1000, 1 if unset): one weighing 3 takes three for every one a model weighing 1 takes, spread out rather than in bursts. Each model is tried whole over its own accounts or keys, as its provider routes them, and a group in the group counts as one. One resting after a failure leaves the round; the next model is the fallback when one fails.</td></tr>
       <tr><td>Speed first <code>fast</code></td><td>The member, account or key that answered this model fastest lately: the time to its first token and how fast it writes, newer answers counting more. Those within a tenth of each other keep their order. One not measured in the last hour gets one request in five, so a channel that was slow once is tried again; one resting after a failure goes last. Only streamed replies are measured, and a restart measures again from scratch.</td></tr>
+      <tr><td>Cheapest first <code>cheap</code></td><td>Groups only. The member whose model costs least now, by its price a million tokens in and out at this hour as Usage counts it: your own price for it, else its list price, at the provider’s price rate and rate windows. DeepSeek’s own API, Command Code’s and OpenCode Go’s DeepSeek models cost double in their peak hours (weekdays 01:00–04:00 and 06:00–10:00 UTC), so a DeepSeek model listed on two providers goes to the one cheaper at that hour. Members that cost the same keep their order; one with no known price goes last.</td></tr>
     </table></div>
     <div class="table-wrap"><table>
       <tr><th>Stays</th><th>How long a conversation stays with the account or key that answered it</th></tr>
       <tr><td>Auto <code>auto</code></td><td>The default. Within a turn always, across turns while what the vendor cached of it is worth keeping.</td></tr>
-      <tr><td>Session <code>session</code></td><td>The whole session, while it can answer.</td></tr>
+      <tr><td>Session <code>session</code></td><td>The whole session, while it can answer. With Smart, Least used first or Weekly pace, a new session goes to the account or key the fewest other sessions are on, so sessions side by side each keep one of their own.</td></tr>
       <tr><td>Within a turn <code>turn</code></td><td>While the agent sends tool results back; when you speak again, routing decides afresh.</td></tr>
       <tr><td>Off <code>off</code></td><td>Every request is routed afresh.</td></tr>
-      <tr><td>Strict <code>strict</code></td><td>Never moves to another account or key, even past its usage cap: when that one is rate limited or out of quota, the error goes to the agent. New conversations are routed as usual.</td></tr>
+      <tr><td>Strict <code>strict</code></td><td>Never moves to another account or key, even past its usage cap: when that one is rate limited or out of quota, the error goes to the agent. New conversations are spread as with Session.</td></tr>
     </table></div>
     <h3 id="rules">Rules · a turn to a chosen model</h3>
     <p>A group’s <span class="ui">Rules</span> send a turn to one of its models when the turn is of a kind you name: long (<code>tokens ≥ N</code>), carrying an image, asking for reasoning (on, or at least a level), from certain agents, asking for something you describe (an <em>intent</em>), the agent compacting its context, or working in one of some folders (a project). A rule’s conditions all have to hold, so one can say “in ~/work/acme, and long”. They are looked at top first when you send a message; the first that matches puts its model first, with the group’s others behind it if it fails. A turn no rule matches is routed as the group always routes, and keeps to where it was.</p>
@@ -329,6 +331,7 @@ IP-CIDR6,::1/128,DIRECT,no-resolve</pre>
     <a href="/docs/docker">Docker</a>
     <a href="/docs/privacy">Privacy</a>
     <a href="/docs/masking">Privacy masking</a>
+    <a href="/docs/mcp-router">MCP router</a>
     <a href="/docs/import">Add to magpie</a>
     <a href="/docs/integrate">Integrate</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>

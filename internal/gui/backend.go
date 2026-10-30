@@ -9,6 +9,8 @@ import (
 
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/codexrelay"
+	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/update"
@@ -43,7 +45,11 @@ func startBackend() (gw *gateway.Server) {
 	go watchGateway(backendCtx, gatewayWatch)
 	// the usage log parsed now, not when the tray panel first asks for
 	// today's calls (CyberCaius)
-	go usage.ReadAhead()
+	go func() {
+		// its files looked at once a second, as the warm-up's (#1665)
+		defer filememo.Hold()()
+		usage.ReadAhead()
+	}()
 	// Codex's background app-server, restarted when it has the list from
 	// before a change and no codex session is on it (luci)
 	go agent.KeepCodexDaemonCurrent(backendCtx)
@@ -125,6 +131,9 @@ func serveGatewayLocked() *gateway.Server {
 	// so is the one that handed this one its socket, still finishing its
 	// requests on it (gui/handover.go)
 	if !gateway.Handover && !gateway.Inherited() {
+		// the Codex relay a magpie quitting left at the port (codexrelay)
+		// lets go of it, finishing the turns it streams
+		codexrelay.Leave()
 		if o := gateway.ServedBy(); o.Running {
 			if update.Newer(gateway.Version, o.Version) {
 				log.Printf("gateway: magpie %s serves %s, older than this one (%s); agents' requests go through it until it quits", o.Version, gateway.URL(), gateway.Version)
