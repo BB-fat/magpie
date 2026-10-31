@@ -104,7 +104,7 @@ func (p Provider) DecidesModel(model string) bool {
 	if p.listsDecisions() {
 		// OpenRouter's Jev Router (typesafe/jev-router) is a chat model
 		if id := decisionsID(p.ID); catalog.LiveListed(id) {
-			return len(catalog.LiveByID(id, model)) > 0
+			return len(catalog.LiveByID(id, model)) > 0 || p.openRouterVariant(model)
 		}
 		return !p.serverMarksDecisions() && model == OpenRouterJev
 	}
@@ -172,6 +172,24 @@ func (p Provider) listsDecisions() bool {
 // and lists none while it has none.
 func (p Provider) serverMarksDecisions() bool {
 	return p.omlxDecides() || p.mlxServeDecides() || p.ollamaDecides()
+}
+
+// openRouterVariant reports whether model is one of the decision models
+// OpenRouter lists with a variant after it (inception/mercury-decide:free,
+// …:nitro): OpenRouter's list names the model once, and a variant goes to
+// the same decisions endpoint, never chat/completions (coeo91 on Discord:
+// inception/mercury-decide:free, picked by hand, was sent as a chat model
+// and refused 400 "is a decisions model"). Only OpenRouter's ids take a
+// variant so; an Ollama decision model's :tag is a name of its own.
+func (p Provider) openRouterVariant(model string) bool {
+	if openRouterDecisions(p.Decide) == "" {
+		return false
+	}
+	i := strings.LastIndexByte(model, ':')
+	if i <= 0 || i == len(model)-1 || strings.Contains(model[i:], "/") {
+		return false
+	}
+	return len(catalog.LiveByID(decisionsID(p.ID), model[:i])) > 0
 }
 
 // decisionsID is where a provider that serves conversations too keeps the
@@ -753,7 +771,7 @@ func resolveDecideModel(p Provider, name string) (string, bool) {
 			return name, true
 		}
 	}
-	if name == p.Jev() {
+	if name == p.Jev() || p.openRouterVariant(name) {
 		return name, true
 	}
 	// a gateway lists one Jev, named its own way; jev-latest is that model

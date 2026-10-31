@@ -896,14 +896,20 @@ func providerInfoWith(p provider.Provider, agents []agentUse, desktop map[string
 			out.Models = append(out.Models, named(m, exposed[m.ID]))
 		}
 	}
-	if deciders != nil {
-		out.Deciders = &deciders
-	}
 	// picks the vendor list does not know go first, so they are visible
 	for _, m := range exposedList {
 		if !seen[m.ID] {
 			out.Models = append([]modelJSON{named(m, true)}, out.Models...)
+			// one picked by hand that is a decision model all the same
+			// (OpenRouter's inception/mercury-decide:free, coeo91 on
+			// Discord) is tested and marked as one in the editor
+			if deciders != nil && p.DecidesModel(m.ID) {
+				deciders = append(deciders, m.ID)
+			}
 		}
+	}
+	if deciders != nil {
+		out.Deciders = &deciders
 	}
 	out.Exposed = len(exposed)
 	// its image models aren't among those agents chat with; the editor
