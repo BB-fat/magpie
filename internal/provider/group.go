@@ -399,6 +399,14 @@ func groupsIn(entries []Entry) []Group {
 	return cloneGroups(heldFrom("groups", entries, buildGroupsIn))
 }
 
+// sharedGroups is Groups for a caller that only reads them: no copy, so
+// nothing it is given may be changed. PublicRef, asked for every model a
+// page lists, copied every group and its rules each time (115 MB of a live
+// magpie's 2.6 GB in a minute and a half).
+func sharedGroups() []Group {
+	return heldFrom("groups", providerEntries(), buildGroupsIn)
+}
+
 // cloneGroups is gs with nothing shared with it: no slice, map or pointer
 // of a group or its rules.
 func cloneGroups(gs []Group) []Group {
@@ -1760,8 +1768,8 @@ func DisabledGroup(id string) (Group, bool) {
 		}
 		gid = strings.TrimPrefix(gid, GroupPrefix)
 	}
-	if g, ok := groupOf(Groups(), gid); ok && g.Disabled {
-		return g, true
+	if g, ok := groupOf(sharedGroups(), gid); ok && g.Disabled {
+		return cloneGroups([]Group{g})[0], true
 	}
 	return Group{}, false
 }

@@ -315,7 +315,7 @@ func Families() []string {
 	for _, p := range All() {
 		add(p.Family)
 	}
-	for _, g := range Groups() {
+	for _, g := range sharedGroups() {
 		add(g.Family)
 	}
 	slices.Sort(out)
