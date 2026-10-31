@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -525,10 +526,25 @@ func callerGuard(next http.Handler) http.Handler {
 func identifyCaller(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	var who access.Identity
 	ok := false
+	var refused *access.Refused
 	for _, k := range callerKeys(r) {
-		if who, ok = access.Authenticate(k); ok {
+		var err error
+		if who, err = access.Check(k); err == nil {
+			ok = true
 			break
 		}
+		if refused == nil {
+			errors.As(err, &refused)
+		}
+	}
+	if !ok && refused != nil {
+		// an expired key, or one its issuer no longer lets in, is told so
+		// on every route, from this computer too: a sandbox's agent on
+		// loopback holding a key that has run out is not let on as one
+		// with no key, which would hand it everything its key held it from
+		log.Printf("refused %s %s from %s: %s", r.Method, r.URL.Path, r.RemoteAddr, refused.Why)
+		writeError(w, provider.Chat, http.StatusUnauthorized, refused.Why)
+		return r, false
 	}
 	if !ok && !local(r) {
 		if over, retry := tooManyAuthFails(); over {
@@ -581,7 +597,7 @@ func appendUsage(r *http.Request, rec usage.Record) {
 		rec.Subagent, rec.ParentAgent = subagentOf(r.Header)
 	}
 	who := access.Caller(r.Context())
-	rec.CallerKeyID, rec.CallerKeyName = who.KeyID, who.KeyName
+	rec.CallerKeyID, rec.CallerKeyName, rec.CallerIssuerID = who.KeyID, who.KeyName, who.IssuerID()
 	rec.Local = local(r)
 	if r.Context().Value(observedKey{}) != nil {
 		rec.Watched = true

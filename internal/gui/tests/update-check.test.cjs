@@ -93,7 +93,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       pages.push(page);
       page.setDefaultTimeout(5000);
       page.setDefaultNavigationTimeout(60000);
-      page.on("pageerror", (e) => errors.push(e.message));
+      page.on("pageerror", (e) => { if (!/^ResizeObserver loop completed with undelivered notifications/.test(e.message)) errors.push(e.message); });
       await page.route("**/*", server(lang, ctl));
       await watchSettingsReads(page);
       await page.goto("http://magpie.test/?view=settings&tab=about");

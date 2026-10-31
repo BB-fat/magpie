@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -304,5 +305,37 @@ func TestDriftInstalledMagpie(t *testing.T) {
 	os.WriteFile(cfg, []byte("openai_base_url = \"http://127.0.0.1:9999"+gateway.CodexPath+"\"\nmodel = \"fake/m1\"\n"), 0o644)
 	if d := cx.Drift(); d == nil || d.Kind != "unwired" {
 		t.Fatalf("wired to neither: %+v", d)
+	}
+}
+
+// Whether the installed magpie wired the agent is looked up in the bytes
+// already read, not in a copy of the file and two strings of it: each
+// field's drift asked, 5 MB a poll of a Codex config.toml of 1.5 MB.
+func TestInstalledWiringReadsNoCopy(t *testing.T) {
+	t.Setenv("MAGPIE_ADDR", "127.0.0.1:3426")
+	home, _ := codexHome(t, "", "")
+	cx := codex(home)
+	var cfg strings.Builder
+	cfg.WriteString("openai_base_url = \"http://" + gateway.DefaultAddr + gateway.CodexPath + "\"\nmodel = \"fake/m1\"\n")
+	for i := range 20000 {
+		fmt.Fprintf(&cfg, "[projects.\"/Users/someone/work/project-%05d\"]\ntrust_level = \"trusted\"\n", i)
+	}
+	path := filepath.Join(home, ".codex", "config.toml")
+	if err := os.WriteFile(path, []byte(cfg.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(path, old, old)
+	if !cx.theInstalled() {
+		t.Fatal("the installed magpie's wiring not seen")
+	}
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	for range 10 {
+		cx.theInstalled()
+	}
+	runtime.ReadMemStats(&m1)
+	if n := m1.TotalAlloc - m0.TotalAlloc; n > 1<<20 {
+		t.Fatalf("10 looks at an unchanged config allocated %d bytes", n)
 	}
 }

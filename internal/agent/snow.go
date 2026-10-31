@@ -59,7 +59,7 @@ func snow(home string) *Agent { return snowIn(here(home)) }
 // wsl.go), whose profile names the gateway as the distro reaches it, with
 // the key it takes from there.
 func snowIn(at place) *Agent {
-	dir := filepath.Join(at.home, ".snow")
+	dir := at.join(".snow")
 	if d := strings.TrimSpace(at.getenv("SNOW_CONFIG_DIR")); filepath.IsAbs(d) {
 		dir = filepath.Clean(d)
 	}

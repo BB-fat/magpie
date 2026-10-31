@@ -84,7 +84,7 @@ func miniMax(home string) *Agent { return miniMaxAt(here(home), MiniMaxDir(home)
 
 // miniMaxIn is MiniMax Code's mcode in a WSL distro (see wsl.go): ~/.minimax,
 // as MINIMAX_DATA_DIR there isn't read.
-func miniMaxIn(at place) *Agent { return miniMaxAt(at, filepath.Join(at.home, ".minimax")) }
+func miniMaxIn(at place) *Agent { return miniMaxAt(at, at.join(".minimax")) }
 
 // miniMaxAt is MiniMax Code with its data folder at dir, reaching the
 // gateway as at does.

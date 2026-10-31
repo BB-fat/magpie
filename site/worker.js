@@ -558,7 +558,8 @@ async function releases(ctx, env) {
 // first) and "notes:<UTC day>" each day's notes by version, which
 // /api/notes reads for a range older than the hundred newest. Without the
 // ledger, or one that doesn't reach back to the week's cut, Stable isn't
-// known and the feed says so (503) rather than guess.
+// known and the feed says so (503) rather than guess. The Docker image's
+// stable tag follows this feed (.github/workflows/docker-stable.yml).
 const DAY = 86400e3;
 const SOAK = 3 * DAY;
 const LEDGER_DAYS = 45;

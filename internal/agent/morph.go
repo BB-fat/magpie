@@ -36,7 +36,7 @@ func morph(home string) *Agent { return morphIn(here(home)) }
 // morphIn is Mister Morph at a place: this machine's home, or a WSL distro's
 // (see wsl.go), where MISTER_MORPH_CONFIG isn't read.
 func morphIn(at place) *Agent {
-	dir := filepath.Join(at.home, ".morph")
+	dir := at.join(".morph")
 	path := at.getenv("MISTER_MORPH_CONFIG")
 	if path == "" {
 		path = filepath.Join(dir, "config.yaml")

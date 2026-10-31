@@ -376,7 +376,7 @@ func (p Provider) testOne(ctx context.Context, model string) Result {
 	if p.isClaudeAccount() {
 		return p.testClaude(ctx, model)
 	}
-	if p.testsTranslated() {
+	if p.testsTranslated() || client == "" && p.pluginTranslated(model) {
 		return p.testTranslated(ctx, model)
 	}
 	var protos []Protocol
@@ -880,12 +880,25 @@ func EdgeBlocked(b []byte) bool {
 	return edgeBlocked.Match(b) || bytes.Contains(b, []byte(BlockedHint))
 }
 
+// restrictedHinted says an error body is one a plugin already put in
+// magpie's words as an account its vendor restricted: ZCode's Start Plan
+// 3012 (ZCodeRestrictedHint) keeps ZCode's own "request has been blocked
+// due to unusual activity" in front of the hint, which edgeBlocked reads
+// as a firewall's page. Told as that, the hint was cut, the agent was told
+// to change networks, and the gateway rested the account as any failure,
+// never as restricted: the 405 windy_66454 met (Discord, 10-31) read
+// "405 Method Not Allowed — " BlockedHint, the same words ZCode's 3012
+// and Alibaba Cloud's page were both told in.
+func restrictedHinted(b []byte) bool {
+	return bytes.Contains(b, []byte(ZCodeRestrictedHint)) || bytes.Contains(b, []byte(WBRestrictedHint))
+}
+
 // APIError pulls the human message out of an error body when there is one.
 // A firewall's block page is put in plain words (BlockedHint); Google's
 // "verify your account" refusal also says what to do about it, with the
 // link it gave.
 func APIError(b []byte, fallback string) string {
-	if edgeBlocked.Match(b) {
+	if edgeBlocked.Match(b) && !restrictedHinted(b) {
 		if said, ok := WebPage(b); ok && fallback != "" {
 			return fallback + ": " + said + " — " + BlockedHint
 		}

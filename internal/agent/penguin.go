@@ -103,7 +103,7 @@ func penguinRoot(at place) string {
 	if d := at.getenv("PENGUIN_HOME"); d != "" {
 		return d
 	}
-	return filepath.Join(at.home, ".penguin", "data")
+	return at.join(".penguin", "data")
 }
 
 // penguinProject is the Project the CLI works in: $PENGUIN_PROJECT_ID,

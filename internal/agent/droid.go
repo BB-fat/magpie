@@ -283,7 +283,7 @@ func droidIn(at place) *Agent {
 		home = h
 	}
 	droidEntries := func() []droidEntry { return droidEntriesAt(at.gw()) }
-	dir := filepath.Join(home, ".factory")
+	dir := at.open(filepath.Join(home, ".factory"))
 	path := filepath.Join(dir, "settings.json")
 	legacy := filepath.Join(dir, "config.json")
 	key := "droid:" + path + ":" + droidModel

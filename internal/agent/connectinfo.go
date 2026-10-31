@@ -319,6 +319,10 @@ func (a *Agent) StaleCopies() []StaleCopy {
 			if !since.Before(changed.Add(-time.Second)) {
 				continue
 			}
+			// to the second: since is now less how long it has run, two
+			// clock reads apart, and a time that moved by microseconds
+			// each poll rewrote the last-known state each time
+			since = since.Truncate(time.Second)
 			c := StaleCopy{Since: since}
 			if a.ID == "codex" {
 				var app string

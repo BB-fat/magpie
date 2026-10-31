@@ -88,7 +88,7 @@ func reasonixIn(at place) *Agent {
 	if at.spell != nil {
 		goos, getenv = "linux", func(string) string { return "" }
 	}
-	dir := reasonixHome(goos, at.home, getenv)
+	dir := at.open(reasonixHome(goos, at.home, getenv))
 	gwKey := func() string { return agentKeyAt("reasonix", at.gw()) }
 	if absolute, err := filepath.Abs(dir); err == nil {
 		dir = absolute

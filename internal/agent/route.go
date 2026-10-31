@@ -27,8 +27,21 @@ const RoutingGroups = "Routing groups"
 
 // viaMagpie lists the catalog as agent is shown it, for a picker: the
 // routing groups first, in one group of their own, then one group per
-// provider.
+// provider. Built again only when provider.StampNow moved, or
+// magpieModelsFor after it was; each caller is given its own copy.
 func viaMagpie(agent, prefix string) []Option {
+	return builtOptions.get(agent+"\x00"+prefix, func() []Option { return buildVia(agent, prefix) })
+}
+
+// builtOptions is what viaMagpie built last, per agent and prefix. Each
+// agent's model field offers it, and the window's drift poll asked every
+// field's options of every agent each 15s: Claude Code's alone
+// (claudeViaMagpie) allocated 4.7 GB of the 33 GB a live magpie did in 53
+// minutes.
+var builtOptions stampedLists[Option]
+
+// buildVia is viaMagpie built afresh.
+func buildVia(agent, prefix string) []Option {
 	var out, groups []Option
 	shown, _ := provider.CatalogFor(agent)
 	// own: whether a provider is the account the agent is signed in to,
@@ -182,8 +195,62 @@ func firstOf(xs []string) string {
 }
 
 // magpieModels is the catalog as agent is shown it, as catalog.Models, for
-// agents that keep their own model files.
+// agents that keep their own model files: built again only when
+// provider.StampNow moved, or magpieModelsFor after it was, each caller
+// given its own copy of the list.
 func magpieModels(agent string) []catalog.Model {
+	return builtModels.get(agent, func() []catalog.Model { return buildModels(agent) })
+}
+
+// builtModels is what magpieModels built last, per agent. The window asks
+// /api/drift every 15s, and each agent's Drift asked for its list again
+// per field, each built whole with its prices and Vision's ranking of the
+// models that see: 14.5 GB of the 33 GB a live magpie allocated in 53
+// minutes, the garbage its footprint peaks on.
+var builtModels stampedLists[catalog.Model]
+
+// stampedLists keeps a list built per key while provider.StampNow stays
+// the same, magpieModelsFor at most, and gives each caller a copy.
+type stampedLists[T any] struct {
+	sync.Mutex
+	m map[string]stampedList[T]
+}
+
+type stampedList[T any] struct {
+	list  []T
+	stamp provider.Stamp
+	at    time.Time
+}
+
+func (s *stampedLists[T]) get(key string, build func() []T) []T {
+	s.Lock()
+	b, ok := s.m[key]
+	s.Unlock()
+	// the stamp is read before the list is built: a change while it is
+	// moves it past the one kept, and the next call builds it again
+	stamp := provider.StampNow()
+	if !ok || b.stamp != stamp || time.Since(b.at) >= magpieModelsFor {
+		b = stampedList[T]{build(), stamp, time.Now()}
+		s.Lock()
+		if s.m == nil {
+			s.m = map[string]stampedList[T]{}
+		}
+		s.m[key] = b
+		s.Unlock()
+	}
+	return slices.Clone(b.list)
+}
+
+// magpieModelsFor is how long a list is kept while provider.StampNow says
+// nothing changed: what the stamp can't see (another app rewriting an
+// account's file, a model retired by its date, a provider resting, which
+// Vision's pick of a model that sees follows) reaches the lists within it.
+const magpieModelsFor = time.Minute
+
+// buildModels is magpieModels built afresh. A model's own lists are
+// clipped, so a caller appending to one in its copy makes a new one and
+// never writes into the list kept.
+func buildModels(agent string) []catalog.Model {
 	// the providers built once for all the models' prices, not for each:
 	// dsh's round at every start built them for each of hundreds
 	defer provider.Hold()()
@@ -205,7 +272,8 @@ func magpieModels(agent string) []catalog.Model {
 			// word on included (provider.CodexEfforts)
 			efforts = provider.CodexEfforts(e)
 		}
-		m := catalog.Model{ID: e.ID, Name: labels[i], Provider: firstOf(e.Provider.Catalogs()), Efforts: efforts, Images: e.Images || seen, ImageInput: e.ImageInput, Context: e.Context, Output: e.Output, OutputSet: e.OutputSet, AgentsV2: e.AgentsV2, Reasoning: e.Thinks()}
+		m := catalog.Model{ID: e.ID, Name: labels[i], Provider: firstOf(e.Provider.Catalogs()), Efforts: efforts, Images: e.Images || seen, ImageInput: e.ImageInput, Context: e.Context, Output: e.Output, OutputSet: e.OutputSet, AgentsV2: e.AgentsV2, Reasoning: e.Thinks(),
+			AlwaysThinks: e.AlwaysThinks, DynamicTools: e.DynamicTools, DefaultEffort: e.DefaultEffort}
 		// where Codex and Claude Code compact it (#876): a threshold the
 		// user set on the model or on its provider, else a window they
 		// typed whole (#1809), else the one for every model, which codexcat
@@ -260,6 +328,8 @@ func magpieModels(agent string) []catalog.Model {
 		if a := e.Provider.Account; e.Group == "" && a != nil && a.Agent == "codex" {
 			m.CodexFast = provider.CanFast(e.Provider, e.Model)
 		}
+		m.Efforts, m.Keys, m.APIs, m.Endpoints = slices.Clip(m.Efforts), slices.Clip(m.Keys), slices.Clip(m.APIs), slices.Clip(m.Endpoints)
+		m.InputModalities, m.OutputModalities, m.Tiers, m.Codex = slices.Clip(m.InputModalities), slices.Clip(m.OutputModalities), slices.Clip(m.Tiers), slices.Clip(m.Codex)
 		out = append(out, m)
 	}
 	return out

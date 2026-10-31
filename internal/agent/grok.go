@@ -168,7 +168,7 @@ func grok(home string) *Agent { return grokIn(here(home)) }
 func grokIn(at place) *Agent {
 	dir := at.getenv("GROK_HOME")
 	if dir == "" {
-		dir = filepath.Join(at.home, ".grok")
+		dir = at.join(".grok")
 	}
 	path := filepath.Join(dir, "config.toml")
 	get := func(k string) (string, error) {

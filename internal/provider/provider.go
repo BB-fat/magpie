@@ -27,6 +27,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/steady"
@@ -171,6 +172,11 @@ type Provider struct {
 	// name in lower case, how the gateway runs it: ClaudeTUI, or
 	// ClaudeStandard when it is not in it (ClaudeModeOf).
 	AccountClaudeModes map[string]string `json:"accountClaudeModes,omitempty"`
+	// AccountWeights is, for a subscription, each account's weight under
+	// Weighted routing, by its name in lower case (rubbzha on X: a Max
+	// account and a Pro one shared by how much more one allows); one not
+	// in it weighs 1. A key's weight is its own (KeyAccount.Weight).
+	AccountWeights map[string]int `json:"accountWeights,omitempty"`
 	// QueueLimit is how many requests may wait for a slot of each key or
 	// account at once (#892); one more is turned away as the queue being
 	// full. 0 is no bound.
@@ -216,6 +222,13 @@ type Provider struct {
 	// a price the user set for one of its models stands as set. 0 is the
 	// price as listed; at most three decimals (PriceRateOK).
 	PriceRate float64 `json:"priceRate,omitempty"`
+	// CountFree is the user's word that the provider costs them nothing
+	// (jiabubu on Discord: ModelScope's free daily quota): every model of
+	// it counts as free where routing weighs that, as a model its vendor
+	// lists free does (FreeModel: Free first spends it first, Cheapest
+	// weighs it at nothing). Prices and the costs Usage counts stay as
+	// listed: it says what to spend first, not what a call cost.
+	CountFree bool `json:"countFree,omitempty"`
 	// RateWindows are the time-of-day windows it bills at its own rate
 	// (#2463): a peak at 2× or 3×, a discount off peak. The first window
 	// that holds a call's time multiplies the price again, on top of
@@ -565,6 +578,28 @@ func load() file {
 	return f
 }
 
+// storedFile is load for a read that changes nothing, parsed once until the
+// file changes: the gateway asked for one provider's proxy (storedPicks)
+// and whether it is left alone (leftAlone) for each request and each
+// background look, each a parse of the whole file, 3.6 GB of a live
+// magpie's 33 GB in 53 minutes. What it returns is shared: the caller
+// must not change it, nor a list or map in it.
+func storedFile() file {
+	f, err := filememo.Read("providers", Path(), parseProviders)
+	if err != nil {
+		// missing, or a file that doesn't decode: read's own way, its
+		// last good generation
+		return load()
+	}
+	return f
+}
+
+func parseProviders(b []byte) (file, error) {
+	var f file
+	err := json.Unmarshal(bytes.TrimPrefix(b, utf8BOM), &f)
+	return f, err
+}
+
 // ErrUnreadable is a providers.json that is there but can't be read or
 // decoded: never an empty catalog, to list as none, back up or write over.
 var ErrUnreadable = errors.New("providers.json can't be read")
@@ -724,6 +759,7 @@ func (p Provider) clone() Provider {
 	}
 	p.AccountConcurrency = maps.Clone(p.AccountConcurrency)
 	p.AccountClaudeModes = maps.Clone(p.AccountClaudeModes)
+	p.AccountWeights = maps.Clone(p.AccountWeights)
 	p.Contexts = maps.Clone(p.Contexts)
 	if p.AccountModels != nil {
 		m := make(map[string][]string, len(p.AccountModels))
@@ -808,10 +844,13 @@ func withPicks(a, pk Provider) Provider {
 	a.MaxConcurrency, a.PinUpstream = pk.MaxConcurrency, pk.PinUpstream
 	a.AccountConcurrency, a.QueueLimit, a.QueueWait = pk.AccountConcurrency, pk.QueueLimit, pk.QueueWait
 	a.AccountClaudeModes = pk.AccountClaudeModes
+	a.AccountWeights = pk.AccountWeights
 	a.MaxRPM = pk.MaxRPM
 	// what it bills against the official price (#819): an account's editor
 	// sets it as a key provider's does (PaulT on Discord, Codex)
 	a.PriceRate = pk.PriceRate
+	// counted free by the user's word, every account alike
+	a.CountFree = pk.CountFree
 	// the hours the provider bills at its own rate (#2463), as the editor
 	// keeps them for the account like the rest of these
 	a.RateWindows = pk.RateWindows
@@ -949,7 +988,7 @@ func Save(p Provider) error {
 		if p.ID == "kiro" {
 			key = p.Key
 		}
-		p = Provider{ID: p.ID, Key: key, Models: p.Models, NoModels: p.NoModels, BestInFamily: p.BestInFamily, RateWindows: p.RateWindows, PickedFrom: p.PickedFrom, Delisted: p.Delisted, Unlisted: p.Unlisted, HiddenDrawers: p.HiddenDrawers, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, CapStop: p.CapStop, CapCareful: p.CapCareful, AccountNames: p.AccountNames, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, AccountClaudeModes: p.AccountClaudeModes, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, PriceRate: p.PriceRate, QuotaRest: p.QuotaRest, QuotaResetAt: p.QuotaResetAt, RestCap: p.RestCap, PinUpstream: p.PinUpstream, NativeCompaction: p.NativeCompaction, PromptAsWritten: p.PromptAsWritten, Unredacted: p.Unredacted, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
+		p = Provider{ID: p.ID, Key: key, Models: p.Models, NoModels: p.NoModels, BestInFamily: p.BestInFamily, RateWindows: p.RateWindows, PickedFrom: p.PickedFrom, Delisted: p.Delisted, Unlisted: p.Unlisted, HiddenDrawers: p.HiddenDrawers, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, CapStop: p.CapStop, CapCareful: p.CapCareful, AccountNames: p.AccountNames, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, AccountClaudeModes: p.AccountClaudeModes, AccountWeights: p.AccountWeights, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, PriceRate: p.PriceRate, CountFree: p.CountFree, QuotaRest: p.QuotaRest, QuotaResetAt: p.QuotaResetAt, RestCap: p.RestCap, PinUpstream: p.PinUpstream, NativeCompaction: p.NativeCompaction, PromptAsWritten: p.PromptAsWritten, Unredacted: p.Unredacted, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
 	} else {
 		p.AccountProxies = keyProxies(p) // a provider of keys proxies each key apart
 		if subscriptionID(p.ID) && !stored(p.ID) {
@@ -1163,6 +1202,7 @@ func AddCopy(p Provider, from string) (string, error) {
 	}
 	p.Searches = p.Searches || src.Searches
 	p.Unredacted = p.Unredacted || src.Unredacted
+	p.CountFree = p.CountFree || src.CountFree
 	p.NativeCompaction = p.NativeCompaction || src.NativeCompaction
 	p.PassUserAgent = p.PassUserAgent || src.PassUserAgent
 	if p.Website == "" {
@@ -1486,6 +1526,7 @@ func normalize(p Provider) Provider {
 	}
 	p.AccountConcurrency = normalAccountConcurrency(p.AccountConcurrency)
 	p.AccountClaudeModes = normalAccountClaudeModes(p.AccountClaudeModes)
+	p.AccountWeights = normalAccountWeights(p.AccountWeights)
 	p.QueueLimit, p.QueueWait = min(max(p.QueueLimit, 0), MaxQueueLimit), min(max(p.QueueWait, 0), MaxQueueWait)
 	p.MaxRPM = min(max(p.MaxRPM, 0), MaxRPMLimit)
 	p.QuotaRest = min(max(p.QuotaRest, 0), MaxQuotaRest)
@@ -1767,7 +1808,8 @@ func openAIModel(model string) bool {
 // the model on itself, so a request on it is relayed as it is rather than
 // translated — Responses for a ChatGPT sign-in, or an OpenAI model on
 // OpenAI's API or Copilot's; Anthropic's Messages for a Claude model
-// where that is served; Chat where that is served. "" when every
+// where that is served; the API a custom provider's Base URL was given as
+// (BaseAPI); Chat where that is served. "" when every
 // request is translated anyway: a sign-in served through its agent's own
 // API (Claude Code's binary, Devin, Code Assist).
 func (p Provider) Native(model string) Protocol {
@@ -1792,6 +1834,13 @@ func (p Provider) Native(model string) Protocol {
 	}
 	if p.MessagesFirst(model) && slices.Contains(out, Anthropic) {
 		return Anthropic
+	}
+	// the API the user gave a custom provider's Base URL as, where it
+	// serves the model: a relay whose Chat URL was found beside it (Detect
+	// sets every API that answers) is still the Responses one they picked
+	// (nb5p on Discord: dsh, Pi and droid asked its GPTs on Chat)
+	if pr := Protocol(p.BaseAPI); pr != "" && slices.Contains(out, pr) {
+		return pr
 	}
 	return out[0]
 }
