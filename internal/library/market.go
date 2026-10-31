@@ -92,6 +92,7 @@ func secretEnv(key, label, where string) Input {
 // package is published, its endpoint answers.
 var featured = []MarketServer{
 	selfServer(),
+	browserServer(),
 	remoteServer("context7", "Context7", "Upstash", gh("upstash"), "https://mcp.context7.com/mcp",
 		"Up-to-date documentation and code examples for any library, straight into the prompt.", false,
 		Input{Key: "CONTEXT7_API_KEY", Where: "header", Label: "API key", Description: "Optional — raises the rate limit. From context7.com/dashboard", Secret: true, format: "{}"}),
@@ -171,6 +172,20 @@ const selfServerName = "magpie-image"
 func selfServer() MarketServer {
 	m := localServer(selfServerName, "Magpie Image", "Magpie", "https://usemagpie.ai/favicon.png", "https://usemagpie.ai",
 		"Generate and edit images with the image model set in Magpie (Settings → Images), and make short videos with a video model set up in Magpie (Grok Imagine, Seedance), saved in the project.", magpieCommand, []string{"mcp", "image"})
+	m.OptIn = true
+	return m
+}
+
+// browserServerName is the name Magpie Browser's server is written under.
+const browserServerName = "magpie-browser"
+
+// browserServer is Magpie Browser: the agent uses the user's own browser,
+// its tabs signed in to the sites they use, through the extension magpie
+// sets up (gateway/browser.go). It acts as the user wherever they are
+// signed in, so it is given only to the agents picked for it.
+func browserServer() MarketServer {
+	m := localServer(browserServerName, "Magpie Browser", "Magpie", "https://usemagpie.ai/favicon.png", "https://usemagpie.ai",
+		"Use your own browser: your tabs, signed in to the sites you use. Open pages, click, type, upload, read and take screenshots, through the Magpie Browser extension.", magpieCommand, []string{"mcp", "browser"})
 	m.OptIn = true
 	return m
 }
@@ -285,8 +300,8 @@ func serverKey(s *Server) string {
 	if s.Remote() {
 		return strings.TrimSuffix(strings.ToLower(s.URL), "/")
 	}
-	if len(s.Args) == 2 && s.Args[0] == "mcp" && s.Args[1] == "image" {
-		return "magpie mcp image" // magpie's own, wherever its binary is
+	if len(s.Args) == 2 && s.Args[0] == "mcp" && (s.Args[1] == "image" || s.Args[1] == "browser") {
+		return "magpie mcp " + s.Args[1] // magpie's own, wherever its binary is
 	}
 	for _, a := range s.Args {
 		if a == "" || strings.HasPrefix(a, "-") || a == "run" {
@@ -960,10 +975,12 @@ func (l *Library) haveSkill(source, id, name string) string {
 		}
 	}
 	// one taken in from an agent's folder (npx skills puts them in
-	// ~/.agents/skills) has no source to match, and adding is turned away
-	// by name all the same (InstallMarketSkill): it's had by its name
+	// ~/.agents/skills) has no repository to match: it's had by its name,
+	// unless it is known to come from another repository. One by that name
+	// from another repository is another skill, added beside it
+	// (skill_beside.go)
 	for _, n := range []string{id, name} {
-		if s := l.skill(n); s != nil {
+		if s := l.skill(n); s != nil && (s.Source == nil || s.Source.Kind == "folder") && (s.From == "" || strings.EqualFold(s.From, source)) {
 			return s.Name
 		}
 	}

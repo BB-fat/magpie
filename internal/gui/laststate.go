@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/yetone/magpie/internal/appdir"
-	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/steady"
 )
 
 // The last-known state (#1519, fatkun). state() reads every agent's config
@@ -41,7 +41,10 @@ type stateFile struct {
 func lastStatePath() string { return filepath.Join(appdir.Cache(), "agents-state.json") }
 
 // keepState remembers s as the last-known state. The file is written only
-// when what is kept changed.
+// when what is kept changed, and as magpie's own cache: nothing a request
+// reads is built from it, so its write doesn't drop what filememo holds
+// (edit.WriteAtomic's would: every poll of the Agents page rebuilt each
+// agent's model list and picker, and every provider's catalog, anew).
 func keepState(s stateJSON) {
 	s.Settings = settings.Settings{}
 	// and what is told once: a notice, a file recovered after a crash
@@ -60,7 +63,10 @@ func keepState(s stateJSON) {
 		return
 	}
 	lastState.kept = b
-	_ = edit.WriteAtomic(lastStatePath(), b)
+	p := lastStatePath()
+	if os.MkdirAll(filepath.Dir(p), 0o755) == nil {
+		_ = steady.WriteFile(p, b, 0o644)
+	}
 }
 
 // lastKnown is the last state built, by this run or the one before it,

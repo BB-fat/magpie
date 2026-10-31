@@ -96,6 +96,14 @@ func searchFor(ctx context.Context) *CallFor {
 	return f
 }
 
+// magpieSearches is whether magpie answers a client's web search for p
+// though p searches the web by itself: Settings' SearchAll, while magpie
+// can search for it. Never for magpie's own searcher request, which is
+// the provider's search.
+func magpieSearches(ctx context.Context, p provider.Provider) bool {
+	return !searching(ctx) && settings.Load().SearchAll && canSearchFor(p)
+}
+
 // searchesItself says whether the provider searches the web by itself when
 // asked on this API.
 func searchesItself(p provider.Provider, proto provider.Protocol) bool {
@@ -275,8 +283,8 @@ func searchAsked(proto provider.Protocol, body []byte) bool {
 // that doesn't search by itself. What is known of the provider is asked
 // first: Codex offers web_search on every turn, and each relayed turn was
 // parsed whole to learn it, for a provider that searches by itself.
-func searchedForIt(p provider.Provider, from provider.Protocol, model string, body []byte) bool {
-	return (from == provider.Chat && !p.IsRemoteMagpie() || !searchesModel(p, from, model)) && searchAsked(from, body)
+func searchedForIt(ctx context.Context, p provider.Provider, from provider.Protocol, model string, body []byte) bool {
+	return (from == provider.Chat && !p.IsRemoteMagpie() || !searchesModel(p, from, model) || magpieSearches(ctx, p)) && searchAsked(from, body)
 }
 
 // searcher is the model magpie searches with: the one Settings names, while
@@ -1045,6 +1053,47 @@ const SearchAgent = "magpie-search/1"
 // and message of a failure.
 type round func(ctx context.Context, req *Request) (<-chan Event, int, string)
 
+// textCallRound is a round whose reply has the calls written into its
+// text made calls (textCallSee), as the replies of the routes without a
+// search have them (streamTranslated, forwardTranslated): every search
+// route's every round passes here, whatever protocol the client asked
+// on, and a model that writes its calls out had them reach the client
+// as the text they were (#4562).
+func textCallRound(tools []Tool, ask round) round {
+	names := textCallNames(tools)
+	if names == nil {
+		return ask
+	}
+	return func(ctx context.Context, req *Request) (<-chan Event, int, string) {
+		in, status, msg := ask(ctx, req)
+		if in == nil {
+			return in, status, msg
+		}
+		out := make(chan Event, 16)
+		t := &textCallSee{names: names, see: func(ev Event) {
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+			}
+		}}
+		go func() {
+			defer close(out)
+			for ev := range in {
+				select {
+				case <-ctx.Done():
+				default:
+					t.event(ev)
+				}
+			}
+			// a round that ended without its stop still hands on the
+			// text held from a mark begun, as the routes without a
+			// search do at their reply's end
+			t.release()
+		}()
+		return out, status, msg
+	}
+}
+
 // searchReply answers req through ask, running the searches its model
 // asks for and asking it again with what they found; the client sees one
 // reply. The first round's failure is a status, as another provider may
@@ -1057,6 +1106,7 @@ func (s *Server) searchReply(w http.ResponseWriter, r *http.Request, from provid
 	tool := searchTool(q.Tools)
 	q.Tools = append(slices.Clone(q.Tools), tool)
 	q.Messages = slices.Clone(q.Messages)
+	ask = textCallRound(q.Tools, ask)
 	first, status, msg := ask(ctx, &q)
 	if first == nil {
 		return writeError(w, from, status, msg), msg

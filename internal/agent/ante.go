@@ -81,7 +81,7 @@ func anteDir(at place) string {
 	if d := strings.TrimSpace(at.getenv("ANTE_HOME")); d != "" {
 		return d
 	}
-	return filepath.Join(at.home, ".ante")
+	return at.join(".ante")
 }
 
 func ante(home string) *Agent { return anteAt(here(home)) }

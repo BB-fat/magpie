@@ -22,7 +22,7 @@
   const heads = {};      // /api/plugins/git: a git plugin's spec → the commit its repository is at
   let failed = "";       // why what's installed couldn't be loaded
   let failedList = "";   // ...and the plugins suggested
-  let tab = "discover";
+  let tab = "discover", regBox;
   try { tab = localStorage.getItem("magpie.pluginTab") || tab; } catch {}
   let query = "";
   let hits = null;       // npm's answer for query: { q, list } | { q, loading } | { q, error }
@@ -463,7 +463,7 @@
     } else b.title = t("Fetches it from {repo} again", { repo: e.spec }) + "\n" + t("{have} installed, {repo} is at {head}", { have: e.commit, repo: e.spec, head: e.head });
     b.onclick = (ev) => {
       ev.stopPropagation();
-      act(pkg, "upgrade", { spec: e.spec }, () => status(npm ? t("{name} updated to v{v}", { name: l?.name || pkg, v: e.latest }) : t("{name} is up to date", { name: e.package || e.spec }), "ok"));
+      act(pkg, "upgrade", { spec: e.spec }, () => status(npm ? t("{name} updated to v{v}", { name: l?.name || pkg, v: e.latest }) : t("{name} is up to date", { name: shownName(e) }), "ok"));
     };
     b.onkeydown = (ev) => ev.stopPropagation();
     return true;
@@ -635,21 +635,14 @@
     return box;
   }
 
-  // The repositories on GitHub are many and of every kind (the owner: 这里
-  // 应该有分类以及搜索框方便用户筛选), so their section has its own kinds
-  // to pick from, each with how many there are, and a field that narrows
-  // them by name, author or description as it is typed, once there are
-  // more than a few to look through (counted before the page's search, so
-  // they don't go away under someone typing). Both narrow what the page's
-  // search has already found; only the section is drawn again.
-  // What's installed is the other question the section is read with (the
-  // owner: 加一个未安装), and it cuts across the kinds: a reader after a
-  // middleware they haven't got picks Middleware and Not installed. So it
-  // is a second strip beside the kinds, each counting what the other, the
-  // field and the page's search leave — the counts follow the picks as
-  // they are made — and the two narrow the grid together.
-  // The section, its head and its field are made once and kept in the
-  // page, as the page's search field is (#1055).
+  // GitHub's repositories are many and of every kind (the owner: 这里
+  // 应该有分类以及搜索框方便用户筛选): the section has its own kinds, each
+  // counted, and, past a few, a field narrowing by name, author or
+  // description as typed (counted before the page's search). A second
+  // strip says what's installed (the owner: 加一个未安装), across the
+  // kinds; each strip counts what the other, the field and the search
+  // leave, and they narrow the grid together. Only the section is drawn
+  // again; it, its head and its field are kept, as the search is (#1055).
   let ghKind = "";       // "" (all) | "pv" | "mw" | "ag"
   let ghHave = "";       // "" (all) | "have" | "none"
   let ghQuery = "";
@@ -961,6 +954,10 @@
       else if (!tagged) out.push(ghWaiting());
       else if (taggedErr && !tagged.length) out.push(ghFailed());
       out.push(manual());
+      if (mine?.registry) {
+        out.push(regBox = regBox || el("div", "pm-registry"));
+        import("./registry.js").then(() => pmRegistry(regBox, mine, askNPM), statusTErr);
+      }
       replaceKeeping(body, out);
       if (agentsFor && agSec) {
         // after the view is put back where the reader was, as showing it
@@ -1157,10 +1154,11 @@
   }
 
   // an installed plugin's name as its row shows it: the market's, else the
+  // one its package.json gives itself (magpie.name, #4558), else the
   // package's or the folder's
   function shownName(e) {
     const pkg = name(e.spec);
-    return (listings || []).find((x) => x.package === pkg)?.name || (isGit(e.spec) && e.package) || label(e.spec);
+    return (listings || []).find((x) => x.package === pkg)?.name || e.ownName || (isGit(e.spec) && e.package) || label(e.spec);
   }
 
   function installedRow(e) {
@@ -1267,7 +1265,7 @@
     // can use, which isn't known until the answer comes (#1112)
     else if (e.named) sub.textContent = t("Signs in to nothing magpie can use");
     if (sub.textContent) who.append(sub);
-    if (!ask) for (const c of clashes) who.append(clashLine(e, c, nameOfSpec));
+    if (!ask) for (const g of clashGroups(e, clashes)) who.append(clashLine(e, g, nameOfSpec));
     if (mw && !e.off && !ask) who.append(mwLine(mw));
     if (gw && !e.off && !ask) who.append(gatewayLine(gw));
     if (ag && !e.off && !ask) who.append(agentLine(ag));
@@ -1354,7 +1352,7 @@
     };
     val.append(onoff, rm);
     r.append(val);
-    r.onclick = (ev) => { if (!ev.target.closest("button, .pm-opts")) detail(l || (isGit(e.spec) ? { package: e.spec, name: e.package || e.spec, icon: e.icon, npm: { version: e.version, repository: gitWeb(e.spec) } } : { package: pkg, name: label(e.spec), icon: e.icon, npm: { version: e.latest } })); };
+    r.onclick = (ev) => { if (!ev.target.closest("button, .pm-opts")) detail(l || (isGit(e.spec) ? { package: e.spec, name: shownName(e), icon: e.icon, npm: { version: e.version, repository: gitWeb(e.spec) } } : { package: pkg, name: shownName(e), icon: e.icon, npm: { version: e.latest } })); };
     return r;
   }
 
@@ -1411,17 +1409,49 @@
   // mwLine is a middleware's line in its plugin's row: its hooks, how many
   // calls and how long each took, and the calls that failed (which went on
   // as if it weren't there), or why it didn't load
-  // clashLine is one provider two installed plugins both sign in to, as
-  // the row of either says it: served here, or served by the other one
-  function clashLine(e, c, nameOfSpec) {
-    const d = el("div", "sub pm-clash" + (c.by === e.spec ? "" : " warn"));
-    const others = (c.by === e.spec ? c.with : [c.by]).map(nameOfSpec).join(t(", "));
-    d.append(el("span", "dot"), el("span", "", c.by === e.spec
-      ? t("{other} signs in to {name} too; this one serves it", { name: c.name, other: others })
-      : t("{name} is served by {other}, which signs in to it too", { name: c.name, other: others })));
-    d.title = c.by === e.spec
-      ? t("Two plugins sign in to {name}; magpie runs it on one. Use for {name} on the other one's row switches it", { name: c.name })
-      : t("Two plugins sign in to {name}; magpie runs it on one. Use for {name} switches it to this one, or remove the one you don't want", { name: c.name });
+  // clashGroups are a row's clashes, one per other plugin and side: a
+  // plugin that signs in to two providers another one does too is one
+  // line naming both, not a line each saying the same thing (#565)
+  function clashGroups(e, clashes) {
+    const out = [];
+    for (const c of clashes) {
+      const here = c.by === e.spec;
+      const others = here ? c.with : [c.by];
+      const g = out.find((x) => x.here === here && x.others.join("\n") === others.join("\n"));
+      if (g) g.names.push(c.name);
+      else out.push({ here, others, names: [c.name] });
+    }
+    return out;
+  }
+
+  // clashLine is the providers two installed plugins both sign in to, as
+  // the row of either says it: served here, or served by the other one.
+  // The other one goes by its name; when that is this row's own name too
+  // (the same plugin installed twice, from two places), by where it came
+  // from, since "CodeArts / OfficeAce also signs in to CodeArts" on the
+  // CodeArts / OfficeAce row read as the plugin naming itself (#565)
+  function clashLine(e, g, nameOfSpec) {
+    const d = el("div", "sub pm-clash" + (g.here ? "" : " warn"));
+    const own = shownName(e);
+    const copies = g.others.filter((s) => nameOfSpec(s) === own);
+    const names = g.names.join(t(", "));
+    const many = g.names.length > 1;
+    let text;
+    if (copies.length && copies.length === g.others.length) {
+      const spec = copies.join(t(", "));
+      text = g.here
+        ? t("Another copy of this plugin ({spec}) signs in to {names} too; this copy serves them", { spec, names })
+        : t("Another copy of this plugin ({spec}) serves {names}", { spec, names });
+    } else {
+      const other = g.others.map(nameOfSpec).join(t(", "));
+      text = g.here
+        ? many ? t("{other} signs in to {names} too; this one serves them", { other, names }) : t("{other} signs in to {name} too; this one serves it", { other, name: names })
+        : many ? t("{names} are served by {other}, which signs in to them too", { other, names }) : t("{name} is served by {other}, which signs in to it too", { other, name: names });
+    }
+    d.append(el("span", "dot"), el("span", "", text));
+    d.title = g.names.map((name) => g.here
+      ? t("Two plugins sign in to {name}; magpie runs it on one. Use for {name} on the other one's row switches it", { name })
+      : t("Two plugins sign in to {name}; magpie runs it on one. Use for {name} switches it to this one, or remove the one you don't want", { name })).join("\n");
     return d;
   }
 

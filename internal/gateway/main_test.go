@@ -33,6 +33,8 @@ func TestMain(m *testing.M) {
 	// wrapper does with claudeTuiIdleSeconds 0; those keeping a process for
 	// its next turn ask for it (tuiRuntimeServeTest).
 	tuiRuntimeDefaultIdleTTL = 0
+	// the test binary is no magpie: it runs no claude-tui-helper
+	claudeTUIRuns = false
 	code, err := isolatedTests(m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

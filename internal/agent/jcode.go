@@ -50,7 +50,7 @@ func jcodeDir(at place) string {
 	if d := strings.TrimSpace(at.getenv("JCODE_HOME")); d != "" {
 		return d
 	}
-	return filepath.Join(at.home, ".jcode")
+	return at.join(".jcode")
 }
 
 // jcodeModel is one [[providers.<name>.models]] entry, as jcode's

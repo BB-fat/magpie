@@ -1070,7 +1070,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				}
 				try.TTFT, try.FirstText = fromTry(ttft), fromTry(text)
 				try.Net = nt.timing(try.Start, 0)
-				t.ReasoningHidden = first.hidesReasoning(provider.Responses)
+				t.ReasoningHidden = first.hidesReasoning(provider.Responses, uu.Reasoning)
 				try.ReasoningHidden = t.ReasoningHidden
 				t.Done, t.Status, t.Error, t.Millis, t.Tokens = true, status, msg, ms, tokens
 				if t.TitleLink != nil && isTitleKind(kind) && status < 400 && msg == "" && !titleReply.truncated {
@@ -1205,6 +1205,19 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 			sent = provider.CodexCompressed(req, body)
 			if res, err = s.client.Do(req); err != nil {
 				msg := "OpenAI: " + err.Error()
+				if overload && busyAgain < lastRetries && droppedUnanswered(r.Context(), err) {
+					// the connection closed with nothing of a reply (a
+					// proxy's or ChatGPT's front's "EOF" on a fresh
+					// connection, which Go doesn't send again by itself):
+					// asked again after a moment on a new one, as the
+					// accounts loop asks its last account again after the
+					// same 502 (aetrox333 on Discord: gpt-6-luna failed
+					// in 43ms every time, auto/gpt-6-luna never)
+					if !askAgain(502, msg, retryPause<<busyAgain) {
+						return
+					}
+					continue
+				}
 				if rest == "/responses" {
 					msg = codexUnreached(modelOf(body), err)
 				}
@@ -1457,8 +1470,8 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 		call.Fallback = strings.TrimSuffix(call.Fallback, "; ")
 	}
 	call.TTFT, call.FirstText = first.ms()
-	call.ReasoningHidden = first.hidesReasoning(provider.Responses)
 	uu.add(sniff.usage())
+	call.ReasoningHidden = first.hidesReasoning(provider.Responses, uu.Reasoning)
 	uu.Tier = servedTierAt(provider.HostOf(base), uu.Tier)
 	call.Flow = first.flowFor(uu.Reasoning)
 	call.Usage, served = uu, uu.Served
@@ -1692,6 +1705,19 @@ func codexKeyRefused(msg []byte) string {
 		"This is one of Codex's own models, which goes to OpenAI with Codex's own sign-in: " +
 		"pick one of magpie's models in Codex (provider/model, or set it in magpie's Agents view), " +
 		"or sign Codex in with ChatGPT, or with an OpenAI API key"
+}
+
+// droppedUnanswered says whether err, a request's that got no reply, is
+// one that may pass when asked again: the connection closed or reset
+// before a byte of a reply, or couldn't be made. Not the caller gone, nor
+// a wait for the reply that ran out, which a second try would wait out
+// again.
+func droppedUnanswered(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var ne interface{ Timeout() bool }
+	return !errors.As(err, &ne) || !ne.Timeout()
 }
 
 // codexUnreached says why a model of Codex's own failed with 502: OpenAI,

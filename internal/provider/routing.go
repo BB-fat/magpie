@@ -26,7 +26,9 @@ const (
 	LeastUsed = "usage"
 	Pace      = "pace"
 	// Weighted spreads a provider's requests over its keys by each key's
-	// weight (KeyAccount.Weight, #841), smoothly: 3 and 1 go a, a, b, a…
+	// weight (KeyAccount.Weight, #841), or a subscription's over its
+	// accounts by each account's (AccountWeights), smoothly: 3 and 1 go
+	// a, a, b, a…
 	Weighted = "weight"
 	// FreeFirst spends what costs nothing first: the models its vendor
 	// serves at no cost to the subscription's allowance or credits, before
@@ -97,6 +99,18 @@ func SetCapCareful(id string, on bool) error {
 		return err
 	}
 	p.CapCareful = on
+	return Save(*p)
+}
+
+// SetCountFree has every model of a provider count as free for the
+// routings that weigh it, or go by its vendor's word again
+// (Provider.CountFree).
+func SetCountFree(id string, on bool) error {
+	p, err := Find(id)
+	if err != nil {
+		return err
+	}
+	p.CountFree = on
 	return Save(*p)
 }
 

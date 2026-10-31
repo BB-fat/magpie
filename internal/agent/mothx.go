@@ -156,9 +156,9 @@ func mothxDir(at place) string {
 		if app := appdir.Getenv("APPDATA"); app != "" {
 			return filepath.Join(app, "mothx")
 		}
-		return filepath.Join(at.home, "AppData", "Roaming", "mothx")
+		return at.join("AppData", "Roaming", "mothx")
 	}
-	return filepath.Join(at.home, ".mothx")
+	return at.join(".mothx")
 }
 
 // mothxBlockKept is theirsKept for magpie's provider in MothX's

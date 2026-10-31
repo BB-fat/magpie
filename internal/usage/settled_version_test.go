@@ -72,10 +72,14 @@ func TestSettledCountedAsVersioned(t *testing.T) {
 	}
 	var pages []pageDiskEntry
 	var heat heatDiskEntry
-	var effort effortDiskEntry
+	var efforts []effortDiskEntry
 	read(pageDiskPath(), &pages)
 	read(heatDiskPath(), &heat)
-	read(effortDiskPath(), &effort)
+	read(effortDiskPath(), &efforts)
+	var effort effortDiskEntry
+	if len(efforts) > 0 {
+		effort = efforts[0]
+	}
 	// when and under what they were counted, not how; and the cells in
 	// one order, as a first build a few weeks at a time adds them up in
 	// another

@@ -193,7 +193,7 @@ func ompProfiles(home string) []*Agent {
 // known), and without one its models offer xhigh rather than a max an older
 // omp would refuse.
 func ompIn(at place) *Agent {
-	return ompAt(at, filepath.Join(at.home, ".omp", "agent"), func() ompProviderEntry { return ompProviderAt(at.gw(), at.version) })
+	return ompAt(at, at.join(".omp", "agent"), func() ompProviderEntry { return ompProviderAt(at.gw(), at.version) })
 }
 
 // ompAt is omp with its agent folder at dir, magpie's entry in its

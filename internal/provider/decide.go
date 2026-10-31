@@ -95,9 +95,18 @@ func (p Provider) DecidesModel(model string) bool {
 	if p.bailianApart() {
 		return model == BailianDecision
 	}
-	if p.IsRemoteMagpie() || p.listsDecisions() {
+	// decideListed's answer, without its list copied for each model
+	// asked about: a provider's every model was asked, a copy of the whole
+	// list each time (0.4 GB of a real config's 4 GB over 20 polls)
+	if p.IsRemoteMagpie() {
+		return slices.ContainsFunc(catalog.LiveByID(p.ID, model), func(m catalog.Model) bool { return m.Decides })
+	}
+	if p.listsDecisions() {
 		// OpenRouter's Jev Router (typesafe/jev-router) is a chat model
-		return slices.ContainsFunc(p.decideListed(), func(m catalog.Model) bool { return m.ID == model })
+		if id := decisionsID(p.ID); catalog.LiveListed(id) {
+			return len(catalog.LiveByID(id, model)) > 0 || p.openRouterVariant(model)
+		}
+		return !p.serverMarksDecisions() && model == OpenRouterJev
 	}
 	return jevID(model) || p.DecideVia() == ViaCloudflare && CloudflareClef(model)
 }
@@ -163,6 +172,24 @@ func (p Provider) listsDecisions() bool {
 // and lists none while it has none.
 func (p Provider) serverMarksDecisions() bool {
 	return p.omlxDecides() || p.mlxServeDecides() || p.ollamaDecides()
+}
+
+// openRouterVariant reports whether model is one of the decision models
+// OpenRouter lists with a variant after it (inception/mercury-decide:free,
+// …:nitro): OpenRouter's list names the model once, and a variant goes to
+// the same decisions endpoint, never chat/completions (coeo91 on Discord:
+// inception/mercury-decide:free, picked by hand, was sent as a chat model
+// and refused 400 "is a decisions model"). Only OpenRouter's ids take a
+// variant so; an Ollama decision model's :tag is a name of its own.
+func (p Provider) openRouterVariant(model string) bool {
+	if openRouterDecisions(p.Decide) == "" {
+		return false
+	}
+	i := strings.LastIndexByte(model, ':')
+	if i <= 0 || i == len(model)-1 || strings.Contains(model[i:], "/") {
+		return false
+	}
+	return len(catalog.LiveByID(decisionsID(p.ID), model[:i])) > 0
 }
 
 // decisionsID is where a provider that serves conversations too keeps the
@@ -744,7 +771,7 @@ func resolveDecideModel(p Provider, name string) (string, bool) {
 			return name, true
 		}
 	}
-	if name == p.Jev() {
+	if name == p.Jev() || p.openRouterVariant(name) {
 		return name, true
 	}
 	// a gateway lists one Jev, named its own way; jev-latest is that model
@@ -1020,7 +1047,7 @@ type listedFacts struct {
 func (f listedFacts) model(name string) catalog.Model {
 	m := catalog.Model{ID: name, Name: name, Context: cmp.Or(f.ContextLength, f.ContextWindow)}
 	if in := cmp.Or(len(f.Architecture.InputModalities), len(f.Modalities.Input)); in > 0 {
-		images := slices.Contains(f.Architecture.InputModalities, "image") || slices.Contains(f.Modalities.Input, "image")
+		images := slices.Contains(catalog.Kinds(f.Architecture.InputModalities), "image") || slices.Contains(catalog.Kinds(f.Modalities.Input), "image")
 		m.ImageInput, m.Images = &images, images
 	}
 	return m

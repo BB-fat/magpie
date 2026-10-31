@@ -44,7 +44,11 @@ func trayCardID(q provider.SubscriptionQuota) string {
 
 // trayWindows are the windows a card's text shows: those that stop the
 // account (not on-demand spending, nor one that counts a single model's
-// use), the shortest first where the vendor says how long they run.
+// use), the shortest first where the vendor says how long they run. A card
+// with none of those shows what it has in their place (trayShared, then
+// trayModels): Antigravity reports only its pools, which routing sets
+// aside, and its models' own windows, and its card was left out of the
+// menu bar for that though ticked (nivekxft on X).
 func trayWindows(q provider.SubscriptionQuota) []provider.QuotaWindow {
 	var ws []provider.QuotaWindow
 	for _, w := range q.Windows {
@@ -52,12 +56,71 @@ func trayWindows(q provider.SubscriptionQuota) []provider.QuotaWindow {
 			ws = append(ws, w)
 		}
 	}
+	if len(ws) == 0 {
+		ws = trayShared(q.Windows)
+	}
+	if len(ws) == 0 {
+		return trayModels(q.Windows)
+	}
 	slices.SortStableFunc(ws, func(a, b provider.QuotaWindow) int {
 		if a.Span == 0 || b.Span == 0 {
 			return 0
 		}
 		return cmp.Compare(a.Span, b.Span)
 	})
+	return ws
+}
+
+// trayCounted is whether a window tells a share used, one the menu bar can
+// say as a percent: not a row of text, an unlimited one, a wallet's
+// balance, nor a figure of money with no share (Factory's extra usage).
+func trayCounted(w provider.QuotaWindow) bool {
+	return !w.Text && !w.Unlimited && w.Balance == nil && !(w.Display != "" && w.Used == 0 && w.Limit == 0)
+}
+
+// trayShared are a card's windows over all its models that routing sets
+// aside, for a card with no other: a group of models' shared allowance
+// (Antigravity's "Gemini", "Claude & GPT" pools, named with their pool as
+// the Usage page names them), or a plan's windows set aside while bought
+// credits carry the account past them (Ollama's).
+func trayShared(all []provider.QuotaWindow) []provider.QuotaWindow {
+	var ws []provider.QuotaWindow
+	for _, w := range all {
+		if w.Model != "" || !trayCounted(w) {
+			continue
+		}
+		if w.Pool != "" {
+			w.Name = w.Pool + " · " + w.Name
+		}
+		ws = append(ws, w)
+	}
+	return ws
+}
+
+// trayModels are a card's per-model windows, for a card that has nothing
+// else (Gemini CLI's, Antigravity's when its pools couldn't be read): the
+// tightest of each model family, as the Usage page shows one figure a
+// family, the most used first.
+func trayModels(all []provider.QuotaWindow) []provider.QuotaWindow {
+	var ws []provider.QuotaWindow
+	for _, w := range all {
+		if w.Model == "" || w.Aside || !trayCounted(w) {
+			continue
+		}
+		if i := slices.IndexFunc(ws, func(x provider.QuotaWindow) bool { return w.Family != "" && x.Family == w.Family }); i >= 0 {
+			if w.Used > ws[i].Used {
+				ws[i] = w
+			}
+			continue
+		}
+		ws = append(ws, w)
+	}
+	for i := range ws {
+		if f := ws[i].Family; f != "" && !strings.HasPrefix(strings.ToLower(ws[i].Name), strings.ToLower(f)) {
+			ws[i].Name = f + " · " + ws[i].Name
+		}
+	}
+	slices.SortStableFunc(ws, func(a, b provider.QuotaWindow) int { return cmp.Compare(b.Used, a.Used) })
 	return ws
 }
 
@@ -101,9 +164,12 @@ func withTrayKinds(qs []provider.SubscriptionQuota) []provider.SubscriptionQuota
 	for i, q := range qs {
 		if len(q.Windows) > 0 {
 			ws := slices.Clone(q.Windows)
-			for j := range ws {
-				if !ws[j].Aside && ws[j].Model == "" {
-					ws[j].TrayKind = trayWindowKind(ws[j])
+			for _, w := range trayWindows(q) {
+				// the window as the menu bar has it, named with its pool
+				if j := slices.IndexFunc(ws, func(x provider.QuotaWindow) bool {
+					return x.TrayKind == "" && x.Model == w.Model && x.Pool == w.Pool && x.Span == w.Span && x.Used == w.Used && x.Aside == w.Aside && x.Family == w.Family
+				}); j >= 0 {
+					ws[j].TrayKind = trayWindowKind(w)
 				}
 			}
 			q.Windows = ws

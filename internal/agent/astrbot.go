@@ -92,7 +92,7 @@ func astrbotRoot(at place) string {
 	if d := strings.TrimSpace(at.getenv("ASTRBOT_ROOT")); d != "" {
 		return d
 	}
-	desktop := filepath.Join(at.home, ".astrbot")
+	desktop := at.join(".astrbot")
 	if isFile(filepath.Join(desktop, "data", "cmd_config.json")) {
 		return desktop
 	}
@@ -100,7 +100,7 @@ func astrbotRoot(at place) string {
 		return at.home
 	}
 	for _, d := range []string{"astrbot", "AstrBot"} {
-		root := filepath.Join(at.home, d)
+		root := at.join(d)
 		if isFile(filepath.Join(root, "data", "cmd_config.json")) || isFile(filepath.Join(root, ".astrbot")) {
 			return root
 		}

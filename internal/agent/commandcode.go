@@ -28,7 +28,7 @@ func commandCode(home string) *Agent { return commandCodeIn(here(home)) }
 // reaches it.
 func commandCodeIn(at place) *Agent {
 	ccProviderJSON := func() any { return ccProviderJSONAt(at.v1()) }
-	dir := filepath.Join(at.home, ".commandcode")
+	dir := at.join(".commandcode")
 	path := filepath.Join(dir, "settings.json")
 	providers := filepath.Join(dir, "providers.json")
 	get := func(k string) string { v, _ := edit.GetJSON(path, k); return v }

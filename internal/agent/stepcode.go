@@ -36,7 +36,7 @@ func stepcodeDir(at place) string {
 			name = custom
 		}
 	}
-	return filepath.Join(at.home, name)
+	return at.join(name)
 }
 
 func stepcodeProvider(at place) any {

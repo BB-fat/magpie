@@ -59,7 +59,11 @@ jobs:
   mirror-release:
     needs: trigger-release
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    # magpie-releases' macOS jobs can wait an hour or more for a hosted
+    # runner when several tags queue: v0.1.2262 published 62 minutes after
+    # its tag, two minutes after a 60-minute wait here gave up, and it was
+    # never copied here (#4488)
+    timeout-minutes: 330
     permissions:
       contents: write
       issues: write # to say a release went out without Chinese notes
@@ -70,7 +74,7 @@ jobs:
     steps:
       - name: Wait for magpie-releases to publish every asset
         run: |
-          for i in $(seq 1 120); do
+          for i in $(seq 1 600); do
             n=$(gh release view "$REF" -R yetone/magpie-releases --json assets -q '.assets | length' 2>/dev/null || echo 0)
             echo "attempt $i: $n of $ASSETS assets"
             [ "$n" -ge "$ASSETS" ] && exit 0

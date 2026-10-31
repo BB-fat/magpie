@@ -71,7 +71,7 @@ func qoderSite(home string, b qoderBuild) *Agent { return qoderAt(here(home), b)
 func qoderAt(at place, b qoderBuild) *Agent {
 	dir := at.getenv(b.env)
 	if dir == "" {
-		dir = filepath.Join(at.home, b.dir)
+		dir = at.join(b.dir)
 	}
 	path := filepath.Join(dir, "settings.json")
 	key := b.id + ":" + path + ":"

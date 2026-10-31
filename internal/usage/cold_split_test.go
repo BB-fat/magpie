@@ -1,6 +1,8 @@
 package usage
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -29,6 +31,9 @@ func TestFirstBuildPairsSpans(t *testing.T) {
 	path := filepath.Join(sessions.CodexDir(), "sessions", at.Format("2006/01/02"), "rollout-"+at.Format("2006-01-02T15-04-05")+"-z.jsonl")
 	writeCodexCall(t, path, "z", "sz", `"vscode"`, "resp-z", "m", "high", at, 300, 30)
 	Append(Record{Time: at.Add(time.Minute), Agent: "codex", Provider: "openai", Model: "m", Input: 300, Output: 30, Status: 200, ResponseID: "resp-z", Session: "sz"})
+	// a Codex thread written over three weeks, one file: a call 20 days
+	// back and one 2 days back, each through magpie too
+	writeLongCodexThread(t, yesterday.AddDate(0, 0, -20), yesterday.AddDate(0, 0, -1))
 	// a call through magpie alone, 30 days back
 	Append(Record{Time: yesterday.AddDate(0, 0, -30), Agent: "claude-code", Provider: "anthropic", Model: "c", Input: 50, Output: 5, Status: 200})
 	restart := func() {
@@ -72,7 +77,7 @@ func TestFirstBuildPairsSpans(t *testing.T) {
 		t.Fatal("a pairing of every chunk wrote no sums")
 	}
 	all := paired[0]
-	for _, days := range []int{1, 14} {
+	for _, days := range []int{1, 4, 14} {
 		coldSpan = days
 		restart()
 		spans := []int{}
@@ -96,7 +101,88 @@ func TestFirstBuildPairsSpans(t *testing.T) {
 			t.Fatalf("%d days a span: effort %+v, paired at once %+v", days, got.effort, whole.effort)
 		}
 	}
-	if whole.page.Total != 9 {
+	if whole.page.Total != 11 {
 		t.Fatalf("page: %d rows", whole.page.Total)
+	}
+}
+
+// A first start pairs the history once for the warm-up's page and
+// Codex's effort, whichever is asked first, and tells what each pairing
+// of its own does (#2278).
+func TestFirstBuildPairsOnceForPageAndEffort(t *testing.T) {
+	yesterday, _ := advanceHistory(t)
+	writeLongCodexThread(t, yesterday.AddDate(0, 0, -20), yesterday.AddDate(0, 0, -1))
+	coldSpan = 4
+	restart := func() {
+		requestCache.Lock()
+		requestCache.parts, requestCache.pageOld, requestCache.heatParts, requestCache.heatOld, requestCache.heats, requestCache.pairs, requestCache.pages = nil, nil, nil, nil, nil, nil, map[pageKey]RequestPage{}
+		requestCache.Unlock()
+		codexEffort.Lock()
+		codexEffort.periods = map[Period]*effortEntry{}
+		codexEffort.Unlock()
+		codexEffortBuilding.Lock()
+		effortOlds = map[Period]*effortOld{}
+		codexEffortBuilding.Unlock()
+		for _, path := range []string{pageDiskPath(), heatDiskPath(), effortDiskPath()} {
+			os.Remove(path)
+		}
+	}
+	restart()
+	t.Cleanup(restart)
+	spans := 0
+	coldSpanning = func(int) { spans++ }
+	t.Cleanup(func() { coldSpanning = nil })
+	page := QueryPage(All, Filter{}, 0, 50)
+	restart()
+	effort := CodexModelEffort(All)
+	restart()
+	spans = 0
+	if got := QueryPage(All, Filter{}, 0, 50); !reflect.DeepEqual(got, page) {
+		t.Fatalf("page first: %+v, alone %+v", got, page)
+	}
+	first := spans
+	if got := CodexModelEffort(All); !reflect.DeepEqual(got, effort) || spans != first || first == 0 {
+		t.Fatalf("page first: effort %+v after %d spans of %d, alone %+v", got, spans, first, effort)
+	}
+	restart()
+	spans = 0
+	if got := CodexModelEffort(All); !reflect.DeepEqual(got, effort) {
+		t.Fatalf("effort first: %+v, alone %+v", got, effort)
+	}
+	first = spans
+	if got := QueryPage(All, Filter{}, 0, 50); !reflect.DeepEqual(got, page) || spans != first || first == 0 {
+		t.Fatalf("effort first: page %+v after %d spans of %d, alone %+v", got, spans, first, page)
+	}
+}
+
+// writeLongCodexThread writes one Codex rollout with a call at each of
+// ats, and the gateway's row of each.
+func writeLongCodexThread(t *testing.T, ats ...time.Time) {
+	t.Helper()
+	path := filepath.Join(sessions.CodexDir(), "sessions", ats[0].Format("2006/01/02"), "rollout-"+ats[0].Format("2006-01-02T15-04-05")+"-long.jsonl")
+	lines := []any{map[string]any{"timestamp": ats[0].Add(-time.Minute).Format(time.RFC3339Nano), "type": "session_meta", "payload": map[string]any{"id": "long", "session_id": "slong", "source": "vscode"}}}
+	for i, at := range ats {
+		response := fmt.Sprintf("resp-long-%d", i)
+		lines = append(lines,
+			map[string]any{"timestamp": at.Add(-time.Second).Format(time.RFC3339Nano), "type": "turn_context", "payload": map[string]any{"turn_id": "turn-" + response, "model": "m", "effort": "low"}},
+			map[string]any{"timestamp": at.Format(time.RFC3339Nano), "type": "token_usage_record", "payload": map[string]any{
+				"response_id": response, "session_id": "slong", "thread_id": "long", "turn_id": "turn-" + response,
+				"usage": map[string]int{"input_tokens": 70 + i, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 7, "reasoning_output_tokens": 0, "total_tokens": 77 + i},
+			}})
+		Append(Record{Time: at.Add(time.Second), Agent: "codex", Provider: "openai", Model: "m", Input: 70 + i, Output: 7, Status: 200, ResponseID: response, Session: "slong"})
+	}
+	var data []byte
+	for _, line := range lines {
+		b, err := json.Marshal(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(append(data, b...), '\n')
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
 	}
 }

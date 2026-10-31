@@ -61,7 +61,7 @@ func cline(home string) *Agent { return clineIn(here(home)) }
 func clineIn(at place) *Agent {
 	dir := at.getenv("CLINE_DIR")
 	if dir == "" {
-		dir = filepath.Join(at.home, ".cline")
+		dir = at.join(".cline")
 	}
 	data := at.getenv("CLINE_DATA_DIR")
 	if data == "" {

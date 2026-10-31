@@ -30,7 +30,7 @@ func fx(home string) *Agent { return fxIn(here(home)) }
 // fxIn is fx at a place: this machine's home, or a WSL distro's (see
 // wsl.go), its provider naming the gateway as the distro reaches it.
 func fxIn(at place) *Agent {
-	dir := filepath.Join(at.home, ".fx")
+	dir := at.join(".fx")
 	path := filepath.Join(dir, "settings.json")
 	// magpie's provider, with what the user set on it in fx kept
 	fxProvider := func(cur string) any { return fxKept(path, fxProviderAt(cur, at.v1())) }
