@@ -52,11 +52,15 @@ func TestLiveModelReadWithoutACopy(t *testing.T) {
 		runtime.ReadMemStats(&after)
 		return (after.TotalAlloc - before.TotalAlloc) / 200
 	}
-	// the read of the list itself (its path, the file's look) is the
-	// same either way; what is over it is the copy
-	read := bytesPer(func() { catalog.LiveListed("r") })
+	// the steps before the list is read (whether it is the provider's, the
+	// id it is listed by) and the read itself, the file's look, are the
+	// same either way; what is over them is the copy. Each costs more on
+	// Windows, whose stat allocates more.
+	read := bytesPer(func() { _ = p.lists(); _ = p.OwnModelID("m-7"); catalog.LiveListed("r") })
 	looked := bytesPer(func() { p.liveByID("m-7") })
-	if size := uint64(unsafe.Sizeof(catalog.Model{})); looked >= read+size {
+	// the same steps leave nothing over; a copy, a model and more. Half a
+	// model leaves room both ways.
+	if size := uint64(unsafe.Sizeof(catalog.Model{})); looked >= read+size/2 {
 		t.Fatalf("a look at one model took %d bytes, the list's read %d; a model is %d", looked, read, size)
 	}
 
