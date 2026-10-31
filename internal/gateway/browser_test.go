@@ -214,7 +214,9 @@ func TestBrowserExtensionOnlyFromItsOrigin(t *testing.T) {
 		}
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
-		if w.Code != http.StatusForbidden {
+		// refused, by the LAN guard (401 for a computer sending no key) or
+		// by the handler (403): never switched to a WebSocket
+		if w.Code != http.StatusForbidden && w.Code != http.StatusUnauthorized {
 			t.Fatalf("%+v: %d %s", c, w.Code, w.Body.String())
 		}
 	}
