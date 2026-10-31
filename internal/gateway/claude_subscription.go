@@ -3233,7 +3233,7 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 	var blocks []map[string]any
 	var text strings.Builder
 	// a lean run has them as its system prompt (leanSystem)
-if !req.leanPrompt && (req.System != "" || clientOSLine(req) != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:") || envNote(req) != "") {
+	if !req.leanPrompt && (req.System != "" || clientOSLine(req) != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:") || envNote(req) != "") {
 		text.WriteString("<external_system_instructions>\n")
 		system := withoutBillingHeader(req.System)
 		pos := 0
@@ -3252,7 +3252,7 @@ if !req.leanPrompt && (req.System != "" || clientOSLine(req) != "" || req.ToolCh
 			}
 		}
 		text.WriteString(system[pos:])
-text.WriteString(clientOSLine(req))
+		text.WriteString(clientOSLine(req))
 		text.WriteString(envNote(req))
 		text.WriteString(toolChoiceAsk(req))
 		text.WriteString("\n</external_system_instructions>\n\n")
@@ -3419,7 +3419,7 @@ func toolChoiceAsk(req *Request) string {
 // still puts its billing line and its
 // identity line before it, and marks it for the cache itself.
 func leanSystem(req *Request) string {
-return strings.TrimSpace(withoutBillingHeader(req.System) + clientOSLine(req) + envNote(req) + toolChoiceAsk(req))
+	return strings.TrimSpace(withoutBillingHeader(req.System) + clientOSLine(req) + envNote(req) + toolChoiceAsk(req))
 }
 
 // historyChunk is how many messages of the history renderClaudePrompt puts
