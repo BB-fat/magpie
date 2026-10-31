@@ -433,7 +433,7 @@ type Server struct {
 	calls  uint64 // the last Call.ID given
 	// unfit remembers the endpoints each provider's models were turned away
 	// from, so every later turn goes straight to one that takes them.
-unfit map[string]bool
+	unfit map[string]bool
 	// refusedThinking is the thinking blocks each provider and account
 	// refused as signed for another conversation (thinking_bound.go)
 	refusedThinking map[string]bool
@@ -627,7 +627,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	s.lnMu.Lock()
 	s.ln = ln
 	s.lnMu.Unlock()
-// the keys out of credit a magpie before this one rested go on
+	// the keys out of credit a magpie before this one rested go on
 	// resting, and climb on from their rung (rest_store.go)
 	loadRests()
 	// the Claude TUI's web search is this gateway's, and what its accounts
