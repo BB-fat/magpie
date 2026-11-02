@@ -1,0 +1,57 @@
+{
+  "source_runtime_commit": "f405cd95f49470368b2e2f69c0ce942d33526191",
+  "go_toolchain": "go1.27.1",
+  "tui_race_suite": {
+    "exit": 0,
+    "seconds": 130.138
+  },
+  "real_cli_standin": {
+    "exit": 0,
+    "seconds": 50.714,
+    "claude_version": "2.1.308",
+    "bun_version": "1.4.4"
+  },
+  "linux_nogui_vet": 0,
+  "windows_vet": 0,
+  "linux_nogui_build": 0,
+  "windows_build": 0,
+  "desktop_build_vet": "missing GTK4/WebKitGTK/GLib/fontconfig development packages",
+  "full_suite": {
+    "exit": 1,
+    "failures": [
+      "TestInstalledVersion",
+      "TestCursorFolderFromTheEditorIsNotTheCLI",
+      "TestCopilotFolderFromAnIDEPluginIsNotTheCLI",
+      "TestOmpDetectedWithPiDir",
+      "TestZedAppPath",
+      "TestKeyNote",
+      "TestCodexFittedImagesPastTheBudget",
+      "TestMarshalRawIsEncodingJSON",
+      "TestMarshalSizedIsJSONMarshal",
+      "TestSearchAPIAsksAreLogged",
+      "TestServeWSLListensBesideLoopback",
+      "FuzzMarshalRaw",
+      "TestSettingsSaveKeepsWhatItDoesNotSend",
+      "TestUpdateNotWritableSaysWhy"
+    ],
+    "reproduced_on_original_runtime": {
+      "TestInstalledVersion": true,
+      "TestCursorFolderFromTheEditorIsNotTheCLI": true,
+      "TestCopilotFolderFromAnIDEPluginIsNotTheCLI": true,
+      "TestOmpDetectedWithPiDir": true,
+      "TestZedAppPath": true,
+      "TestKeyNote": true,
+      "TestCodexFittedImagesPastTheBudget": true,
+      "TestMarshalRawIsEncodingJSON": true,
+      "TestMarshalSizedIsJSONMarshal": true,
+      "TestSearchAPIAsksAreLogged": false,
+      "TestServeWSLListensBesideLoopback": true,
+      "FuzzMarshalRaw": true,
+      "TestSettingsSaveKeepsWhatItDoesNotSend": true,
+      "TestUpdateNotWritableSaysWhy": true
+    }
+  },
+  "full_suite_log": "/tmp/magpie-tui-fixes-ang_idjw/full-suite.log",
+  "repository_issues_enabled": false,
+  "deployment_details": "Omitted from public evidence; historical local verification results are unchanged."
+}

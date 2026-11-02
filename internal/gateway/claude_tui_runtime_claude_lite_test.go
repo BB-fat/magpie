@@ -297,6 +297,7 @@ func TestClaudeTUIRuntimeLiteSameRequestInFlightAsksForRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Model = "claude-opus-5-5"
+	req.scope = tuiRuntimePrefixScope(tuiRuntimeScOwner, "")
 	release, ok := b.enterLiteTurn(t.Context(), tuiRuntimeLiteReplayKey(tuiRuntimeScOwner, req))
 	if !ok {
 		t.Fatal("enter")

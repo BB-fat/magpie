@@ -1,0 +1,71 @@
+{
+  "source_commit": "f405cd95f49470368b2e2f69c0ce942d33526191",
+  "checker": "TLC 1.7.4",
+  "jar_sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+  "cases": [
+    {
+      "name": "launch-handoff-fixed",
+      "module": "NativeStartHandoff",
+      "expected": null,
+      "hypothesis": false,
+      "revision": "fixed implementation",
+      "exit": 0,
+      "violated": null,
+      "as_expected": true,
+      "seconds": 0.974,
+      "generated": 132,
+      "distinct": 74,
+      "log_sha256": "000b66ea637bdb5944b1d237de0dfb91624de1983f622d4d6ec00a421de27e75",
+      "captured_log_sha256": "272cca576e972fe9c881da9fc87229a3f3691707a89735dd0ae488e03615175f",
+      "log_redaction": "Local machine details and absolute paths omitted; checker results unchanged."
+    },
+    {
+      "name": "session-reservation-fixed",
+      "module": "SessionReservationFixed",
+      "expected": null,
+      "hypothesis": false,
+      "revision": "fixed implementation",
+      "exit": 0,
+      "violated": null,
+      "as_expected": true,
+      "seconds": 0.72,
+      "generated": 65,
+      "distinct": 51,
+      "log_sha256": "08a3bb9bc0edc6981ac6e56f1a2a51fac8be153171bdbab0d76ec4f0a3925be7",
+      "captured_log_sha256": "c0bb5e8f2e8c9792649a6636b346ec27b3863816a3146a8e5a483a4cc451f44c",
+      "log_redaction": "Local machine details and absolute paths omitted; checker results unchanged."
+    },
+    {
+      "name": "replay-fixed-same-caller",
+      "module": "ReplayIdentity",
+      "expected": null,
+      "hypothesis": false,
+      "revision": "fixed implementation",
+      "exit": 0,
+      "violated": null,
+      "as_expected": true,
+      "seconds": 0.712,
+      "generated": 19,
+      "distinct": 14,
+      "log_sha256": "72ce897357773e21703607fc78982f5887e40b913341869da0e7cb96c48e249c",
+      "captured_log_sha256": "7ec39b0eb1b52f13d9e634042c14219a7f4bff86f37ca6f38d8792fc6856be04",
+      "log_redaction": "Local machine details and absolute paths omitted; checker results unchanged."
+    },
+    {
+      "name": "replay-fixed-distinct-callers",
+      "module": "ReplayIdentity",
+      "expected": null,
+      "hypothesis": false,
+      "revision": "fixed implementation",
+      "exit": 0,
+      "violated": null,
+      "as_expected": true,
+      "seconds": 0.703,
+      "generated": 21,
+      "distinct": 15,
+      "log_sha256": "92f4f59e2cd77bd636d13cdfc11668663f5e86640f5835f85f3552b9908a0857",
+      "captured_log_sha256": "811157589eeddbd0083f6a8ce1f2d949a1f60891572449723c4fc553ab93ec26",
+      "log_redaction": "Local machine details and absolute paths omitted; checker results unchanged."
+    }
+  ]
+}

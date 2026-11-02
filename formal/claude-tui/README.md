@@ -8,6 +8,79 @@ what is currently deployed on a reported deployment. No retained production impl
 was made during this audit. The temporary observation hooks used by the
 witness runner were restored byte-for-byte before the ordinary suite ran.
 
+## Remediation Status
+
+The original findings below describe `c01714ae6` and remain as historical
+counterexample evidence. They are repaired in the following commits:
+
+| Finding | Runtime Fix | Permanent Regression |
+| --- | --- | --- |
+| TUI-F01 | `75065dff9`: explicit scope in replay digest and completion index | `TestClaudeTUIRuntimeCompletedReplyIsCallerScoped` |
+| TUI-F02 | `06f39916b`: reserve before writer inspection; retain reaping ownership; single-use release | `TestClaudeTUIRuntimeSessionReservationPrecedesWriterInspection`, `TestClaudeTUIRuntimeSessionReservationReleaseIsSingleUse` |
+| TUI-F03 | `7c0dbfdde`: startup promise/stop fence, publication before teardown | `TestClaudeTUIRuntimeClosedStartupCannotLaunch`, `TestClaudeTUIRuntimeNativeStartFenceWaitsForPublication` |
+| TUI-F04 | `f405cd95f`: request admission before completed-result lookup and MCP matching | `TestClaudeTUIRuntimeQueuedRetryRechecksCompletedReply` |
+
+`NativeStartHandoff` and `SessionReservationFixed` model the implemented
+handoff/reserve-first protocols, rather than treating an unlocked extra
+check as a fix. The two `replay-fixed-*` cases apply scoped identity and
+post-admission completion lookup. All four finite checks pass; the old
+counterexamples and negative controls are retained unchanged. See
+`results/summary-selected.json` and `results/fixed-go-regressions.log`.
+The permanent regressions run without observation hooks or source rewriting.
+The old-behavior failures were captured before each fix, including caller-B
+receiving caller-A's reply, a stale reservation release, a closed startup
+launching a child, and two wrappers for one queued identical retry.
+
+Historical `run_witnesses.py` intentionally refuses repaired source. To
+reproduce the original failures, use an isolated worktree at `c97e89df7`
+(the audit artifacts commit, whose runtime is still `c01714ae6`). On repaired
+source, run:
+
+```sh
+python3 formal/claude-tui/run_regressions.py
+python3 formal/claude-tui/run_models.py --jar /path/to/tla2tools-1.7.4.jar \
+  --case launch-handoff-fixed --case session-reservation-fixed \
+  --case replay-fixed-same-caller --case replay-fixed-distinct-callers
+```
+
+These fixes do not weaken strict history matching, deduplicate unrelated
+headerless first turns, or promise vendor cache hits. Caller-edited history
+remains outside this repair.
+
+## Repair Verification And Remaining Suite Blockers
+
+The six permanent regression tests pass under `-race -count=20` (23.156s).
+They fail on the original runtime in a separate worktree; see
+`results/fixed-regressions-on-original-runtime.log`. No observation hook is
+needed in the repaired regression suite. The previously seeded request-gate
+fixture now uses the same effective caller scope as the real HTTP path.
+
+The repaired full Claude TUI race suite passes in 130.138s. The real CLI
+against a local API stand-in passes activity-summary isolation, both MCP
+server names, prefix retention, restart, cancellation, process death/memory,
+idle reuse, tools, and headerless post-TTL resume (50.714s). Linux nogui and
+Windows builds and vet pass. Formatting and `git diff --check` are clean.
+
+The whole repository run was completed, not cancelled, and is NOT GREEN.
+See `results/fixed-full-suite-failures.log` and
+`results/fixed-validation-summary.json` for every failure and which ones
+were independently reproduced on the original runtime. The recorded failures
+are in agent detection, CLI container banner, Codex image budgeting, search
+logging, JSON compatibility, WSL loopback and GUI settings/update tests;
+there are no Claude TUI test failures in the final run. Do not interpret the
+standalone TUI pass as a full-suite pass. This fork has GitHub Issues disabled,
+so these blockers are tracked here rather than inventing remote issue URLs.
+Unrelated runtime behavior has not been altered to conceal these failures.
+Desktop build/vet additionally require development packages absent on this
+host. Windows execution and GUI browser/native-webview tests were not run.
+
+The planned a reported deployment rollout uses Go 1.27.3 (the installed binary's toolchain),
+with a new custom version and clean VCS stamp. It preserves account/config
+files and transcript/checkpoint formats, waits for zero active requests and
+parked tools, saves the previous binary and checkpoint snapshots, and rolls
+back on health or TUI smoke failure. Deployment details are recorded separately
+after the actual rollout, not claimed as completed by these model results.
+
 ## Findings First
 
 Four implementation problems have a TLC counterexample and a corresponding
@@ -308,5 +381,5 @@ subscription bridge may itself launch an interactive CLI through a different
 implementation; that path, general gateway routing, credentials, and the
 rest of the application are not claimed as formally verified.
 
-No runtime fix is included. Recommended order: caller isolation and native
+The historical audit included no runtime fix. Its recommended order was: caller isolation and native
 writer exclusivity, startup/abort coordination, then queued retry completion.

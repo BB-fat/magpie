@@ -1,0 +1,56 @@
+--- FAIL: TestInstalledVersion (0.00s)
+    cliupdate_test.go:60: "0.98.2": ""
+    cliupdate_test.go:60: "pi 0.99.0\n": ""
+
+--- FAIL: TestCursorFolderFromTheEditorIsNotTheCLI (0.00s)
+    cursor_editor_dir_test.go:33: the cursor-agent command on PATH no longer finds Cursor CLI
+2026/11/02 09:30:38 wrote dsh's route again in /tmp/TestDshRoundWithNothingChangedBuildsNothing799337176/001/.dsh/profiles/web/cordis.patch.yml
+
+--- FAIL: TestCopilotFolderFromAnIDEPluginIsNotTheCLI (0.00s)
+    ide_plugin_dir_test.go:36: the copilot command on PATH no longer finds the Copilot CLI
+--- FAIL: TestOmpDetectedWithPiDir (0.00s)
+
+--- FAIL: TestOmpDetectedWithPiDir (0.00s)
+    pi_dir_test.go:150: omp's command is not
+2026/11/02 09:30:48 agent plugin /tmp/TestPluggedConnectOnlyWritesSomething2037093594/001/plugins/pa didn't load: agent.model names no key, and there is no connect to write the gateway: say one or both
+
+--- FAIL: TestZedAppPath (0.00s)
+    zed_credential_other_test.go:81: CLI's bundle: "/tmp/TestZedAppPath2166174955/002/Applications/Zed Preview.app", <nil>
+FAIL
+
+--- FAIL: TestKeyNote (0.01s)
+    serve_cli_test.go:29: MAGPIE_ADDR="0.0.0.0:3425": "(anything works inside the container; from its host and other machines, an enabled gateway key — magpie gateway-key add <name>)"
+    serve_cli_test.go:29: MAGPIE_ADDR=":3425": "(anything works inside the container; from its host and other machines, an enabled gateway key — magpie gateway-key add <name>)"
+
+--- FAIL: TestCodexFittedImagesPastTheBudget (0.04s)
+    codex_images_test.go:362: turn 2 made 19 of 30 images, with 10 kept
+    codex_images_test.go:362: turn 3 made 19 of 30 images, with 10 kept
+
+--- FAIL: TestMarshalRawIsEncodingJSON (0.00s)
+    fastjson_marshal_test.go:64: escape false:
+         marshalRaw   "[\"line\u2028sep\u2029\"]"
+
+--- FAIL: TestMarshalSizedIsJSONMarshal (0.00s)
+    long_turn_copies_test.go:84: "\x00\x01\x02\x03\x04\x05\x06\a\b\t\n\v\f\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff": wrote "\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f !\"#$%\u0026'()*+,-./0123456789:;\u003c=\u003e?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd" (<nil>), json.Marshal "\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f !\"#$%\u0026'()*+,-./0123456789:;\u003c=\u003e?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~��������������������������������������������������������������������������������������������������������������������������������" (<nil>)
+    long_turn_copies_test.go:87: "\x00\x01\x02\x03\x04\x05\x06\a\b\t\n\v\f\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff": sized 1055, json.Marshal wrote 671
+
+--- FAIL: TestSearchAPIAsksAreLogged (0.01s)
+    search_api_log_test.go:71: Tavily found nothing
+    search_api_log_test.go:109: the query's "7781" is in usage.jsonl:
+
+--- FAIL: TestServeWSLListensBesideLoopback (10.04s)
+    wsl_test.go:165: WSL network gone: http://[::1]:35895/ answers = true
+--- FAIL: FuzzMarshalRaw (0.00s)
+
+--- FAIL: FuzzMarshalRaw (0.00s)
+    --- FAIL: FuzzMarshalRaw/seed#7 (0.00s)
+        fastjson_marshal_test.go:125: escape false:
+
+--- FAIL: TestSettingsSaveKeepsWhatItDoesNotSend (0.01s)
+    settings_keep_test.go:233: SearchAll: not sent by the Settings page; set it in this test and keep it in POST /api/settings
+2026/11/02 09:30:34 gateway: http://127.0.0.1:45643 is taken but doesn't answer as magpie yet; this magpie serves the gateway once it is free
+
+--- FAIL: TestUpdateNotWritableSaysWhy (0.00s)
+    update_stuck_test.go:51: a binary in a folder magpie can't write to: {State:available Current:0.1.10 Latest:0.1.11 Notes: URL: Stuck:container StuckDir: Packaged:<nil> Retry:false Mirror: Network:false Error: Done:0 Blocked:<nil> Total:0 Size:0 Busy:<nil> Waiting:false GaveUp:false Handover:false}
+2026/11/02 09:31:15 refused POST /v1/chat/completions on magpie web's page port: magpie isn't shared
+

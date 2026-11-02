@@ -1,0 +1,13 @@
+{
+  "source_commit": "f405cd95f49470368b2e2f69c0ce942d33526191",
+  "checker": "Go 1.27.1, -race -count=20",
+  "production_instrumentation": false,
+  "test_families": [
+    "CompletedReplyIsCallerScoped",
+    "SessionReservation",
+    "ClosedStartupCannotLaunch",
+    "NativeStartFenceWaitsForPublication",
+    "QueuedRetryRechecksCompletedReply"
+  ],
+  "exit": 0
+}

@@ -136,5 +136,33 @@
     "module": "UsageAccounting",
     "expected": "NoRepeatedSnapshotBilling",
     "hypothesis": true
+  },
+  {
+    "name": "launch-handoff-fixed",
+    "module": "NativeStartHandoff",
+    "expected": null,
+    "hypothesis": false,
+    "revision": "fixed implementation"
+  },
+  {
+    "name": "session-reservation-fixed",
+    "module": "SessionReservationFixed",
+    "expected": null,
+    "hypothesis": false,
+    "revision": "fixed implementation"
+  },
+  {
+    "name": "replay-fixed-same-caller",
+    "module": "ReplayIdentity",
+    "expected": null,
+    "hypothesis": false,
+    "revision": "fixed implementation"
+  },
+  {
+    "name": "replay-fixed-distinct-callers",
+    "module": "ReplayIdentity",
+    "expected": null,
+    "hypothesis": false,
+    "revision": "fixed implementation"
   }
 ]

@@ -1,0 +1,49 @@
+=== RUN   TestClaudeTUIRuntimeRealActivitySummary
+2026/11/02 09:28:36 Claude interactive forking the native session at the checkpointed tool round
+2026/11/02 09:28:36 Claude interactive tools held for the cache: from=tool_choice defined=1 held=1 hash=66f8bd973661
+--- PASS: TestClaudeTUIRuntimeRealActivitySummary (6.18s)
+=== RUN   TestClaudeTUIRuntimeRealClaudeTUI
+=== RUN   TestClaudeTUIRuntimeRealClaudeTUI/magpie
+2026/11/02 09:28:42 Claude interactive tool results already answered; resending complete text without a new native run
+=== RUN   TestClaudeTUIRuntimeRealClaudeTUI/corp-tools
+2026/11/02 09:28:44 Claude interactive tool results already answered; resending complete text without a new native run
+=== RUN   TestClaudeTUIRuntimeRealClaudeTUI/cancel
+2026/11/02 09:28:46 Claude Code run on claude-sonnet-5-5 stopped: the client went away 1.513s into the reply
+=== RUN   TestClaudeTUIRuntimeRealClaudeTUI/restart
+2026/11/02 09:28:49 Claude interactive resuming the native session at the strict-prefix checkpoint
+=== RUN   TestClaudeTUIRuntimeRealClaudeTUI/cache_prefix
+2026/11/02 09:28:53 Claude interactive resuming the native session at the strict-prefix checkpoint
+2026/11/02 09:28:55 Claude interactive resuming the native session at the strict-prefix checkpoint
+2026/11/02 09:28:55 Claude interactive tools held for the cache: from=tool_choice defined=1 held=1 hash=66f8bd973661
+=== RUN   TestClaudeTUIRuntimeRealClaudeTUI/gateway_killed
+=== RUN   TestClaudeTUIRuntimeRealClaudeTUI/memory
+2026/11/02 09:28:59 Claude TUI run on claude-sonnet-5-5 (pid 3880811): Claude TUI run used 189 MiB, over its limit of 1 MiB (claudeTuiMaxRSSMiB); it was ended
+--- PASS: TestClaudeTUIRuntimeRealClaudeTUI (20.55s)
+    --- PASS: TestClaudeTUIRuntimeRealClaudeTUI/magpie (2.67s)
+    --- PASS: TestClaudeTUIRuntimeRealClaudeTUI/corp-tools (2.66s)
+    --- PASS: TestClaudeTUIRuntimeRealClaudeTUI/cancel (2.13s)
+    --- PASS: TestClaudeTUIRuntimeRealClaudeTUI/restart (4.25s)
+    --- PASS: TestClaudeTUIRuntimeRealClaudeTUI/cache_prefix (6.45s)
+    --- PASS: TestClaudeTUIRuntimeRealClaudeTUI/gateway_killed (2.16s)
+    --- PASS: TestClaudeTUIRuntimeRealClaudeTUI/memory (0.22s)
+=== RUN   TestClaudeTUIRuntimeRealServe
+=== RUN   TestClaudeTUIRuntimeRealServe/next_turn
+2026/11/02 09:29:05 Claude interactive went on in the idle process at the request's prefix
+=== RUN   TestClaudeTUIRuntimeRealServe/tool_round
+2026/11/02 09:29:08 Claude interactive went on in the idle process at the request's prefix
+=== RUN   TestClaudeTUIRuntimeRealServe/after_the_TTL
+2026/11/02 09:29:13 Claude interactive idle process on claude-sonnet-5-5 ended: it waited 2s for its next turn
+2026/11/02 09:29:13 Claude interactive resuming the native session at the strict-prefix checkpoint
+=== RUN   TestClaudeTUIRuntimeRealServe/no_header_after_the_TTL
+2026/11/02 09:29:19 Claude interactive idle process on claude-sonnet-5-5 ended: it waited 2s for its next turn
+2026/11/02 09:29:19 Claude interactive resuming the native session at the strict-prefix checkpoint
+=== RUN   TestClaudeTUIRuntimeRealServe/cancelled
+2026/11/02 09:29:23 Claude Code run on claude-sonnet-5-5 stopped: the client went away 1.572s into the reply
+--- PASS: TestClaudeTUIRuntimeRealServe (23.96s)
+    --- PASS: TestClaudeTUIRuntimeRealServe/next_turn (5.98s)
+    --- PASS: TestClaudeTUIRuntimeRealServe/tool_round (3.43s)
+    --- PASS: TestClaudeTUIRuntimeRealServe/after_the_TTL (6.18s)
+    --- PASS: TestClaudeTUIRuntimeRealServe/no_header_after_the_TTL (6.17s)
+    --- PASS: TestClaudeTUIRuntimeRealServe/cancelled (2.20s)
+PASS
+ok  	github.com/yetone/magpie/internal/gateway	50.714s
