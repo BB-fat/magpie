@@ -53,4 +53,3 @@ FAIL
 --- FAIL: TestUpdateNotWritableSaysWhy (0.00s)
     update_stuck_test.go:51: a binary in a folder magpie can't write to: {State:available Current:0.1.10 Latest:0.1.11 Notes: URL: Stuck:container StuckDir: Packaged:<nil> Retry:false Mirror: Network:false Error: Done:0 Blocked:<nil> Total:0 Size:0 Busy:<nil> Waiting:false GaveUp:false Handover:false}
 2026/11/02 09:31:15 refused POST /v1/chat/completions on magpie web's page port: magpie isn't shared
-

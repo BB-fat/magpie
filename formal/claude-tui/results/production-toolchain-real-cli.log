@@ -1,0 +1,6 @@
+=== RUN   TestClaudeTUIRuntimeRealActivitySummary
+2026/11/02 09:44:06 Claude interactive forking the native session at the checkpointed tool round
+2026/11/02 09:44:06 Claude interactive tools held for the cache: from=tool_choice defined=1 held=1 hash=66f8bd973661
+--- PASS: TestClaudeTUIRuntimeRealActivitySummary (5.83s)
+PASS
+ok  	github.com/yetone/magpie/internal/gateway	5.851s

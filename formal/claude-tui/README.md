@@ -74,12 +74,7 @@ Unrelated runtime behavior has not been altered to conceal these failures.
 Desktop build/vet additionally require development packages absent on this
 host. Windows execution and GUI browser/native-webview tests were not run.
 
-The planned a reported deployment rollout uses Go 1.27.3 (the installed binary's toolchain),
-with a new custom version and clean VCS stamp. It preserves account/config
-files and transcript/checkpoint formats, waits for zero active requests and
-parked tools, saves the previous binary and checkpoint snapshots, and rolls
-back on health or TUI smoke failure. Deployment details are recorded separately
-after the actual rollout, not claimed as completed by these model results.
+Deployment inventories and operational rollout details are omitted from public audit evidence.
 
 ## Findings First
 
