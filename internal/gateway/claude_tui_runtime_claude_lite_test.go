@@ -544,6 +544,7 @@ func TestClaudeTUIRuntimeLiteRepeatOfDeliveredToolResultsIsAnsweredStateless(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	req.scope = tuiRuntimePrefixScope(tuiRuntimeScOwner, "")
 	b.noteLiteCompletedToolTurn(tuiRuntimeScOwner, tuiRuntimeScOuter, req, "SC_ANSWER")
 	before, _, _ := b.loadInteractiveSession(tuiRuntimeScOwner, tuiRuntimeScOuter)
 	code, out := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, body)

@@ -314,6 +314,13 @@ left, or a run parked on calls the request's history holds but does not
 answer. A run parked on calls of another branch is left for that branch's
 results.
 
+Identified requests acquire this gate before the completed-reply lookup
+and live MCP matching. A queued identical tool-result retry therefore sees
+the answer saved by its predecessor before it can start another inference
+(`TestClaudeTUIRuntimeQueuedRetryRechecksCompletedReply`). Distinct requests
+still branch independently; requests without an outer identity are not
+deduplicated merely because their content happens to match.
+
 ### A round the run went past
 
 A request can go on from a tool round of a run that has since made more

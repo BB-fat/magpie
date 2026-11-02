@@ -143,6 +143,17 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	// retrying. Only the very same request gets that reply again; the same
 	// history asked under another system prompt, tools or settings is run.
 	req.replayKey = tuiRuntimeLiteReplayKey(owner, req)
+	if outerSession != "" {
+		release, ok := rt.bridge.enterLiteTurn(r.Context(), req.replayKey)
+		if !ok {
+			msg := "Claude interactive is still answering this same request; retry shortly"
+			out.Header().Set("Retry-After", "5")
+			return out.Fail(http.StatusServiceUnavailable, msg)
+		}
+		defer release()
+	}
+	// Waiting can complete the previous request. Read its saved answer only
+	// after admission, before either a live MCP handoff or a native launch.
 	if completed, ok := rt.bridge.liteCompletedToolTurn(owner, outerSession, req); ok {
 		// The original native run already returned a complete answer.
 		// Return precisely that answer; starting another native inference
@@ -196,13 +207,6 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	}
 	if outerSession != "" {
 		rt.bridge.letGoAbandonedRuns(owner, req)
-		release, ok := rt.bridge.enterLiteTurn(r.Context(), req.replayKey)
-		if !ok {
-			msg := "Claude interactive is still answering this same request; retry shortly"
-			out.Header().Set("Retry-After", "5")
-			return out.Fail(http.StatusServiceUnavailable, msg)
-		}
-		defer release()
 	}
 	// the idle process whose session ends where the request's history does
 	// takes its new turn; else a native session is started for it

@@ -25,6 +25,7 @@ func tuiRuntimeReplayReq(t *testing.T, body string) *tuiRuntimeRequest {
 		t.Fatal(err)
 	}
 	req.Model = "claude-opus-5-5"
+	req.scope = tuiRuntimePrefixScope(tuiRuntimeScOwner, "")
 	return req
 }
 
