@@ -1,0 +1,43 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 0 and seed 1 with 1 worker. [machine details redacted]
+Parsing file formal/claude-tui/models/UsageAccounting.tla
+Parsing file Naturals.tla
+Parsing file FiniteSets.tla
+Parsing file Sequences.tla
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module UsageAccounting
+Starting... (2026-11-02 16:18:43)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-11-02 16:18:43.
+Error: Invariant NoRepeatedSnapshotBilling is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ readByMessage = [message1 |-> 0, message2 |-> 0]
+/\ seen = {}
+/\ writeByMessage = [message1 |-> 0, message2 |-> 0]
+/\ outputByMessage = [message1 |-> 0, message2 |-> 0]
+/\ hourByMessage = [message1 |-> 0, message2 |-> 0]
+/\ billed = 0
+
+State 2: <Observe line 16, col 17 to line 23, col 99 of module UsageAccounting>
+/\ readByMessage = [message1 |-> 2, message2 |-> 0]
+/\ seen = {[msg |-> "message1", read |-> 2, write |-> 1, hour |-> 1, output |-> 1]}
+/\ writeByMessage = [message1 |-> 1, message2 |-> 0]
+/\ outputByMessage = [message1 |-> 1, message2 |-> 0]
+/\ hourByMessage = [message1 |-> 1, message2 |-> 0]
+/\ billed = 4
+
+State 3: <Observe line 16, col 17 to line 23, col 99 of module UsageAccounting>
+/\ readByMessage = [message1 |-> 2, message2 |-> 0]
+/\ seen = {[msg |-> "message1", read |-> 2, write |-> 1, hour |-> 1, output |-> 1]}
+/\ writeByMessage = [message1 |-> 1, message2 |-> 0]
+/\ outputByMessage = [message1 |-> 1, message2 |-> 0]
+/\ hourByMessage = [message1 |-> 1, message2 |-> 0]
+/\ billed = 8
+
+5 states generated, 5 distinct states found, 2 states left on queue.
+The depth of the complete state graph search is 3.
+The average outdegree of the complete state graph is 3 (minimum is 3, the maximum 3 and the 95th percentile is 3).
+Finished in 00s at (2026-11-02 16:18:43)

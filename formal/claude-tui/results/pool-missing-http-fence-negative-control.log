@@ -1,0 +1,113 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 0 and seed 1 with 1 worker. [machine details redacted]
+Parsing file formal/claude-tui/models/ServePool.tla
+Parsing file Integers.tla
+Parsing file Naturals.tla
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module ServePool
+Starting... (2026-11-02 16:18:40)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-11-02 16:18:41.
+Error: Invariant OldCancellationCannotKillNewTurn is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ state = "active"
+/\ replied = FALSE
+/\ gen = 0
+/\ cancelAt = 0
+/\ badCancel = FALSE
+/\ completionOwner = "open"
+/\ turn = 1
+/\ ready = FALSE
+/\ timerGen = -1
+/\ drained = FALSE
+
+State 2: <Ready line 9, col 10 to line 10, col 108 of module ServePool>
+/\ state = "active"
+/\ replied = FALSE
+/\ gen = 0
+/\ cancelAt = 0
+/\ badCancel = FALSE
+/\ completionOwner = "open"
+/\ turn = 1
+/\ ready = TRUE
+/\ timerGen = -1
+/\ drained = FALSE
+
+State 3: <Drain line 11, col 10 to line 12, col 106 of module ServePool>
+/\ state = "active"
+/\ replied = FALSE
+/\ gen = 0
+/\ cancelAt = 0
+/\ badCancel = FALSE
+/\ completionOwner = "open"
+/\ turn = 1
+/\ ready = TRUE
+/\ timerGen = -1
+/\ drained = TRUE
+
+State 4: <Reply line 13, col 10 to line 16, col 89 of module ServePool>
+/\ state = "active"
+/\ replied = TRUE
+/\ gen = 0
+/\ cancelAt = 0
+/\ badCancel = FALSE
+/\ completionOwner = "complete"
+/\ turn = 1
+/\ ready = TRUE
+/\ timerGen = -1
+/\ drained = TRUE
+
+State 5: <CancelInspect line 30, col 18 to line 34, col 96 of module ServePool>
+/\ state = "active"
+/\ replied = TRUE
+/\ gen = 0
+/\ cancelAt = 1
+/\ badCancel = FALSE
+/\ completionOwner = "cancel"
+/\ turn = 1
+/\ ready = TRUE
+/\ timerGen = -1
+/\ drained = TRUE
+
+State 6: <Idle line 17, col 9 to line 19, col 102 of module ServePool>
+/\ state = "idle"
+/\ replied = TRUE
+/\ gen = 1
+/\ cancelAt = 1
+/\ badCancel = FALSE
+/\ completionOwner = "cancel"
+/\ turn = 1
+/\ ready = TRUE
+/\ timerGen = -1
+/\ drained = TRUE
+
+State 7: <Claim line 22, col 10 to line 25, col 55 of module ServePool>
+/\ state = "active"
+/\ replied = FALSE
+/\ gen = 2
+/\ cancelAt = 1
+/\ badCancel = FALSE
+/\ completionOwner = "open"
+/\ turn = 2
+/\ ready = FALSE
+/\ timerGen = -1
+/\ drained = FALSE
+
+State 8: <CancelAct line 35, col 14 to line 40, col 91 of module ServePool>
+/\ state = "ended"
+/\ replied = FALSE
+/\ gen = 2
+/\ cancelAt = 2
+/\ badCancel = TRUE
+/\ completionOwner = "open"
+/\ turn = 2
+/\ ready = FALSE
+/\ timerGen = -1
+/\ drained = FALSE
+
+94 states generated, 60 distinct states found, 15 states left on queue.
+The depth of the complete state graph search is 8.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 4 and the 95th percentile is 3).
+Finished in 00s at (2026-11-02 16:18:41)

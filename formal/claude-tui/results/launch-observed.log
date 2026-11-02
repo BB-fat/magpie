@@ -1,0 +1,64 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 0 and seed 1 with 1 worker. [machine details redacted]
+Parsing file formal/claude-tui/models/LaunchLifetime.tla
+Parsing file Naturals.tla
+Parsing file FiniteSets.tla
+Parsing file Sequences.tla
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module LaunchLifetime
+Starting... (2026-11-02 16:15:48)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-11-02 16:15:49.
+Error: Invariant NoStartAfterFinish is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ child = {}
+/\ freed = {}
+/\ closed = {}
+/\ badStart = FALSE
+/\ pc = (r1 :> "new" @@ r2 :> "new")
+/\ registered = {}
+/\ stopped = FALSE
+
+State 2: <Publish line 10, col 15 to line 13, col 70 of module LaunchLifetime>
+/\ child = {}
+/\ freed = {}
+/\ closed = {}
+/\ badStart = FALSE
+/\ pc = (r1 :> "room" @@ r2 :> "new")
+/\ registered = {r1}
+/\ stopped = FALSE
+
+State 3: <Shutdown line 24, col 13 to line 27, col 55 of module LaunchLifetime>
+/\ child = {}
+/\ freed = {}
+/\ closed = {r1}
+/\ badStart = FALSE
+/\ pc = (r1 :> "room" @@ r2 :> "new")
+/\ registered = {}
+/\ stopped = TRUE
+
+State 4: <RoomGranted line 14, col 19 to line 16, col 86 of module LaunchLifetime>
+/\ child = {}
+/\ freed = {}
+/\ closed = {r1}
+/\ badStart = FALSE
+/\ pc = (r1 :> "start" @@ r2 :> "new")
+/\ registered = {}
+/\ stopped = TRUE
+
+State 5: <Start line 17, col 13 to line 22, col 63 of module LaunchLifetime>
+/\ child = {r1}
+/\ freed = {}
+/\ closed = {r1}
+/\ badStart = TRUE
+/\ pc = (r1 :> "running" @@ r2 :> "new")
+/\ registered = {}
+/\ stopped = TRUE
+
+24 states generated, 17 distinct states found, 6 states left on queue.
+The depth of the complete state graph search is 5.
+The average outdegree of the complete state graph is 2 (minimum is 0, the maximum 3 and the 95th percentile is 3).
+Finished in 01s at (2026-11-02 16:15:49)

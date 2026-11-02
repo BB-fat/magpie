@@ -1,0 +1,79 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 0 and seed 1 with 1 worker. [machine details redacted]
+Parsing file formal/claude-tui/models/SessionReservation.tla
+Parsing file Naturals.tla
+Parsing file FiniteSets.tla
+Parsing file Sequences.tla
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module SessionReservation
+Starting... (2026-11-02 16:18:35)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-11-02 16:18:35.
+Error: Invariant SingleNativeWriter is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ writers = {}
+/\ reservation = "none"
+/\ pc = (r1 :> "scan" @@ r2 :> "scan")
+/\ rowAdvanced = FALSE
+
+State 2: <Scan line 9, col 12 to line 11, col 61 of module SessionReservation>
+/\ writers = {}
+/\ reservation = "none"
+/\ pc = (r1 :> "reserve" @@ r2 :> "scan")
+/\ rowAdvanced = FALSE
+
+State 3: <Reserve line 12, col 15 to line 15, col 51 of module SessionReservation>
+/\ writers = {}
+/\ reservation = r1
+/\ pc = (r1 :> "checkrow" @@ r2 :> "scan")
+/\ rowAdvanced = FALSE
+
+State 4: <CheckRow line 16, col 16 to line 18, col 65 of module SessionReservation>
+/\ writers = {}
+/\ reservation = r1
+/\ pc = (r1 :> "start" @@ r2 :> "scan")
+/\ rowAdvanced = FALSE
+
+State 5: <Scan line 9, col 12 to line 11, col 61 of module SessionReservation>
+/\ writers = {}
+/\ reservation = r1
+/\ pc = (r1 :> "start" @@ r2 :> "reserve")
+/\ rowAdvanced = FALSE
+
+State 6: <Publish line 19, col 15 to line 21, col 55 of module SessionReservation>
+/\ writers = {r1}
+/\ reservation = r1
+/\ pc = (r1 :> "published" @@ r2 :> "reserve")
+/\ rowAdvanced = FALSE
+
+State 7: <Release line 22, col 15 to line 24, col 51 of module SessionReservation>
+/\ writers = {r1}
+/\ reservation = "none"
+/\ pc = (r1 :> "running" @@ r2 :> "reserve")
+/\ rowAdvanced = FALSE
+
+State 8: <Reserve line 12, col 15 to line 15, col 51 of module SessionReservation>
+/\ writers = {r1}
+/\ reservation = r2
+/\ pc = (r1 :> "running" @@ r2 :> "checkrow")
+/\ rowAdvanced = FALSE
+
+State 9: <CheckRow line 16, col 16 to line 18, col 65 of module SessionReservation>
+/\ writers = {r1}
+/\ reservation = r2
+/\ pc = (r1 :> "running" @@ r2 :> "start")
+/\ rowAdvanced = FALSE
+
+State 10: <Publish line 19, col 15 to line 21, col 55 of module SessionReservation>
+/\ writers = {r1, r2}
+/\ reservation = r2
+/\ pc = (r1 :> "running" @@ r2 :> "published")
+/\ rowAdvanced = FALSE
+
+74 states generated, 48 distinct states found, 7 states left on queue.
+The depth of the complete state graph search is 10.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 2 and the 95th percentile is 2).
+Finished in 00s at (2026-11-02 16:18:35)

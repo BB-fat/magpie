@@ -1,0 +1,140 @@
+[
+  {
+    "name": "launch-observed",
+    "module": "LaunchLifetime",
+    "expected": "NoStartAfterFinish",
+    "hypothesis": false
+  },
+  {
+    "name": "launch-fence-hypothesis",
+    "module": "LaunchLifetime",
+    "expected": null,
+    "hypothesis": true
+  },
+  {
+    "name": "replay-cross-caller",
+    "module": "ReplayIdentity",
+    "expected": "CallerIsolation",
+    "hypothesis": false
+  },
+  {
+    "name": "replay-queued-retry",
+    "module": "ReplayIdentity",
+    "expected": "OneExecutionPerRetry",
+    "hypothesis": false
+  },
+  {
+    "name": "replay-no-header",
+    "module": "ReplayIdentity",
+    "expected": "OneConcurrentRetry",
+    "hypothesis": false
+  },
+  {
+    "name": "replay-gate-safety",
+    "module": "ReplayIdentity",
+    "expected": null,
+    "hypothesis": false
+  },
+  {
+    "name": "replay-scoped-recheck-hypothesis-true",
+    "module": "ReplayIdentity",
+    "expected": null,
+    "hypothesis": true
+  },
+  {
+    "name": "replay-scoped-recheck-hypothesis-false",
+    "module": "ReplayIdentity",
+    "expected": null,
+    "hypothesis": true
+  },
+  {
+    "name": "pool-observed-cancel",
+    "module": "ServePool",
+    "expected": null,
+    "hypothesis": false
+  },
+  {
+    "name": "pool-idle-safety",
+    "module": "ServePool",
+    "expected": null,
+    "hypothesis": false
+  },
+  {
+    "name": "pool-cancel-fence-hypothesis",
+    "module": "ServePool",
+    "expected": null,
+    "hypothesis": true
+  },
+  {
+    "name": "checkpoint-safety",
+    "module": "CheckpointAuthority",
+    "expected": null,
+    "hypothesis": false
+  },
+  {
+    "name": "tools-safety",
+    "module": "ToolHandoff",
+    "expected": null,
+    "hypothesis": false
+  },
+  {
+    "name": "tools-duplicate-mutant",
+    "module": "ToolHandoff",
+    "expected": "DispatchAtMostOnce",
+    "hypothesis": true
+  },
+  {
+    "name": "tools-readonly-mutant",
+    "module": "ToolHandoff",
+    "expected": "ReadOnlyNeverDispatches",
+    "hypothesis": true
+  },
+  {
+    "name": "mode-safety",
+    "module": "ModeRouting",
+    "expected": null,
+    "hypothesis": false
+  },
+  {
+    "name": "session-reservation-observed",
+    "module": "SessionReservation",
+    "expected": "SingleNativeWriter",
+    "hypothesis": false
+  },
+  {
+    "name": "session-reservation-fence-hypothesis",
+    "module": "SessionReservation",
+    "expected": null,
+    "hypothesis": true
+  },
+  {
+    "name": "durable-recovery-safety",
+    "module": "DurableRecovery",
+    "expected": null,
+    "hypothesis": false
+  },
+  {
+    "name": "process-cleanup-safety",
+    "module": "ProcessCleanup",
+    "expected": null,
+    "hypothesis": false
+  },
+  {
+    "name": "pool-missing-http-fence-negative-control",
+    "module": "ServePool",
+    "expected": "OldCancellationCannotKillNewTurn",
+    "hypothesis": true
+  },
+  {
+    "name": "usage-snapshot-safety",
+    "module": "UsageAccounting",
+    "expected": null,
+    "hypothesis": false
+  },
+  {
+    "name": "usage-additive-mutant",
+    "module": "UsageAccounting",
+    "expected": "NoRepeatedSnapshotBilling",
+    "hypothesis": true
+  }
+]

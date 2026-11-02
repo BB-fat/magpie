@@ -1,0 +1,323 @@
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:37 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:38 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:38 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:38 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.10s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:39 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:39 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:40 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:40 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.07s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:40 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.00s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:40 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:41 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:41 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.10s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:41 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.00s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:41 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:42 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:42 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.07s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:42 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:42 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:43 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:43 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.08s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:43 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.00s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:44 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:44 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:44 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.07s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:44 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:45 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:45 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:45 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.06s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.02s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:45 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:46 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:46 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:46 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.06s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:46 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:47 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:47 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:47 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.08s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:47 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:48 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:49 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:49 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.08s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:49 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:49 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:50 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:50 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.08s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.02s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:50 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.00s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:50 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:51 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:51 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.07s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:51 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:51 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:52 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:52 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.08s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.02s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:52 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.00s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:52 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:53 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:53 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.08s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:53 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.00s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:54 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:54 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:54 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.09s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:54 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:55 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:55 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:55 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.09s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:55 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:56 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:56 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:56 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.09s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.02s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:56 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.00s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:57 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:58 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:58 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.07s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:58 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:58 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:26:59 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:26:59 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.07s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.02s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+=== RUN   TestTLAWitnessCompletedReplyCallerIsolation
+2026/11/02 08:26:59 Claude interactive tool results already answered; resending complete text without a new native run
+    claude_tui_tla_generated_witness_test.go:38: CallerIsolation violated: key-B received key-A's completed reply; native starts=0
+--- FAIL: TestTLAWitnessCompletedReplyCallerIsolation (0.01s)
+=== RUN   TestTLAWitnessQueuedRetryDoesNotExecuteAgain
+2026/11/02 08:26:59 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+2026/11/02 08:27:00 Claude interactive rebuilding native session from the request: checkpoint checkpoint_not_found
+2026/11/02 08:27:00 Claude interactive starting a native session rebuilt from the request: history=4 stateless=false scoped=true
+    claude_tui_tla_generated_witness_test.go:86: OneExecutionPerRetry violated: the queued identical request started 2 native processes, want 1
+--- FAIL: TestTLAWitnessQueuedRetryDoesNotExecuteAgain (1.09s)
+=== RUN   TestTLAWitnessNoLaunchAfterFinish
+    claude_tui_tla_generated_witness_test.go:145: NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper
+--- FAIL: TestTLAWitnessNoLaunchAfterFinish (0.03s)
+=== RUN   TestTLAWitnessSessionReservationRechecksLiveWriter
+    claude_tui_tla_generated_witness_test.go:184: SingleNativeWriter violated: stale scan reserved a session now owned by another live writer
+--- FAIL: TestTLAWitnessSessionReservationRechecksLiveWriter (0.00s)
+FAIL
+FAIL	github.com/yetone/magpie/internal/gateway	22.586s
+FAIL

@@ -1,0 +1,186 @@
+package gateway
+
+import (
+	"context"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/yetone/magpie/internal/access"
+)
+
+// These observers pause after a real lock-protected read, never mutate the
+// observed value. run_witnesses.py inserts calls at the documented sites.
+var tlaRetryBeforeWait = func() {}
+var tlaBeforeSessionReserve = func() {}
+
+const tlaToolResultBody = `{"model":"claude-opus-5-5","system":"rules","max_tokens":64,"tools":[{"name":"Read","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"Review main.go"},{"role":"assistant","content":[{"type":"tool_use","id":"tool-shared","name":"Read","input":{"path":"main.go"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-shared","content":"file contents"}]}]}`
+
+func TestTLAWitnessCompletedReplyCallerIsolation(t *testing.T) {
+	_, runs := tuiRuntimeScWrapper(t)
+	tuiRuntimeWithConfig(t, &tuiRuntimeConfig{StateDir: t.TempDir()})
+	rt, b := tuiRuntimeScRuntime(t)
+	req, err := tuiRuntimeParseRequest([]byte(tlaToolResultBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.scope = tuiRuntimePrefixScope(tuiRuntimeScOwner, "key-A")
+	req.leanPrompt = tuiRuntimeLeanPrompt()
+	b.noteLiteCompletedToolTurn(tuiRuntimeScOwner, tuiRuntimeScOuter, req, "REPLY_FOR_KEY_A")
+	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(tlaToolResultBody))
+	r = r.WithContext(access.WithIdentity(r.Context(), access.Identity{KeyID: "key-B"}))
+	rec := httptest.NewRecorder()
+	code, _ := rt.serveMessages(rec, r, req.Model, tuiRuntimeScOuter, []byte(tlaToolResultBody), &Usage{})
+	if code == 200 && strings.Contains(rec.Body.String(), "REPLY_FOR_KEY_A") {
+		t.Fatalf("CallerIsolation violated: key-B received key-A's completed reply; native starts=%d", len(runs()))
+	}
+}
+
+func TestTLAWitnessQueuedRetryDoesNotExecuteAgain(t *testing.T) {
+	_, runs := tuiRuntimeScWrapper(t)
+	tuiRuntimeWithConfig(t, &tuiRuntimeConfig{StateDir: t.TempDir()})
+	rt, b := tuiRuntimeScRuntime(t)
+	firstAtRoom, allowFirst, secondWaiting := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var roomCalls atomic.Int32
+	var once sync.Once
+	tlaRetryBeforeWait = func() { once.Do(func() { close(secondWaiting) }) }
+	t.Cleanup(func() { tlaRetryBeforeWait = func() {} })
+	tuiRuntimeWithConfig(t, &tuiRuntimeConfig{Room: func(context.Context, string) (func(bool), error) {
+		if roomCalls.Add(1) == 1 {
+			close(firstAtRoom)
+			<-allowFirst
+		}
+		return func(bool) {}, nil
+	}})
+	out := make(chan int, 2)
+	ask := func() { code, _ := tuiRuntimeScServe(t, rt, tuiRuntimeScOuter, tlaToolResultBody); out <- code }
+	go ask()
+	select {
+	case <-firstAtRoom:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first request did not reach Room")
+	}
+	go ask()
+	select {
+	case <-secondWaiting:
+	case <-time.After(10 * time.Second):
+		close(allowFirst)
+		t.Fatal("retry did not wait on the first request")
+	}
+	close(allowFirst)
+	for i := 0; i < 2; i++ {
+		select {
+		case code := <-out:
+			if code != 200 {
+				t.Errorf("request status %d", code)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatal("requests did not finish")
+		}
+	}
+	b.abortAll()
+	if n := len(runs()); n != 1 {
+		t.Fatalf("OneExecutionPerRetry violated: the queued identical request started %d native processes, want 1", n)
+	}
+}
+
+func TestTLAWitnessNoLaunchAfterFinish(t *testing.T) {
+	tuiRuntimeScWrapper(t)
+	tuiRuntimeWithConfig(t, &tuiRuntimeConfig{StateDir: t.TempDir()})
+	_, b := tuiRuntimeScRuntime(t)
+	atRoom, permit := make(chan struct{}), make(chan struct{})
+	tuiRuntimeWithConfig(t, &tuiRuntimeConfig{Room: func(context.Context, string) (func(bool), error) {
+		close(atRoom)
+		<-permit
+		return func(bool) {}, nil
+	}})
+	req, err := tuiRuntimeParseRequest([]byte(`{"model":"claude-opus-5-5","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		run *tuiRuntimeSubscriptionRun
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		run, _, err := b.startInteractiveOneTurn(context.Background(), req, req.Model, "", tuiRuntimeScOwner, tuiRuntimeScOuter)
+		done <- result{run, err}
+	}()
+	select {
+	case <-atRoom:
+	case <-time.After(10 * time.Second):
+		t.Fatal("startup never published")
+	}
+	b.abortAll()
+	close(permit)
+	var got result
+	select {
+	case got = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("startup did not finish")
+	}
+	if got.run == nil {
+		return
+	}
+	defer got.run.abort()
+	got.run.mu.Lock()
+	child, closed, nativeDone := got.run.tree != nil, got.run.closed, got.run.interactiveDone
+	got.run.mu.Unlock()
+	if nativeDone != nil {
+		select {
+		case <-nativeDone:
+		case <-time.After(10 * time.Second):
+			got.run.abort()
+			t.Fatal("child not reaped")
+		}
+	}
+	b.mu.Lock()
+	tracked := b.runs[got.run.token] != nil
+	b.mu.Unlock()
+	if got.err == nil && child && closed && !tracked {
+		t.Fatal("NoStartAfterFinish violated: a closed, removed run subsequently launched its native wrapper")
+	}
+}
+
+func TestTLAWitnessSessionReservationRechecksLiveWriter(t *testing.T) {
+	tuiRuntimeWithConfig(t, &tuiRuntimeConfig{StateDir: t.TempDir()})
+	_, b := tuiRuntimeScRuntime(t)
+	scanned, allowReserve := make(chan struct{}), make(chan struct{})
+	var n atomic.Int32
+	tlaBeforeSessionReserve = func() {
+		if n.Add(1) == 1 {
+			close(scanned)
+			<-allowReserve
+		}
+	}
+	t.Cleanup(func() { tlaBeforeSessionReserve = func() {} })
+	type claim struct {
+		release func()
+		ok      bool
+	}
+	second := make(chan claim, 1)
+	go func() { release, ok := b.claimSession("native-shared"); second <- claim{release, ok} }()
+	<-scanned
+	releaseFirst, ok := b.claimSession("native-shared")
+	if !ok {
+		close(allowReserve)
+		t.Fatal("initial reservation failed")
+	}
+	worker := &tuiRuntimeSubscriptionRun{bridge: b, token: "writer", interactive: true, sessionID: "native-shared"}
+	b.mu.Lock()
+	b.runs[worker.token] = worker
+	b.mu.Unlock()
+	releaseFirst() // startInteractiveWithPromptImages has published its live run.
+	close(allowReserve)
+	stale := <-second
+	if stale.release != nil {
+		defer stale.release()
+	}
+	if stale.ok && b.sessionRun("native-shared") == worker {
+		t.Fatal("SingleNativeWriter violated: stale scan reserved a session now owned by another live writer")
+	}
+}

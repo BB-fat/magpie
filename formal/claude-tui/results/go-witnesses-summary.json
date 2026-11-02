@@ -1,0 +1,24 @@
+{
+  "source_commit": "c01714ae69df64537a96b6c8a4602954ffd28720",
+  "checker": "go test -race -count=20, Go 1.27.1",
+  "expected_failures": [
+    "CallerIsolation violated",
+    "OneExecutionPerRetry violated",
+    "NoStartAfterFinish violated",
+    "SingleNativeWriter violated"
+  ],
+  "exit": 1,
+  "unexpected_counts": [],
+  "failure_counts": {
+    "CallerIsolation violated": 20,
+    "OneExecutionPerRetry violated": 20,
+    "NoStartAfterFinish violated": 20,
+    "SingleNativeWriter violated": 20
+  },
+  "data_race_detected": false,
+  "instrumentation": [
+    "retry pre-wait observation hook",
+    "session pre-reservation observation hook"
+  ],
+  "production_sources_restored": true
+}

@@ -1,0 +1,59 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 0 and seed 1 with 1 worker. [machine details redacted]
+Parsing file formal/claude-tui/models/ReplayIdentity.tla
+Parsing file Naturals.tla
+Parsing file FiniteSets.tla
+Parsing file Sequences.tla
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module ReplayIdentity
+Starting... (2026-11-02 16:15:51)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-11-02 16:15:51.
+Error: Invariant CallerIsolation is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ cachedBy = ("owner+outer+body" :> "none")
+/\ starts = (A :> 0 @@ B :> 0)
+/\ cached = {}
+/\ receivedFrom = (A :> "none" @@ B :> "none")
+/\ pc = (A :> "lookup" @@ B :> "lookup")
+/\ gate = "none"
+
+State 2: <Lookup line 14, col 14 to line 17, col 60 of module ReplayIdentity>
+/\ cachedBy = ("owner+outer+body" :> "none")
+/\ starts = (A :> 0 @@ B :> 0)
+/\ cached = {}
+/\ receivedFrom = (A :> "none" @@ B :> "none")
+/\ pc = (A :> "enter" @@ B :> "lookup")
+/\ gate = "none"
+
+State 3: <Enter line 18, col 13 to line 24, col 45 of module ReplayIdentity>
+/\ cachedBy = ("owner+outer+body" :> "none")
+/\ starts = (A :> 1 @@ B :> 0)
+/\ cached = {}
+/\ receivedFrom = (A :> "none" @@ B :> "none")
+/\ pc = (A :> "running" @@ B :> "lookup")
+/\ gate = A
+
+State 4: <Complete line 25, col 16 to line 31, col 34 of module ReplayIdentity>
+/\ cachedBy = ("owner+outer+body" :> A)
+/\ starts = (A :> 1 @@ B :> 0)
+/\ cached = {"owner+outer+body"}
+/\ receivedFrom = (A :> A @@ B :> "none")
+/\ pc = (A :> "done" @@ B :> "lookup")
+/\ gate = "none"
+
+State 5: <Lookup line 14, col 14 to line 17, col 60 of module ReplayIdentity>
+/\ cachedBy = ("owner+outer+body" :> A)
+/\ starts = (A :> 1 @@ B :> 0)
+/\ cached = {"owner+outer+body"}
+/\ receivedFrom = (A :> A @@ B :> A)
+/\ pc = (A :> "done" @@ B :> "done")
+/\ gate = "none"
+
+14 states generated, 11 distinct states found, 3 states left on queue.
+The depth of the complete state graph search is 5.
+The average outdegree of the complete state graph is 2 (minimum is 1, the maximum 2 and the 95th percentile is 2).
+Finished in 00s at (2026-11-02 16:15:51)
