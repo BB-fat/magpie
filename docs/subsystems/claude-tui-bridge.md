@@ -396,6 +396,15 @@ session header resume rather than rebuild (the a reported deployment case). Test
 apart from a rebuild by the first reply's row uuid) and the real
 `TestClaudeTUIRuntimeRealServe/no_header_after_the_TTL`.
 
+An in-place resume reserves the native session before inspecting its live
+writer (`claimSession`); that reservation lasts through launch/publication.
+A still-reaping writer remains an owner. A complete delivered writer is
+aborted and reaped before its session is reused; another active writer
+forces a fork. Reservation release is single-use so a delayed duplicate
+release cannot remove a later start's ownership. Tests:
+`TestClaudeTUIRuntimeSessionReservationPrecedesWriterInspection` and
+`TestClaudeTUIRuntimeSessionReservationReleaseIsSingleUse`.
+
 ### Claude Code activity summaries
 
 Claude Code asks for background activity text by appending its literal

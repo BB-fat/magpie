@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -20,7 +21,7 @@ func tuiRuntimeInteractiveWorkDirForKey(key string) (string, error) {
 func (b *tuiRuntimeSubscriptionBridge) sessionRun(sid string) *tuiRuntimeSubscriptionRun {
 	for _, run := range b.allRuns() {
 		run.mu.Lock()
-		mine := run.interactive && !run.closed && run.sessionID == sid
+		mine := run.interactive && run.sessionID == sid && (!run.closed || run.interactiveDone != nil)
 		run.mu.Unlock()
 		if mine {
 			return run
@@ -35,30 +36,44 @@ func (b *tuiRuntimeSubscriptionBridge) claimSession(sid string) (release func(),
 	if sid == "" {
 		return nil, false
 	}
+	// Reserve before inspecting live writers. Otherwise a snapshot taken
+	// before another start publishes can outlive that start's reservation.
+	b.mu.Lock()
+	if b.claimedSessions == nil {
+		b.claimedSessions = map[string]bool{}
+	}
+	if b.claimedSessions[sid] {
+		b.mu.Unlock()
+		return nil, false
+	}
+	b.claimedSessions[sid] = true
+	b.mu.Unlock()
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			b.mu.Lock()
+			delete(b.claimedSessions, sid)
+			b.mu.Unlock()
+		})
+	}
 	if run := b.sessionRun(sid); run != nil {
 		run.mu.Lock()
 		finished := run.terminalDelivered
 		run.mu.Unlock()
 		if !finished {
+			release()
 			return nil, false // still answering or waiting on tool calls
 		}
 		// Its reply is whole and recorded; what is left is its teardown.
 		run.abort()
+		run.mu.Lock()
+		done := run.interactiveDone
+		run.mu.Unlock()
+		if done != nil {
+			<-done
+		}
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.claimedSessions == nil {
-		b.claimedSessions = map[string]bool{}
-	}
-	if b.claimedSessions[sid] {
-		return nil, false
-	}
-	b.claimedSessions[sid] = true
-	return func() {
-		b.mu.Lock()
-		delete(b.claimedSessions, sid)
-		b.mu.Unlock()
-	}, true
+	return release, true
 }
 
 // transcriptEndsAt reports whether session sid's last message row is row:
