@@ -247,6 +247,14 @@ choice controls both the launch flag and work-directory settings.
   `tree.Wait` in `startInteractiveWithPromptImages`). A place is held while
   the run waits on tool calls. A run that finds no room is answered 503
   (`tuiRuntimeRoomError`), as the standard bridge's is.
+- Abort/finish fences native startup before removing the run. A run closed
+  while waiting for room cannot launch later. An already-admitted process
+  start publishes its tree and completion signal before teardown inspects
+  it, without holding a run lock across process startup or the room wait
+  (`beginNativeStart`, `fenceNativeStart`). A refused startup gives back its
+  room once. `TestClaudeTUIRuntimeClosedStartupCannotLaunch` covers shutdown
+  while waiting; `TestClaudeTUIRuntimeNativeStartFenceWaitsForPublication`
+  covers an admitted start racing teardown.
 - `tuiRuntimeProcTree` notes the processes under the wrapper, each by its start
   time (tmux gives a pane a session of its own, so they aren't in the
   wrapper's group), every `tuiRuntimeRssEvery` (2s) and as the run is ended. Their

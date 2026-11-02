@@ -1759,6 +1759,16 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 		run.finish()
 		return nil, nil, tuiRuntimeRoomError{err}
 	}
+	if ctx.Err() != nil || !run.beginNativeStart() {
+		freeRoom(false)
+		if serveIn != nil {
+			_ = serveIn.Close()
+		}
+		_ = stdout.Close()
+		_ = stderr.Close()
+		run.finish()
+		return nil, nil, errors.New("Claude TUI run ended before native startup")
+	}
 	if serve {
 		// the first turn's reader waits before anything can be read
 		run.mu.Lock()
@@ -1768,6 +1778,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	}
 	tree, err := tuiRuntimeStartTree(cmd)
 	if err != nil {
+		run.resolveNativeStart(nil, nil)
 		freeRoom(false)
 		run.finish()
 		return nil, nil, err
@@ -1784,10 +1795,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	}
 	drained := make(chan struct{})
 	finished := make(chan struct{})
-	run.mu.Lock()
-	run.tree = tree
-	run.interactiveDone = finished
-	run.mu.Unlock()
+	run.resolveNativeStart(tree, finished)
 	// Capture the interval now. Tests may shorten the package default, while
 	// an already-running PTY must keep the interval it was launched with.
 	var monitors sync.WaitGroup

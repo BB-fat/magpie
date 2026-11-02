@@ -255,6 +255,8 @@ type tuiRuntimeSubscriptionRun struct {
 	// transcript-result stream. It is not an SDK stdin run.
 	interactive                bool
 	interactiveDone            chan struct{}
+	nativeStarting             chan struct{}                                   // closed after StartTree publishes its tree/done or fails
+	stopNativeStart            bool                                            // abort/finish fences a launch still waiting for room
 	nativeLease                *os.File                                        // held by Runtime and inherited by wrapper; only plugin feature-gated
 	interactiveContextSnapshot *tuiRuntimeInteractiveContextDiagnosticSnapshot // immutable per-field compatibility and diagnostic digests
 	firstTurnAnchorKey         string                                          // first user message hash, only for opt-in first-turn durable recovery
@@ -3220,6 +3222,7 @@ func tuiRuntimeStillRunning(id, name string) tuiRuntimeMcpToolResult {
 }
 
 func (r *tuiRuntimeSubscriptionRun) finish() {
+	r.fenceNativeStart()
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -3285,6 +3288,7 @@ func (r *tuiRuntimeSubscriptionRun) drain() {
 var tuiRuntimeInteractiveAbortGrace = 5 * time.Second
 
 func (r *tuiRuntimeSubscriptionRun) abort() {
+	r.fenceNativeStart()
 	r.mu.Lock()
 	t := r.tree
 	cmd, interactive, done := r.cmd, r.interactive, r.interactiveDone
