@@ -109,6 +109,13 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	req.leanPrompt = tuiRuntimeLeanPrompt()
 	req.scope = tuiRuntimePrefixScope(owner, access.Caller(r.Context()).KeyID)
 	outerSession = tuiRuntimeLiteOuterSession(outerSession, r.Header)
+	if tuiRuntimeActivitySummary(req) {
+		// This reply is not appended to the worker's history. Fork its
+		// cached prefix without consuming its tools or replacing its checkpoint.
+		req.activitySummary = true
+		req.ToolChoice = "none"
+		outerSession = ""
+	}
 	// Auto mode's own classifier: refused before any native run starts.
 	if tuiRuntimeAutoModeClassifier(req) {
 		log.Printf("Claude interactive refused auto mode's local classifier request: a TUI account can't review auto mode's actions")
@@ -172,8 +179,10 @@ func (rt *tuiRuntime) serveLite(out tuiRuntimeResponder, r *http.Request, model,
 	}
 	// The exact continuation of a live run — its tool results, perhaps with
 	// what the user said meanwhile — goes on in that native session.
-	if run, results, how := rt.bridge.match(req); run != nil && tuiRuntimeLiteContinues(owner, model, req, run, results, how) {
-		return upstream()
+	if !req.activitySummary {
+		if run, results, how := rt.bridge.match(req); run != nil && tuiRuntimeLiteContinues(owner, model, req, run, results, how) {
+			return upstream()
+		}
 	}
 	if outerSession != "" {
 		if err := rt.bridge.verifyInteractiveSessionStore(); err != nil {
@@ -518,22 +527,24 @@ func (b *tuiRuntimeSubscriptionBridge) letGoAbandonedRuns(owner string, req *tui
 // by its prefix in its scope, with or without a session header; an
 // unscoped request has no session to go on from.
 func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRuntimeRequest, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, error) {
-	if repair, err := b.takeToolRepair(owner, model, req); err != nil {
-		return nil, nil, err
-	} else if repair != nil {
-		prompt, images, err := tuiRuntimeRepairPrompt(req)
-		if err != nil {
-			repair.discard()
+	if !req.activitySummary {
+		if repair, err := b.takeToolRepair(owner, model, req); err != nil {
 			return nil, nil, err
+		} else if repair != nil {
+			prompt, images, err := tuiRuntimeRepairPrompt(req)
+			if err != nil {
+				repair.discard()
+				return nil, nil, err
+			}
+			copied := *req
+			copied.toolRepair, copied.resumedCopy = repair, true
+			copied.workKey = repair.workKey
+			run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, "", images, false)
+			if err != nil {
+				repair.discard()
+			}
+			return run, events, err
 		}
-		copied := *req
-		copied.toolRepair, copied.resumedCopy = repair, true
-		copied.workKey = repair.workKey
-		run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, "", images, false)
-		if err != nil {
-			repair.discard()
-		}
-		return run, events, err
 	}
 	// A native checkpoint keyed by the strict content prefix, not a session
 	// header: the deepest reply the request's history extends, resumed in
@@ -542,7 +553,7 @@ func (b *tuiRuntimeSubscriptionBridge) startLite(ctx context.Context, req *tuiRu
 	if run, events, err, ok := b.startLiteAtNativeCheckpoint(ctx, req, model, owner, outerSession, configDir); ok {
 		return run, events, err
 	}
-	if req.scope != "" {
+	if req.scope != "" && !req.activitySummary {
 		if id, prompt, images, work, ok := b.liteParkedBranch(owner, model, configDir, req); ok {
 			log.Printf("Claude interactive resuming the conversation's own session with its tool results")
 			b.anchorOuterThread(owner, outerSession, req)
@@ -606,7 +617,11 @@ func (b *tuiRuntimeSubscriptionBridge) startLiteAtNativeCheckpoint(ctx context.C
 	if err != nil {
 		return nil, nil, err, true
 	}
-	prompt, images, err := tuiRuntimeRenderInteractiveTurnPromptWithImages(since)
+	_, results, turn := tuiRuntimeLiteTail(since)
+	if len(results) > 0 && !tuiRuntimeHasUserText(turn) {
+		turn = append(turn, Message{Role: "user", Parts: []Part{{Kind: Text, Text: tuiRuntimeLiteContinueText}}})
+	}
+	prompt, images, err := tuiRuntimeRenderInteractiveTurnPromptWithImages(turn)
 	if err != nil {
 		return nil, nil, err, true
 	}
@@ -616,13 +631,35 @@ func (b *tuiRuntimeSubscriptionBridge) startLiteAtNativeCheckpoint(ctx context.C
 		copied.heldTools = tuiRuntimeLoadInteractiveTools(point.ToolsHash)
 	}
 	prompt = tuiRuntimeRenderInteractiveTurnConstraint(&copied) + prompt
-	if release, ok := b.claimSession(point.SessionID); ok {
-		defer release()
-		if tuiRuntimeTranscriptEndsAt(configDir, work, point.SessionID, point.Row) {
-			log.Printf("Claude interactive resuming the native session at the strict-prefix checkpoint")
-			copied.pointResume = true
-			run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, point.SessionID, images, false)
-			return run, events, err, true
+	if len(results) > 0 {
+		// The delivered tool reply is a durable boundary too. Its results
+		// belong in a copy, never in the session of a still-running MCP waiter.
+		reply := req.Messages[len(req.Messages)-len(since)-1]
+		var calls []string
+		for _, p := range reply.Parts {
+			if p.Kind == ToolCall {
+				calls = append(calls, p.ID)
+			}
+		}
+		id, err := tuiRuntimeLiteBranchTranscript(work, configDir, model, point.SessionID, calls, results, true, point.Row)
+		if err != nil {
+			log.Printf("Claude interactive could not fork the checkpointed tool round: %v", err)
+			return nil, nil, nil, false
+		}
+		log.Printf("Claude interactive forking the native session at the checkpointed tool round")
+		copied.resumedCopy = true
+		run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, id, images, false)
+		return run, events, err, true
+	}
+	if !req.activitySummary {
+		if release, ok := b.claimSession(point.SessionID); ok {
+			defer release()
+			if tuiRuntimeTranscriptEndsAt(configDir, work, point.SessionID, point.Row) {
+				log.Printf("Claude interactive resuming the native session at the strict-prefix checkpoint")
+				copied.pointResume = true
+				run, events, err := b.startInteractiveWithPromptImages(ctx, &copied, model, configDir, owner, outerSession, prompt, point.SessionID, images, false)
+				return run, events, err, true
+			}
 		}
 	}
 	id, err := tuiRuntimeForkTranscript(configDir, work, point.SessionID, point.Row)
@@ -940,14 +977,44 @@ func (b *tuiRuntimeSubscriptionBridge) liteParkedBranch(owner, model, configDir 
 // calls (an interruption, as its run was let go, or the rounds it went on
 // to) is left out. With whole, the reply that row ends makes those calls and
 // no other, so the copy holds no call left unanswered.
-func tuiRuntimeLiteBranchTranscript(work, configDir, model, sid string, calls []string, results []Message, whole bool) (string, error) {
+func tuiRuntimeLiteBranchTranscript(work, configDir, model, sid string, calls []string, results []Message, whole bool, checkpointRow ...string) (string, error) {
 	data, dir, err := tuiRuntimeReadTranscript(configDir, work, sid)
 	if err != nil {
 		return "", err
 	}
+	var checkpointLines [][]byte
+	if len(checkpointRow) > 0 {
+		// A persisted boundary names a row, not merely call IDs: a later
+		// branch could reuse an ID and must never move this cut forward.
+		lines := bytes.SplitAfter(data, []byte("\n"))
+		found := false
+		for i, line := range lines {
+			var row struct{ UUID string }
+			if json.Unmarshal(line, &row) == nil && row.UUID == checkpointRow[0] {
+				checkpointLines = lines[:i+1]
+				data, found = bytes.Join(checkpointLines, nil), true
+				break
+			}
+		}
+		if !found {
+			return "", errors.New("native checkpoint row missing")
+		}
+	}
 	lines, parent, err := tuiRuntimeToolRoundLines(data, calls, whole)
 	if err != nil {
 		return "", err
+	}
+	if len(checkpointLines) > 0 {
+		var end, tool struct {
+			Type, UUID string
+			Message    struct{ ID string }
+		}
+		if json.Unmarshal(checkpointLines[len(checkpointLines)-1], &end) != nil ||
+			json.Unmarshal(lines[len(lines)-1], &tool) != nil || end.Type != "assistant" || end.Message.ID != tool.Message.ID {
+			return "", errors.New("native checkpoint does not end at its tool reply")
+		}
+		// Keep text or thinking blocks streamed after the final call too.
+		lines, parent = checkpointLines, end.UUID
 	}
 	id, f, err := tuiRuntimeCopyTranscript(dir, sid, lines)
 	if err != nil {

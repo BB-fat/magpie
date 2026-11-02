@@ -15,6 +15,8 @@ type tuiRuntimeRequest struct {
 	// scope is the isolation domain the request's native sessions are
 	// found in (tuiRuntimePrefixScope): its account and caller
 	scope string
+
+	activitySummary bool // a tool-free side reply, never a continuation of the worker's MCP waiter
 }
 
 func tuiRuntimeParseRequest(body []byte) (*tuiRuntimeRequest, error) {

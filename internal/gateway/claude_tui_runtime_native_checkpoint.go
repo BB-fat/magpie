@@ -34,7 +34,7 @@ import (
 // loose cut-point store: the two are not interchangeable, and the loose
 // store stays for the header-keyed paths that still read it.
 type tuiRuntimeNativeCheckpoint struct {
-	Prefix         string    `json:"prefix"`     // hex of tuiRuntimePrefixDigest of msgs up to the reply
+	Prefix         string    `json:"prefix"`     // prefix digest, tool: names a delivered tool boundary
 	Scope          string    `json:"scope"`      // tuiRuntimePrefixScope(owner, caller key)
 	SessionID      string    `json:"session_id"` // native session holding the reply
 	Row            string    `json:"row"`        // uuid of the reply's last transcript row
@@ -152,6 +152,18 @@ func tuiRuntimeNativeCheckpointKey(scope string, prefix tuiRuntimePrefixDigest) 
 	return scope + "\x00" + fmt.Sprintf("%x", prefix[:])
 }
 
+func tuiRuntimeNativeCheckpointPrefix(reply Message, prefix tuiRuntimePrefixDigest) string {
+	key := fmt.Sprintf("%x", prefix[:])
+	for _, p := range reply.Parts {
+		if p.Kind == ToolCall {
+			// Older runtimes know only terminal replies. They must never
+			// resume a new tool boundary as a completed, tool-free turn.
+			return "tool:" + key
+		}
+	}
+	return key
+}
+
 // saveNativeCheckpoint records the boundary this run's complete reply made:
 // the strict prefix of the request's messages plus the reply exactly as the
 // client was told it (r.turnReply, kept by noteTurnReply), in the request's
@@ -170,7 +182,7 @@ func (r *tuiRuntimeSubscriptionRun) saveNativeCheckpoint(req *tuiRuntimeRequest)
 	msgs := append(req.Messages[:len(req.Messages):len(req.Messages)], reply)
 	prefix := tuiRuntimePrefixOf(req.scope, msgs)
 	if err := tuiRuntimeSaveNativeCheckpoint(tuiRuntimeNativeCheckpoint{
-		Prefix: fmt.Sprintf("%x", prefix[:]), Scope: req.scope,
+		Prefix: tuiRuntimeNativeCheckpointPrefix(reply, prefix), Scope: req.scope,
 		SessionID: sessionID, Row: row, Work: work,
 		Model: model, InstructionKey: tuiRuntimeInstructionKey(req), ToolsHash: toolsHash,
 	}); err != nil {
@@ -232,16 +244,15 @@ func tuiRuntimeFindNativeCheckpoint(req *tuiRuntimeRequest, model string) (tuiRu
 		if req.Messages[i].Role != "assistant" {
 			continue
 		}
-		key := tuiRuntimeNativeCheckpointKey(req.scope, digests[i])
+		key := req.scope + "\x00" + tuiRuntimeNativeCheckpointPrefix(req.Messages[i], digests[i])
 		p, ok := store.Points[key]
 		if !ok || (p.Model != "" && p.Model != model) {
 			continue
 		}
-		// the suffix after this reply must be new user input only, not a
-		// rewritten later reply or a tool result (those go through the tool
-		// continuation / fork paths)
+		// New user input, or the complete results of this reply's calls.
+		// Later assistant replies still require a deeper checkpoint.
 		since := req.Messages[i+1:]
-		if !tuiRuntimeNativeCheckpointSuffixOK(since) {
+		if !tuiRuntimeNativeCheckpointSuffixOK(req.Messages[i], since) {
 			continue
 		}
 		return p, since, true
@@ -249,21 +260,34 @@ func tuiRuntimeFindNativeCheckpoint(req *tuiRuntimeRequest, model string) (tuiRu
 	return tuiRuntimeNativeCheckpoint{}, nil, false
 }
 
-// nativeCheckpointSuffixOK says the messages after a checkpointed reply are
-// a fresh turn: no later assistant reply and no tool results.
-func tuiRuntimeNativeCheckpointSuffixOK(since []Message) bool {
+// A tool boundary is usable only with each of its results exactly once.
+// Plain new input cannot continue an unanswered native tool round.
+func tuiRuntimeNativeCheckpointSuffixOK(reply Message, since []Message) bool {
 	if len(since) == 0 {
 		return false
 	}
+	calls := map[string]bool{}
+	for _, p := range reply.Parts {
+		if p.Kind == ToolCall {
+			if p.ID == "" || calls[p.ID] {
+				return false
+			}
+			calls[p.ID] = true
+		}
+	}
+	answered := map[string]bool{}
 	for _, m := range since {
 		if m.Role == "assistant" {
 			return false
 		}
 		for _, p := range m.Parts {
 			if p.Kind == ToolResult {
-				return false
+				if m.Role != "user" || !calls[p.CallID] || answered[p.CallID] {
+					return false
+				}
+				answered[p.CallID] = true
 			}
 		}
 	}
-	return true
+	return len(answered) == len(calls)
 }

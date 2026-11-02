@@ -136,13 +136,16 @@ func TestClaudeTUIRuntimeNativeCheckpointFoundWithoutThinking(t *testing.T) {
 	}}
 	prefix := tuiRuntimePrefixOf(scope, []Message{q1, reply})
 	if err := tuiRuntimeSaveNativeCheckpoint(tuiRuntimeNativeCheckpoint{
-		Prefix: tuiRuntimeNativeCheckpointKey(scope, prefix)[len(scope)+1:], Scope: scope,
+		Prefix: tuiRuntimeNativeCheckpointPrefix(reply, prefix), Scope: scope,
 		SessionID: "sess", Row: "row", Work: "work", Model: "m", InstructionKey: "k",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	resent := Message{Role: "assistant", Parts: reply.Parts[1:]}
-	q2 := Message{Role: "user", Parts: []Part{{Kind: Text, Text: "q2"}}}
+	q2 := Message{Role: "user", Parts: []Part{
+		{Kind: ToolResult, CallID: "c1", Text: "the file"},
+		{Kind: Text, Text: "q2"},
+	}}
 	req := &tuiRuntimeRequest{scope: scope}
 	req.Messages = []Message{q1, resent, q2}
 	p, since, ok := tuiRuntimeFindNativeCheckpoint(req, "m")

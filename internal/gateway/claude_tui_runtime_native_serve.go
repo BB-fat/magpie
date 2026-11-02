@@ -419,7 +419,7 @@ func tuiRuntimeLetGoIdleForRoom(most int) bool {
 // req's own would not change. The claim takes the process from the pool
 // before anything is typed in, so one process serves one request.
 func (b *tuiRuntimeSubscriptionBridge) startHot(req *tuiRuntimeRequest, model, owner, outerSession, configDir string) (*tuiRuntimeSubscriptionRun, <-chan Event, bool) {
-	if tuiRuntimeIdleTTL() <= 0 || req.scope == "" {
+	if tuiRuntimeIdleTTL() <= 0 || req.scope == "" || req.activitySummary {
 		return nil, nil, false
 	}
 	// the same request guards a fresh launch holds to: a turn typed into a

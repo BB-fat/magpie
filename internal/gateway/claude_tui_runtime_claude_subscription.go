@@ -1046,6 +1046,9 @@ func (r *tuiRuntimeSubscriptionRun) ended(req *tuiRuntimeRequest, said, stop str
 	case stop == "tool":
 		r.park()
 		r.bridge.noteLiteParked(r)
+		if r.interactive && repair == nil {
+			r.saveNativeCheckpoint(req)
+		}
 		return // it waits on its tool calls
 	case r.interactive:
 		if stop != "stop" || r.readOnlyToolSignaled() {

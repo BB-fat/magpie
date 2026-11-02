@@ -341,9 +341,10 @@ native transcript holds a complete reply, keyed by the **strict content
 prefix** the client sent up to and including that reply, within an
 isolation scope (`tuiRuntimePrefixScope(owner, caller key)`) — never by an
 external session header. `ended` records one (`saveNativeCheckpoint`) for
-every complete reply of a scoped conversation, with or without a session
-header: the strict prefix of the request's messages plus the reply exactly
-as the client was told it (`tuiRuntimeReplyRecorder`; for a Messages
+every delivered complete reply, including a tool-use reply, of a scoped
+conversation, with or without a session header: the strict prefix of the
+request's messages plus the reply exactly as the client was told it
+(`tuiRuntimeReplyRecorder`; for a Messages
 client, the blocks `renderAnthropic` lays it out in, which are the
 stream's, read back by the request parser, so a search's two blocks and
 each line citing a page found are parts of their own, as in the client's
@@ -374,15 +375,53 @@ A request goes on from the deepest checkpoint its history extends
 (`startLiteAtNativeCheckpoint`, tried after the idle process and before any
 rebuild): for each prefix ending at an assistant reply, deepest first, the
 checkpoint under that exact prefix in the request's scope. The suffix after
-it must be new user input only. It resumes that session in place when no
-run writes it and the transcript still ends at the checkpoint's row, else
-forks it there. Changed instructions rebuild. Only then is Anthropic sent
-the prefix it has cached; a request whose history matches no checkpoint is
+it must be new user input only, or the complete, non-duplicated results of
+that reply's tool calls, optionally followed by new input. A tool boundary
+cannot be continued without all of its results. Tool results are appended to
+a copy cut at the native tool round, followed by `liteResultsReceived`, and
+only the new input is typed in (`liteContinueText` if there is none). The
+original MCP waiter is not consumed by this copy. A non-tool turn resumes
+that session in place when no run writes it and the transcript still ends
+at the checkpoint's row, else forks it there. Changed instructions rebuild.
+Only then is Anthropic sent the prefix it has cached; a request whose history matches no checkpoint is
 rebuilt from the request. This is what lets consecutive requests without a
 session header resume rather than rebuild (the a reported deployment case). Tests:
 `TestClaudeTUIRuntimeNativeCheckpointResume` (a cp-wrapper transcript, told
 apart from a rebuild by the first reply's row uuid) and the real
 `TestClaudeTUIRuntimeRealServe/no_header_after_the_TTL`.
+
+### Claude Code activity summaries
+
+Claude Code asks for background activity text by appending its literal
+"Describe your most recent action in 3-5 words" instruction to a copy of
+the worker's history, including its latest tool results. The reply is not
+added to the worker's conversation. `tuiRuntimeActivitySummary` recognizes
+that current user-text suffix, not quotes in tool output, an earlier turn,
+or a one-off request without a worker reply. A request explicitly requiring
+a tool is not reclassified as an activity summary.
+
+`serveLite` isolates this request from the worker's outer checkpoint and
+live MCP handoffs, and holds its MCP tools with `tool_choice: none` while
+retaining their definitions. It always forks a matching native checkpoint,
+including a delivered tool boundary; it never takes the worker's idle
+process or repair claim, aborts its waiter, or replaces its outer checkpoint.
+The fork ends with its reply rather than entering the idle pool. Its account,
+caller scope, model and instruction checks are the ordinary checkpoint
+checks. When the history has no matching boundary it still rebuilds from
+the supplied history; it is not truncated or replaced with a canned summary.
+
+Previously only terminal text replies made durable boundaries. Activity
+requests during a tool chain therefore missed the checkpoint and repeatedly
+rebuilt the entire history (a reported deployment 11-01: 21 short activity replies wrote
+4.83M tokens). Existing terminal checkpoints remain valid; tool boundaries
+are recorded as subsequent replies are delivered, with no store migration.
+Their `tool:` key namespace is ignored by older runtimes, which cannot
+mistake an unanswered tool round for a terminal checkpoint after a downgrade.
+Tests: `TestClaudeTUIRuntimeToolReplyKeepsNativeCheckpoint`,
+`TestClaudeTUIRuntimeActivitySummaryForksWithoutTouchingWorker`,
+`TestClaudeTUIRuntimeToolCheckpointRequiresTheExactCompleteResultSet`, and
+`TestClaudeTUIRuntimeRealActivitySummary` (real CLI against a local stand-in,
+comparing upstream messages, system and tools, not live cache hits).
 
 ### Held tools (a turn that may call none)
 
@@ -575,7 +614,9 @@ The request's history is authoritative. A changed first user message
 (client compaction or edits) does not remove its session identity. If it
 cannot safely resume, the bridge rebuilds from that request and saves the
 new checkpoint; subsequent turns can resume it, including after a gateway
-restart. No agent-specific summary recognition or branch store is needed.
+restart. Client compaction needs no agent-specific summary recognition or
+branch store; the explicitly identified activity side asks are isolated as
+described above.
 Forks sharing a session ID go on from their own cut points (above), side
 by side. Explicit
 `x-claude-code-agent-id` subagents use an independent outer session keyed

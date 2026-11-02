@@ -1559,7 +1559,7 @@ func (b *tuiRuntimeSubscriptionBridge) startInteractiveWithPromptImages(ctx cont
 	// A run whose turn may be followed by its conversation's next keeps its
 	// Claude Code for it (native_serve.go). A schema answer, a read-only
 	// recovery and a repaired tool round each end with their reply.
-	serve := tuiRuntimeIdleTTL() > 0 && !readOnly && len(req.Format.schema()) == 0 && req.toolRepair == nil
+	serve := tuiRuntimeIdleTTL() > 0 && !readOnly && len(req.Format.schema()) == 0 && req.toolRepair == nil && !req.activitySummary
 	if serve {
 		args = append(args, "--desplega-serve")
 	}
