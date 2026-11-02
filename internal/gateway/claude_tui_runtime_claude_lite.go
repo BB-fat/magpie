@@ -313,7 +313,7 @@ func tuiRuntimeLiteReplayKey(owner string, req *tuiRuntimeRequest) string {
 		return ""
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00", owner)
+	fmt.Fprintf(h, "%d:%s%d:%s", len(owner), owner, len(req.scope), req.scope)
 	h.Write(canonical)
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -322,7 +322,7 @@ func (b *tuiRuntimeSubscriptionBridge) noteLiteCompletedToolTurn(owner, outerSes
 	if b == nil || outerSession == "" || req == nil || !tuiRuntimeInteractiveToolContinuation(req) {
 		return
 	}
-	key := tuiRuntimeInteractiveSessionStateKey(owner, outerSession)
+	key := tuiRuntimeLiteCompletedKey(owner, outerSession, req.scope)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.liteCompleted == nil || len(b.liteCompleted) >= 1024 {
@@ -344,11 +344,15 @@ func (b *tuiRuntimeSubscriptionBridge) liteCompletedToolTurn(owner, outerSession
 	if b == nil || outerSession == "" || req == nil || !tuiRuntimeInteractiveToolContinuation(req) {
 		return tuiRuntimeLiteCompletedTurn{}, false
 	}
-	key := tuiRuntimeInteractiveSessionStateKey(owner, outerSession)
+	key := tuiRuntimeLiteCompletedKey(owner, outerSession, req.scope)
 	b.mu.Lock()
 	prior := b.liteCompleted[key]
 	b.mu.Unlock()
 	return prior, prior.key != "" && prior.key == tuiRuntimeLiteReplayKey(owner, req)
+}
+
+func tuiRuntimeLiteCompletedKey(owner, outer, scope string) string {
+	return tuiRuntimeInteractiveSessionStateKey(owner, fmt.Sprintf("%d:%s%d:%s", len(scope), scope, len(outer), outer))
 }
 
 func tuiRuntimeLiteVisibleToolHandoff(req *tuiRuntimeRequest) error {

@@ -290,6 +290,12 @@ request after its reply is answered with that reply, with no new run
 minutes (`tuiRuntimeInteractiveParkLongest`), a run ends after 12 hours
 (`tuiRuntimeInteractiveActiveLongest`).
 
+Completed tool replies and the replay digest include the effective caller
+scope explicitly, not only the account and outer session header. Two keys
+sharing that header cannot replay or replace each other's completion
+(`TestClaudeTUIRuntimeCompletedReplyIsCallerScoped`). These completions are
+in memory only; a restart discards them rather than migrating older entries.
+
 Requests of one conversation run side by side, each in its own native
 session. Only the very same request (its replay key: a client's retry)
 waits for the one in flight, 60s, then 503 with `Retry-After: 5`
