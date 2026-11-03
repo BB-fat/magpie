@@ -153,7 +153,7 @@ func museAt(at place, cfg string) *Agent {
 				if c := cur["model"]; c != "" && !usesMagpie(c) {
 					own = append(own, Option{Value: c, Icon: museIcon(c)})
 				}
-				return append(group("Muse Code", own), viaMagpie("muse", magpieID+"/")...)
+				return withVia(group("Muse Code", own), "muse", magpieID+"/")
 			},
 		}},
 	}, path)

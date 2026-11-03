@@ -54,6 +54,9 @@ func TestProviderInfoReadsTheListOnce(t *testing.T) {
 		t.Fatalf("exposed %d of %d, first %+v", got.Exposed, len(p.Exposed()), got.Models[0])
 	}
 
+	if raceOn {
+		t.Skip("-race: sync.Pool drops what it holds, so allocations are not what a build allocates")
+	}
 	bytesPer := func(f func()) uint64 {
 		f()
 		var a, b runtime.MemStats

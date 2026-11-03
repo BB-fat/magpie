@@ -586,7 +586,7 @@ var (
 )
 
 // CachePath is where `magpie sync` stores the models.dev catalog.
-func CachePath() string { return filepath.Join(appdir.Cache(), "models.json") }
+func CachePath() string { return appdir.Join(appdir.Cache(), "models.json") }
 
 func opencodeCache() string {
 	home, _ := os.UserHomeDir()
@@ -882,6 +882,10 @@ func PriceOf(providerID, modelID string) (Price, bool) {
 // (DeepSeek's deepseek-flash is deepseek-v4.1-flash).
 func PricedBy(providers []string, id string) (Price, bool) {
 	all, at := loadGen()
+	return pricedOnce(at, 'p', providers, id, func() (Price, bool) { return pricedBy(all, at, providers, id) })
+}
+
+func pricedBy(all map[string]mdProvider, at int, providers []string, id string) (Price, bool) {
 	for _, pid := range providers {
 		if m, ok := all[pid].Models[id]; ok && m.Cost != nil {
 			return *m.Cost, true
@@ -1100,6 +1104,10 @@ func madeByOf(all map[string]mdProvider, at int, b string) *madeBy {
 // those prices it.
 func MakerPriced(prefer []string, id string) (Price, bool) {
 	all, at := loadGen()
+	return pricedOnce(at, 'm', prefer, id, func() (Price, bool) { return makerPriced(all, at, prefer, id) })
+}
+
+func makerPriced(all map[string]mdProvider, at int, prefer []string, id string) (Price, bool) {
 	b := bareID(id)
 	if r, ok := unprofiled(b); ok {
 		b = r
@@ -1729,9 +1737,11 @@ func listedBy(providers []string, id string, providerOverrides bool) ([]string, 
 // SameModel's spelling of it (same). listedBy, asked for every model's
 // levels on each look at the providers, read every vendor's every model
 // through SameModel's regexp each time: 0.28 GB of the 2.6 GB a real
-// config allocated over 20 polls.
+// config allocated over 20 polls. KinEfforts looks its thinking models up
+// by their versionless shape (kin), where it split and joined every key
+// on each ask: 66 MB of 1.4 GB.
 type levelIndex struct {
-	bare, same map[string][]string
+	bare, same, kin map[string][]string
 }
 
 var levelIndexes struct {
@@ -1751,12 +1761,17 @@ func levelIndexOf(all map[string]mdProvider, at int, pid string) *levelIndex {
 	if x, ok := levelIndexes.by[pid]; ok {
 		return x
 	}
-	x := &levelIndex{bare: map[string][]string{}, same: map[string][]string{}}
+	x := &levelIndex{bare: map[string][]string{}, same: map[string][]string{}, kin: map[string][]string{}}
 	for _, key := range slices.Sorted(maps.Keys(all[pid].Models)) {
 		b := bareID(key)
 		x.bare[b] = append(x.bare[b], key)
 		n := SameModel(b)
 		x.same[n] = append(x.same[n], key)
+		if m := all[pid].Models[key]; (m.Thinks || len(m.efforts("")) > 0) && !m.budgeted() {
+			if s, ok := versionless(b); ok {
+				x.kin[s] = append(x.kin[s], key)
+			}
+		}
 	}
 	levelIndexes.by[pid] = x
 	return x
@@ -1786,7 +1801,7 @@ func Unsuffixed(id string) (string, bool) {
 // from mimo-v2.6-flash): a model newer than the catalog on this machine
 // offers its line's levels, not none. False when none of them has one.
 func KinEfforts(providers []string, id string) ([]string, bool) {
-	all := load()
+	all, at := loadGen()
 	shape, ok := versionless(bareID(id))
 	if !ok {
 		return nil, false
@@ -1797,13 +1812,8 @@ func KinEfforts(providers []string, id string) ([]string, bool) {
 		found              bool
 	)
 	for _, pid := range providers {
-		for key, m := range all[pid].Models {
-			if !m.Thinks && len(m.efforts("")) == 0 || m.budgeted() {
-				continue
-			}
-			if s, ok := versionless(bareID(key)); !ok || s != shape {
-				continue
-			}
+		for _, key := range levelIndexOf(all, at, pid).kin[shape] {
+			m := all[pid].Models[key]
 			// the newest; of two the same day, the first provider's, then
 			// the greater id, whatever order the map gives
 			if !found || m.ReleaseDate > newest || m.ReleaseDate == newest && pid == from && key > name {
@@ -1964,10 +1974,11 @@ func DrawsID(id string) bool {
 
 // ImagesAPI is whether a model draws on an images API rather than answering
 // in chat with pictures: gpt-image, dall-e, imagen, flux, seedream… — not
-// gemini-*-image or gpt-5-image, which chat.
+// gemini-*-image or gpt-5-image, which chat. iFlytek Loomy's Hy-Image
+// generators (Hy-Image-3.5-preview) draw on its images API too (#4913).
 func ImagesAPI(id string) bool {
 	id = strings.ToLower(id)
-	for _, w := range []string{"gpt-image", "chatgpt-image", "dall-e", "imagen", "imagine", "qwen-image", "wanx", "wan2", "seedream", "cogview", "flux", "stable-diffusion", "sdxl", "kolors", "hidream", "sensenova-u1"} {
+	for _, w := range []string{"gpt-image", "chatgpt-image", "dall-e", "imagen", "imagine", "qwen-image", "wanx", "wan2", "seedream", "cogview", "flux", "stable-diffusion", "sdxl", "kolors", "hidream", "sensenova-u1", "hy-image"} {
 		if strings.Contains(id, w) {
 			return true
 		}

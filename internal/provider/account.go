@@ -105,6 +105,11 @@ type Account struct {
 	// is one the account was refused (copilot_refused.go); and on a ZCode
 	// account on the Start Plan: whether it is one only the Coding Plan has.
 	unusable func(model string) bool
+	// listedOnly is set on a ChatGPT account: the backend serves none of
+	// the models its list leaves out ("The 'gpt-5.5' model is not
+	// supported when using Codex with a ChatGPT account", #4772), so a
+	// pick the fetched list doesn't have isn't offered.
+	listedOnly bool
 	// explain adds what the user can do about a refusal the account's
 	// backend answered, "" when there is nothing to add (factory.go).
 	explain func(status int, body []byte) string
@@ -128,10 +133,15 @@ type Account struct {
 // Claude models on Chat and Anthropic's. nil is not known, and every API
 // the provider speaks may be tried. One the user set for the model
 // (SetModelAPI) is the only one.
-func (p Provider) APIs(model string) []Protocol {
+func (p Provider) APIs(model string) []Protocol { return p.apisAmong(p.Speaks(), model) }
+
+// apisAmong is APIs with the protocols p speaks found already.
+func (p Provider) apisAmong(speaks []Protocol, model string) []Protocol {
 	// the one the user said it is asked on, whatever the list says
-	if proto, ok := p.ModelAPI(model); ok {
-		return []Protocol{proto}
+	if proto, ok := p.apiSet(model); ok {
+		if proto, ok := p.modelAPIAmong(len(speaks), proto); ok {
+			return []Protocol{proto}
+		}
 	}
 	return p.ListedAPIs(model)
 }
@@ -209,6 +219,9 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 		return errAccountDiscoveryOff
 	}
 	ctx = p.Via(ctx) // a sign-in refreshed on the way goes through its proxy
+	// the agent's own headers the provider lists (PassHeaders), before an
+	// account's signing, which has the last word on its own
+	passed := p.passClientHeaders(ctx, req.Header)
 	if p.Account != nil && p.Account.sign != nil {
 		return p.Account.sign(ctx, req, body)
 	}
@@ -239,6 +252,9 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 	// ${sessionId} and ${threadId} in a value are the conversation's
 	// (conversation.go).
 	for k, v := range p.SentHeaders(ctx) {
+		if slices.ContainsFunc(passed, func(n string) bool { return strings.EqualFold(n, k) }) {
+			continue // the agent sent its own, which stands over the user's fixed one
+		}
 		if ListHeader(k) {
 			MergeList(req.Header, k, v)
 			continue
@@ -1044,6 +1060,7 @@ func codexAccount(home string) (Provider, bool) {
 	}
 	acct.body = codexBody
 	acct.models = catalog.Codex
+	acct.listedOnly = true
 	acct.fetch = func(ctx context.Context) ([]catalog.Model, error) {
 		ms, err := codexModels(ctx, acct.sign)
 		if err != nil {
@@ -1773,11 +1790,14 @@ func copilotModels(ctx context.Context, app copilotApp) ([]catalog.Model, error)
 	}
 	copilotSeenMu.Unlock()
 	for _, m := range v.Data {
-		if m.Capabilities.Type != "chat" || copilotInternal.MatchString(m.ID) || m.Vendor == "Experimental" {
+		if m.Capabilities.Type != "chat" || copilotInternal.MatchString(m.ID) {
 			continue
 		}
-		// a model no picker offers is an old snapshot or Copilot's own
-		if !m.Picker && m.Category == "" {
+		// a model no picker offers is an old snapshot or Copilot's own; an
+		// Experimental vendor's is Copilot's own too, unless the picker
+		// offers it (#4343: mai-code-2-flash, an Enterprise account's,
+		// served on /responses)
+		if !m.Picker && (m.Category == "" || m.Vendor == "Experimental") {
 			continue
 		}
 		switch {

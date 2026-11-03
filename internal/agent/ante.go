@@ -318,7 +318,7 @@ func anteAt(at place) *Agent {
 // (provider.Described). No other agent magpie wires declares this either.
 func anteProviderJSON(gw string) map[string]any {
 	ms := []map[string]any{}
-	for _, m := range magpieModels("ante") {
+	for _, m := range sharedModels("ante") {
 		ms = append(ms, anteModelJSON(m))
 	}
 	p := map[string]any{

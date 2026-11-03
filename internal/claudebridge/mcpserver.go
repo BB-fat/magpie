@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -119,6 +120,11 @@ func MaxHashedToolStemLen() int {
 // it, the same in every run, so a resumed session and a conversation's
 // history name the tool as before; the bridges map it back.
 func ToolName(name string) string {
+	// A tool of magpie's own MCP server already named mcp__<server>__<tool>
+	// by the client must not get the helper's prefix again (packinggoods).
+	if rest, ok := strings.CutPrefix(name, MCPToolPrefix()); ok && ToolNameOK(rest) && !toolNameHashed.MatchString(rest) {
+		return rest
+	}
 	if ToolNameOK(name) && !toolNameHashed.MatchString(name) {
 		return name
 	}

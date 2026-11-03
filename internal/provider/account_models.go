@@ -105,6 +105,27 @@ func (p Provider) AccountIDs() []AccountRef {
 	return out
 }
 
+// ResolveAccount is the entry "<provider>/<id>" an account list — a
+// gateway key's (#905), a routing group's — keeps for provider pid's
+// account or key ref: an account named by its stable id or the name it
+// is shown by, resolved to that id, a key by its fingerprint. It fails
+// for a provider magpie doesn't have, or one with no such account or key.
+func ResolveAccount(pid, ref string) (string, error) {
+	p, err := Find(pid)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range p.AccountIDs() {
+		if strings.EqualFold(r.ID, ref) || strings.EqualFold(r.User, ref) {
+			return p.ID + "/" + r.ID, nil
+		}
+	}
+	if p.Account == nil {
+		return "", fmt.Errorf("%s has no key %q", p.Name, ref)
+	}
+	return "", fmt.Errorf("%s has no account %q", p.Name, ref)
+}
+
 // AccountID is the stable id of p's account or key as a gateway key's
 // account list knows it (#905): the account's, kept through renames, or
 // a key's fingerprint.

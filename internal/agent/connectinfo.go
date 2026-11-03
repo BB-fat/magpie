@@ -236,7 +236,7 @@ func (a *Agent) changedAt(files []string, reads func() string) time.Time {
 	sum := sha256.Sum256([]byte(reads()))
 	digest := hex.EncodeToString(sum[:8])
 	key := a.ID + ".started"
-	was, at, ok := strings.Cut(stashLoad()[key], " ")
+	was, at, ok := strings.Cut(stashShared()[key], " ")
 	n, err := strconv.ParseInt(at, 10, 64)
 	if ok && err == nil && was == digest {
 		return time.Unix(0, n)
@@ -311,7 +311,7 @@ func (a *Agent) StaleCopies() []StaleCopy {
 	var out []StaleCopy
 	apps := map[string]int{}
 	for _, pat := range pats {
-		for _, p := range running(pat) {
+		for _, p := range runningLately(pat) {
 			if strings.Contains(p.cmd, others) && !strings.Contains(p.cmd, dir+"/") {
 				continue
 			}

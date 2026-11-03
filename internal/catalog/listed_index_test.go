@@ -52,3 +52,42 @@ func TestListedByReadsAnIndex(t *testing.T) {
 		t.Fatalf("a catalog loaded since is not read: %q", got)
 	}
 }
+
+// A model newer than the catalog takes its line's levels from the same
+// index: KinEfforts split and joined every key of every maker on each ask.
+func TestKinEffortsReadsAnIndex(t *testing.T) {
+	big := func(levels string) string {
+		var b strings.Builder
+		b.WriteString(`{"big": {"models": {`)
+		for i := range 2000 {
+			fmt.Fprintf(&b, `"vendor/model-%d-v1.5": {"id":"model-%d-v1.5","reasoning":true},`, i, i)
+		}
+		b.WriteString(`"x": {"id":"x"}}},
+		  "zai": {"models": {"glm-5.3-flash": {"id":"glm-5.3-flash","reasoning_options":[{"type":"effort","values":[` + levels + `]}]}}}}`)
+		return b.String()
+	}
+	writeCatalog(t, big(`"low","high","max"`))
+	ask := func() string {
+		got, _ := KinEfforts([]string{"big", "zai"}, "glm-6.1-flash")
+		return strings.Join(got, ",")
+	}
+	if got := ask(); got != "low,high,max" {
+		t.Fatalf("glm-6.1-flash's line: %q", got)
+	}
+	var a, b runtime.MemStats
+	runtime.ReadMemStats(&a)
+	for range 20 {
+		ask()
+	}
+	runtime.ReadMemStats(&b)
+	// a versionless of each of 2000 keys is ~200KB; a look in the index a
+	// few strings
+	if per := (b.TotalAlloc - a.TotalAlloc) / 20; per > 8<<10 {
+		t.Fatalf("an ask took %d bytes with the catalog unchanged", per)
+	}
+
+	writeCatalog(t, big(`"low","high"`))
+	if got := ask(); got != "low,high" {
+		t.Fatalf("a catalog loaded since is not read: %q", got)
+	}
+}

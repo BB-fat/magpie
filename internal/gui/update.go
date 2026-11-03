@@ -147,7 +147,10 @@ func (u *updater) start() {
 	}
 	go func() {
 		time.Sleep(5 * time.Second) // let the app settle first
-		for {
+		// until this one has handed the gateway to the new version: the
+		// copy an update left finishing its requests checks for, and
+		// restarts into, nothing (#4938)
+		for backendCtx.Err() == nil {
 			u.mu.Lock()
 			last := u.asked
 			u.mu.Unlock()
@@ -689,12 +692,18 @@ func updateRoutes(mux *http.ServeMux, w Windows) {
 		out := struct {
 			Latest   string        `json:"latest,omitempty"`
 			Releases []update.Note `json:"releases"`
-			Error    string        `json:"error,omitempty"`
+			// Total: how many releases there are since this one when
+			// more than Releases holds (MostNotes keeps the newest)
+			Total int    `json:"total,omitempty"`
+			Error string `json:"error,omitempty"`
 		}{Latest: j.Latest, Releases: []update.Note{}}
 		if j.Latest != "" {
-			notes, err := fetchNotes(r.Context(), Version, j.Latest, pageLang(r))
+			notes, total, err := fetchNotes(r.Context(), Version, j.Latest, pageLang(r))
 			if len(notes) == 0 && strings.TrimSpace(j.Notes) != "" {
 				notes = []update.Note{{Version: j.Latest, Notes: j.Notes, URL: j.URL}}
+			}
+			if total > len(notes) {
+				out.Total = total
 			}
 			if len(notes) > 0 {
 				out.Releases = notes

@@ -30,7 +30,10 @@
 <link rel="alternate" hreflang="en" href="https://usemagpie.ai/docs/remote">
 <link rel="alternate" hreflang="zh" href="https://usemagpie.ai/docs/zh/remote">
 <link rel="alternate" hreflang="ja" href="https://usemagpie.ai/docs/ja/remote">
+<link rel="alternate" hreflang="x-default" href="https://usemagpie.ai/docs/remote">
+<link rel="canonical" href="https://usemagpie.ai/docs/remote">
 <link rel="stylesheet" href="/docs.css">
+<meta property="og:site_name" content="magpie">
 <meta property="og:title" content="Remote magpie">
 <meta property="og:description" content="One magpie&#x27;s providers, accounts and routing groups, on every computer you use.">
 <meta property="og:image" content="https://usemagpie.ai/img/og.png">
@@ -78,6 +81,7 @@
     <a href="#models">What you get</a>
     <a href="#quotas">Quotas and usage</a>
     <a href="#keys">Short-lived keys</a>
+    <a href="#oidc">Keys for GitHub Actions</a>
     <a href="#api">Stats API</a>
     <a href="#trouble">When it doesn’t work</a>
   </aside>
@@ -156,6 +160,35 @@ magpie gateway-key list               <span class="c"># until 10-31 14:00, expir
     </div>
     <p>An expired key is refused with <code>401</code> and why (“the gateway key "sandbox-1" expired at …: ask for a new one”) on every API, from this computer too. It is removed an hour later.</p>
 
+    <h2 id="oidc"><a class="anchor" href="#oidc">Keys for GitHub Actions</a></h2>
+    <p>A GitHub Actions job can get a short-lived key without a gateway key in the repository’s secrets: it trades the OIDC token GitHub gives it. Write a rule naming the repository (and, if you like, the branch, environment or any other claim, exact or with <code>*</code>), the gateway key its keys are issued under, and how long they live:</p>
+    <div class="code">
+      <span class="lang">Shell</span>
+      <button class="copy" data-copy="ex-oidc-cli">Copy</button>
+      <pre id="ex-oidc-cli">magpie gateway-key issuer &lt;id&gt; on
+magpie gateway-key oidc add --key &lt;id&gt; --repo owner/app --ref refs/heads/main --ttl 1h
+<span class="c"># prints the rule id and its audience, magpie-&lt;rule id&gt;</span>
+magpie gateway-key oidc list
+magpie gateway-key oidc remove &lt;rule id&gt;</pre>
+    </div>
+    <p>In the workflow, ask GitHub for a token with the rule’s audience and POST it to <code>/v1/magpie/keys/oidc</code>:</p>
+    <div class="code">
+      <span class="lang">YAML</span>
+      <button class="copy" data-copy="ex-oidc">Copy</button>
+      <pre id="ex-oidc">permissions:
+  id-token: write
+steps:
+  - name: Get a magpie key
+    run: |
+      TOKEN=$(curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+        "$ACTIONS_ID_TOKEN_REQUEST_URL&amp;audience=magpie-&lt;rule id&gt;" | jq -r .value)
+      KEY=$(curl -s -X POST https://&lt;your magpie&gt;/v1/magpie/keys/oidc \
+        -H "Authorization: Bearer $TOKEN" -d '{"ttl":"30m"}' | jq -r .key)
+      echo "::add-mask::$KEY"
+      echo "MAGPIE_KEY=$KEY" &gt;&gt; "$GITHUB_ENV"</pre>
+    </div>
+    <p>The key is issued under the rule’s gateway key and held to it like any other issued key, lives no longer than the rule says, and is named after the repository, branch and run. A token from another repository or branch, an expired one, or one already traded gets <code>401</code> and why. The route answers another computer only while magpie is shared, and refused tokens count against the failed sign-ins it allows. Without a rule nothing is traded.</p>
+
     <h2 id="api"><a class="anchor" href="#api">Stats API</a></h2>
     <p>What the Usage page shows is also served as JSON, to this computer and, while magpie is shared, to a request with a gateway key. A key held to a budget, models or accounts is told only its own calls and limit.</p>
     <ul>
@@ -207,6 +240,7 @@ curl -s http://127.0.0.1:3425/v1/magpie/concurrency</pre>
     <a href="/docs/integrate">Integrate</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>
     <a href="https://discord.gg/vGSnD3ZKQF">Discord</a>
+    <a href="/docs/contributors">Contributors</a>
     <a href="https://github.com/yetone/magpie-releases/releases">Releases</a>
   </div>
 </div></footer>

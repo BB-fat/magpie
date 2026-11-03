@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/settings"
@@ -64,7 +65,31 @@ func described() bool { return Described != nil && Described() }
 // (none when its lists aren't narrowed): its visibility's, less the models
 // taken out of its lists one by one (HiddenModels), or, when it is shown
 // only the models picked for it, those alone (PickedModels).
+//
+// It is kept across requests with the catalog (keptOf): a window poll
+// asks it for every agent, and building each again from the whole
+// catalog was ~140 MB of what twenty polls allocated. Each caller gets
+// its own copy of the lists.
 func CatalogFor(agent string) (shown, hidden []Entry) {
+	c := catalogKept(agent)
+	return slices.Clone(c.shown), slices.Clone(c.hidden)
+}
+
+// catalogKept is CatalogFor's lists as kept, only for reading.
+func catalogKept(agent string) catalogLists {
+	return keptOf("catalog-for\x00"+agent, func() catalogLists {
+		catalogsBuilt.Add(1)
+		s, h := catalogFor(agent)
+		return catalogLists{slices.Clip(s), slices.Clip(h)}
+	})
+}
+
+type catalogLists struct{ shown, hidden []Entry }
+
+// catalogsBuilt counts the lists CatalogFor built, for a test.
+var catalogsBuilt atomic.Int64
+
+func catalogFor(agent string) (shown, hidden []Entry) {
 	listed, hidden := ListedFor(agent)
 	off := ModelOff(agent)
 	for _, e := range listed {

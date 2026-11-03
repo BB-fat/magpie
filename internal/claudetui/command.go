@@ -7,13 +7,21 @@ const Command = "claude-tui-helper"
 // to trust the folder it runs in: the bridge sets it for magpie's own
 // folder, and for a caller's in an account folder of magpie's, whose
 // Claude Code no one else runs. Otherwise the question is the user's to
-// answer in their own Claude Code, and the run is -p.
+// answer in their own Claude Code, and the run ends, saying so.
 const TrustEnv = "MAGPIE_CLAUDE_TUI_TRUST"
 
-// OnlyEnv, "1", has the shim never become -p: a run whose interactive
-// mode doesn't come up ends with why (the user's "Interactive only",
-// settings.ClaudeTUIOnly), and one after a failure tries it again.
-const OnlyEnv = "MAGPIE_CLAUDE_TUI_ONLY"
+// DeadlineEnv holds, in Unix milliseconds, when a one-off run's caller
+// (a /usage read, a test's "hi") stops waiting for it. The helper ends
+// then on its own, saying on its stderr what Claude Code hadn't done and
+// what it last drew. Killed at the caller's deadline instead, it said
+// nothing, and the reading's error was its exit code alone, "exit status
+// 1" on Windows (#4830).
+const DeadlineEnv = "MAGPIE_CLAUDE_TUI_BY"
+
+// Untrusted begins what the helper says, on its stderr, as it ends over a
+// folder it wasn't told to trust: the bridge then runs the turn in a
+// folder of magpie's.
+const Untrusted = "Claude Code asks whether to trust the folder"
 
 // WSLEnv holds, as JSON (WSL), how to run a Claude Code that is in a WSL
 // distro: the helper, on Windows, runs wsl.exe in its pseudo console.
@@ -26,6 +34,18 @@ type WSL struct {
 	// Mount is where the distro mounts Windows' drives ("/mnt/"): an
 	// image's path is pasted as Claude Code there reads it
 	Mount string `json:"mount"`
-	// Projects is Claude Code's projects folder, as Windows reads it
-	Projects string `json:"projects"`
+	// Projects is Claude Code's projects folder, as Windows reads it; ""
+	// with Distro set when Windows can't, or its home is unknown: the
+	// transcript is then read inside the distro (wslread.go)
+	Projects string `json:"projects,omitempty"`
+	// Distro is the distro, as wsl.exe -d names it
+	Distro string `json:"distro,omitempty"`
 }
+
+// MCPCommand is the hidden subcommand of magpie's tool server, the MCP
+// server a run's --mcp-config names "magpie" (claudebridge.RunMCP). Its
+// arguments are the callback's file, the tools' file and, for the
+// interactive mode, a file it writes once Claude Code has listed its
+// tools: the first message waits for it (MinhuWang on X: a first message
+// sent before then had none of the agent's tools).
+const MCPCommand = "claude-mcp-helper"

@@ -581,6 +581,9 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 			if len(t.Schema) > 0 {
 				fn["parameters"] = t.Schema
 			}
+			if r.strictSaid {
+				fn["strict"] = t.Strict
+			}
 			tools = append(tools, map[string]any{"type": "function", "function": fn})
 		}
 		out["tools"] = tools

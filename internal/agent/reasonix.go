@@ -393,7 +393,7 @@ func reasonixIn(at place) *Agent {
 						addNative(*state.Default)
 					}
 					addNative(cur["model"])
-					return append(group("Reasonix Studio", own), viaMagpie("reasonix", magpieID+"/")...)
+					return withVia(group("Reasonix Studio", own), "reasonix", magpieID+"/")
 				},
 			},
 			{Key: "effort", Label: "effort", Quiet: true,

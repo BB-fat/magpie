@@ -149,8 +149,16 @@ test("compat.js is the first of the page's own scripts", async () => {
   // rows, registry.js when Plugins draws its npm registry, navlamp.js when
   // the pointer comes over the sidebar, whatsnew.js when release notes
   // open, claudemode.js when a Claude provider's editor opens, ctxtext.js
-  // when a context window part is opened; the checks above still read them
-  for (const f of await scripts()) if (!["webfonts.js", "cfgblocked.js", "signsheets.js", "ruleedit.js", "ratewindows.js", "traywindows.js", "autoresetown.js", "registry.js", "navlamp.js", "whatsnew.js", "claudemode.js", "ctxtext.js"].includes(f)) assert(all.includes(f), f + " is not loaded by index.html");
+  // when a context window part is opened, resetask.js when a Codex reset's
+  // Use is pressed, quotaall.js when a provider has two accounts,
+  // quitask.js when a Quit asks first, checkinnow.js when Settings' Check
+  // in now for one account is pressed, autobackup.js when Settings draws
+  // Sync, scrollends.js on the window's first scroll, profilerename.js
+  // when a saved profile's Rename is pressed, keyspend.js when the
+  // provider editor draws a key's row, syncfiles.js when Sync's Export or
+  // Import opens; the checks above
+  // still read them
+  for (const f of await scripts()) if (!["webfonts.js", "cfgblocked.js", "signsheets.js", "ruleedit.js", "ratewindows.js", "traywindows.js", "autoresetown.js", "registry.js", "navlamp.js", "whatsnew.js", "claudemode.js", "ctxtext.js", "resetask.js", "quotaall.js", "quitask.js", "checkinnow.js", "autobackup.js", "scrollends.js", "profilerename.js", "settingshints.js", "keyspend.js", "syncfiles.js"].includes(f)) assert(all.includes(f), f + " is not loaded by index.html");
 });
 
 test("the styles hold up in Safari 15.0", async () => {

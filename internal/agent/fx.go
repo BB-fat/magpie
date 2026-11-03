@@ -118,7 +118,7 @@ func fxIn(at place) *Agent {
 				if v := cur["model"]; v != "" && !usesMagpie(v) {
 					out = append(out, Option{Value: v, Icon: modelIcon("", v)})
 				}
-				return append(out, viaMagpie("fx", magpieID+"/")...)
+				return withVia(out, "fx", magpieID+"/")
 			},
 		}},
 	}

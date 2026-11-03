@@ -343,6 +343,11 @@ func (s *signInFlow) begin() error {
 			return err
 		}
 	case "codex":
+		if s.site == CodexDeviceSite {
+			// a code entered on ChatGPT's device page: nothing comes back
+			// to this computer (codex_device_signin.go)
+			return startCodexDeviceSignIn(s)
+		}
 		// ChatGPT sends the browser back only to this one port. One that
 		// can't be had (Windows reserves it, or another program holds it)
 		// doesn't stop the sign-in: the page the browser ends on has the
@@ -888,6 +893,16 @@ func addLogin(l savedLogin) (using bool, err error) {
 	}()
 	loginsMu.Lock()
 	defer loginsMu.Unlock()
+	if l.Agent == "claude" {
+		// the sign-in Claude Code has is read, kept and maybe written
+		// over below: not while it refreshes it (#4532)
+		release, err := claudeRefreshLocks()
+		if err != nil {
+			return false, err
+		}
+		defer release()
+		forgetClaudeCredential()
+	}
 	l.Seen = time.Now().UTC().Truncate(time.Second)
 	live, signedIn := liveLogin(l.Agent)
 	ls := readLogins()

@@ -15,9 +15,11 @@ import (
 
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/backup"
 	"github.com/yetone/magpie/internal/browsermcp"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/claudebridge"
+	"github.com/yetone/magpie/internal/claudecode"
 	"github.com/yetone/magpie/internal/claudetui"
 	"github.com/yetone/magpie/internal/codexrelay"
 	"github.com/yetone/magpie/internal/davsync"
@@ -64,10 +66,12 @@ const usage = `magpie — one place to pick every agent's model
   magpie save <name>              snapshot every agent's settings as a profile
   magpie use <name>               apply a profile
   magpie profiles                 list profiles
+  magpie rename <old> <new>       rename a profile
   magpie rm <name>                delete a profile
 
   magpie backup [--no-keys] [--no-library] [file]    providers, keys, settings, profiles, agent models and the library in one file, sealed with a passphrase
   magpie restore [--no-agents] [--no-library] <file> put a backup in on this machine
+                                                     --sign-ins on backup: the subscriptions' and plugins' sign-ins too, sealed (off unless given); --no-sign-ins on restore leaves them out
   magpie uninstall [--yes]                           disconnect every agent, putting back what each had, then remove magpie's service and files
   magpie webdav [on <address>|set k=v…|now|off]      the same, kept the same on every computer through a WebDAV folder (magpie webdav help)
   magpie s3 [on s3://<bucket>[/<prefix>]|set k=v…|now|off]   the same through an S3-compatible bucket: AWS, R2, B2, MinIO… (magpie s3 help)
@@ -90,7 +94,7 @@ const usage = `magpie — one place to pick every agent's model
                                   or only the models ticked for it, a new one off until it is ticked
   magpie search [add <api> <key>|rm <api>]   Tavily, Brave, Exa, Firecrawl, You.com, DeepSeek, Doubao Search (Volcengine), Yuanbao Search (Tencent Cloud) or SearXNG for web search when no provider can search
   magpie groups                   routing groups: several models agents pick as one, group/<id>
-  magpie group add <name> models=<m1>,<m2> [routing=smart|order|rotate|usage|pace|weight|free|fast|cheap] [stays=auto|session|turn|off]
+  magpie group add <name> models=<m1>,<m2> [routing=smart|order|rotate|usage|pace|weight|free|fast|cheap|drain] [stays=auto|session|turn|off]
   magpie group <id> | set <id> k=v… | rm <id>   show, change or remove one (magpie group help for more)
   magpie accounts [agent] [--json]  every subscription magpie knows, with each one's allowance used and when it resets
   magpie accounts add <agent>     sign in to one more Claude, ChatGPT or Google (Gemini CLI, Antigravity) subscription
@@ -124,7 +128,7 @@ const usage = `magpie — one place to pick every agent's model
   magpie cpu [<file>] [--seconds N]   a Go CPU profile of the running magpie over 30s (5..120) while you use it, for a report of it using too much CPU
   magpie goroutines [<file>]      every goroutine of the running magpie, its stack and how long it waited, for a report of it stuck at something
   magpie log [--path] [-n N] [-f]  where magpie's logs are, to send with a report: the app's (app.log), the service's; -n prints the app log's last N lines, -f follows it
-  magpie gateway-key list|add <name> [--read-only]|rotate <id>|remove <id>   manage the keys clients use to call a shared gateway
+  magpie gateway-key list|add <name> [--read-only]|rotate <id> [--key -]|remove <id>   manage the keys clients use to call a shared gateway
   magpie gateway-key limit <id> [list|off|reset [n]|remove <n>|[add] day|week|month|<N>d|<N>h --tokens N --cost USD --cache-reads]   a key's own limits, and what it used
   magpie gateway-key models <id> [all|<provider>/<model>|<provider>/* ...]   the models a key may use, every one unless it names some
   magpie gateway-key quotas <id> [on|off]   whether a key held to a budget, models or accounts is told the quotas of what it may use
@@ -133,6 +137,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie gateway-key issue --ttl 1h [--name n] [--models a,b] [--accounts a,b] [--tokens N] [--cost USD] [--read-only] [--from <id>] [--json]
                                          a short-lived key (1m to 30 days) that stops working by itself; --from holds it to a key that issues keys; prints the key
   magpie gateway-key issuer <id> [on|off]   let a key issue short-lived keys under itself (POST /v1/magpie/keys with it), each held to its models, accounts, limits and life
+  magpie gateway-key oidc add --key <id> --repo owner/name [--ref refs/heads/main] [--environment name] [--claim name=value]… [--ttl 1h] [--issuer URL] [--audience aud]
+                                         let a CI job's OIDC token (GitHub Actions by default) be traded for a key issued under <id> (POST /v1/magpie/keys/oidc); oidc list | remove <rule id>
   magpie mcp image                the image and video generation MCP server an agent is given from the library (stdio)
   magpie tools [<name>]           the tools magpie's MCP servers give agents (images, vision, web search, plugins'), with their parameters
   magpie tool <name> [--<param> <value>…] [<words>] [-o <file|folder>] [--json]   call one through the running magpie; an image or video it makes is saved
@@ -151,6 +157,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie statusline [<provider|account>]   one line for Claude Code's status line: the session's model and each account's windows
   magpie sync                     refresh the model catalog and vendor model lists
   magpie agents                   list every supported agent
+  magpie settings [list|get <key>|set <key> <value>|reset <key>] [--json]
+                                  every setting the window's Settings page saves, read and set as it saves them (magpie settings help)
   magpie update [check] [--proxy <url>] [--mirror <prefix>]
                                   install the newest release (check: only say if there is one); --proxy: an
                                   http(s):// or socks5:// proxy for it; --mirror: a GitHub download mirror put
@@ -334,6 +342,12 @@ func run(args []string) error {
 			if len(args) > 1 && args[1] == "browser" {
 				return browsermcp.Run(args[2:])
 			}
+			if len(args) > 1 && args[1] == "search" {
+				return browsermcp.RunSearch(args[2:])
+			}
+			if len(args) > 1 && args[1] == "vision" {
+				return browsermcp.RunVision(args[2:])
+			}
 			return imagemcp.Run(args[1:])
 		case "claude-mcp-helper": // internal: stdio MCP subprocess spawned by Claude Code
 			return claudebridge.RunMCP(args[1:])
@@ -358,6 +372,12 @@ func run(args []string) error {
 				return uninstallData(args[2:])
 			}
 		}
+	}
+	// magpie serve beside another magpie serving the gateway (the app, a
+	// service, the copy an update left) waits for the port before it moves
+	// or starts anything, rather than doing it all to fail to bind (#4938)
+	if len(args) > 0 && args[0] == "serve" && plainServe(args[1:]) {
+		awaitGatewayFree(gatewayFreeEvery)
 	}
 	startUp()
 	// a provider added, edited or removed, or a list fetched anew, reaches
@@ -388,6 +408,8 @@ func run(args []string) error {
 	gateway.CodexDesktopChanged = agent.SyncCatalogSoon
 	// the setup kept the same on every computer, by whichever serves
 	gateway.WhileServing = append(gateway.WhileServing, davsync.Run)
+	// and the setup backed up into a folder here by itself (jwaitq)
+	gateway.WhileServing = append(gateway.WhileServing, backup.RunAuto)
 	// and dsh's patch lists, which dsh reads live: a route left behind by
 	// something else writing the file fails every session there until
 	// magpie writes its own list again
@@ -398,6 +420,10 @@ func run(args []string) error {
 	// and Claude Science's daemon, which a restart of the computer ends,
 	// started on the gateway again while it is connected
 	gateway.WhileServing = append(gateway.WhileServing, agent.KeepClaudeScience)
+	// and the Claude Code magpie downloaded for a machine with none (a
+	// server's, a container's), at Claude Code's newest release: its runs
+	// turn its own updater off
+	gateway.WhileServing = append(gateway.WhileServing, claudecode.KeepCurrent)
 	// and the request archive, when it is on, goes to the bucket sync is to
 	gateway.ArchiveBucket = func() (gateway.Putter, bool) {
 		if b, ok := davsync.S3Bucket(); ok {
@@ -477,7 +503,7 @@ func run(args []string) error {
 		fmt.Println(green.Render("✓"), "catalog saved to", catalog.CachePath())
 		refreshLive(ctx)
 		return nil
-	case "save", "use", "rm", "profiles":
+	case "save", "use", "rm", "rename", "profiles":
 		return profiles(args)
 	case "import":
 		return importCmd(args[1:])
@@ -531,6 +557,8 @@ func run(args []string) error {
 		return githubCmd(args[1:])
 	case "claude-code":
 		return claudeCodeCmd(args[1:])
+	case "settings":
+		return settingsCmd(args[1:])
 	}
 
 	// the agent of a plugin that is gone (deleted on disk) is no agent
@@ -926,6 +954,17 @@ func profiles(args []string) error {
 			return err
 		}
 		fmt.Println(green.Render("✓"), "deleted profile", bold.Render(args[1]))
+		return nil
+	case "rename":
+		// a flag is never taken for a name to write (magpie snow --help
+		// wrote "--help" into a profile)
+		if len(args) != 3 || strings.HasPrefix(args[2], "-") {
+			return fmt.Errorf("usage: magpie rename <old> <new>")
+		}
+		if err := profile.Rename(args[1], args[2]); err != nil {
+			return err
+		}
+		fmt.Println(green.Render("✓"), "renamed profile", bold.Render(args[1]), "to", bold.Render(args[2]))
 		return nil
 	}
 	return nil

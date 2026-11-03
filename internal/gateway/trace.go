@@ -55,10 +55,17 @@ type Route struct {
 	imageProvider string
 	// turn: a request of an agent's turn, for the notification that it is
 	// done (turns); dirOf, the folder its body says, read once as a turn
-	// starts; tools, whether its reply called a tool
-	turn          bool
-	dirOf         func() string
-	tools         *toolScan
+	// starts; tools, whether its reply called a tool; offFeed, it left
+	// the trace unfinished (drop, trim) and the route-events feed was
+	// told it went, so it hears no more of it
+	turn    bool
+	offFeed bool
+	dirOf   func() string
+	tools   *toolScan
+	// window: the context window of the model the try under way went to,
+	// known as it goes out, so a request still answering shows how full
+	// its window is (livePrompt) and not only once it is done
+	window        int
 	Seq           int64        `json:"seq"` // the trace's count when it last changed
 	ID            int64        `json:"id"`
 	Time          time.Time    `json:"time"`
@@ -184,6 +191,10 @@ type RouteUsage struct {
 	// CacheUnknown: the vendor counted no cache tokens, so the Routing
 	// page shows no hit rate rather than 0% (Kiro, zeewell on X)
 	CacheUnknown bool `json:"cache_unknown,omitempty"`
+	// Credits is what the reply said the request cost in its plan's
+	// credits (WorkBuddy's usage.credit, #2512), the Routing page's as
+	// the Usage page's; nil when it said none (jiabubu on Discord)
+	Credits *float64 `json:"credits,omitempty"`
 }
 
 // PricingRecord lets the routing view reuse the ledger's effective prices.
@@ -314,7 +325,9 @@ type Weighed struct {
 	// allowance (#3749)
 	Window int `json:"window,omitempty"`
 	// DueBy: "reset" when Due is when an auto-used Codex reset about to
-	// run out starts the windows again, sooner than they renew (#717)
+	// run out starts the windows again, sooner than they renew (#717);
+	// "expiry" when it is when credits in them expire, sooner than they
+	// renew (Allowance.Pace)
 	DueBy string `json:"dueBy,omitempty"`
 	// Restarts: when that reset starts them again, set when it is sooner
 	// than its biggest window renews — Smart goes by it then (#718)
@@ -323,8 +336,10 @@ type Weighed struct {
 	// own list of models leaving it out (#474)
 	Barred bool `json:"barred,omitempty"`
 	// Held: left out as the gateway key asking may not use its account or
-	// key (#905)
-	Held bool `json:"held,omitempty"`
+	// key (#905), or a routing group it was reached through is held to
+	// other accounts (Group.Accounts): HeldBy names that group
+	Held   bool   `json:"held,omitempty"`
+	HeldBy string `json:"heldBy,omitempty"`
 	// Capped: left out as held at the usage cap the user set on the
 	// account, this cap in percent; Used is then its fullest window's
 	// share, CapBack when the last window at or past it renews
@@ -337,10 +352,29 @@ type Weighed struct {
 	// told, why: not read yet, the read failed, or too old near its cap
 	// (provider.Provider.CapCareful)
 	Unread string `json:"unread,omitempty"`
+	// SpendCap: held (Capped, at 100) as the key has spent the spend cap
+	// set on it, in USD: Spent of it over SpendPeriod (day, month or
+	// total, counted from SpendSince)
+	SpendCap    float64    `json:"spendCap,omitempty"`
+	Spent       float64    `json:"spent,omitempty"`
+	SpendPeriod string     `json:"spendPeriod,omitempty"`
+	SpendSince  *time.Time `json:"spendSince,omitempty"`
 	// Credits: a Codex account that goes on past its allowance on its
 	// credits, and is let spend them: all but used up, it still answers,
 	// and goes before those used up with nothing to go on with
 	Credits bool `json:"credits,omitempty"`
+	// CreditsLast: such an account, on its credits now, that the user set
+	// to spend them only after everything else: tried after every
+	// candidate not on its credits (restLast)
+	CreditsLast bool `json:"creditsLast,omitempty"`
+	// Busy: the load its plugin reported for the model, a percent over
+	// the user's settings.BusyLoad, so it was tried after every ready
+	// candidate that isn't (restLast)
+	Busy float64 `json:"busy,omitempty"`
+	// CreditsFirst: such an account (Credits) the user set to spend its
+	// credits before another account: all but used up, it keeps its
+	// place, new conversations and kept ones included
+	CreditsFirst bool `json:"creditsFirst,omitempty"`
 	// Rank: its place in its provider's own list of accounts or keys, the
 	// order the provider's page shows and a drag sets (#217); routing may
 	// weigh them in another
@@ -348,6 +382,10 @@ type Weighed struct {
 	// Aside: a key made for another protocol than the keys routed over,
 	// tried only after them
 	Aside bool `json:"aside,omitempty"`
+	// Reserve: an account or key held back, its provider's accounts at
+	// once (provider.AtOnce, this many) taken by those before it in the
+	// user's order: tried, aside, only after they all failed
+	Reserve int `json:"reserve,omitempty"`
 	// NoURL: its keys are all set to this protocol, which its provider has
 	// no URL for, so it was tried on the URLs it has (#1702)
 	NoURL provider.Protocol `json:"noURL,omitempty"`
@@ -385,6 +423,10 @@ type Try struct {
 	// first text, when it streamed any (#196)
 	TTFT      int64 `json:"ttft,omitempty"`
 	FirstText int64 `json:"firstText,omitempty"`
+	// firstMs: ms from Start to the first content, as it came, while the
+	// try still streams (firstContent); the route-events feed's alone,
+	// TTFT being told once the try is done
+	firstMs int64
 	// SentBy: what sent its request to the vendor when magpie's own
 	// client didn't, so it has no Net and the Routing page says why
 	// (sentBy)
@@ -479,7 +521,7 @@ type planned struct {
 
 func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from provider.Protocol) Weighed {
 	w := Weighed{ID: c.rest, Provider: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Model: c.model, Fixed: c.effort, Fast: c.fast,
-		Routing: p.Routing, Fallback: fallback, Shared: c.rest != p.ID, Rank: c.rank, NoURL: c.noURL}
+		Routing: p.Routing, Fallback: fallback, Shared: c.rest != p.ID, Rank: c.rank, NoURL: c.noURL, Reserve: c.reserve}
 	switch {
 	case c.p.Account != nil:
 		w.Kind, w.Who, w.Agent, w.Plan = "account", c.p.Account.User, c.p.Account.Agent, c.p.Account.Plan
@@ -498,7 +540,7 @@ func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from 
 		w.Kind = "provider"
 	}
 	if l, ok := wg.lefts[c.allowanceKey()]; ok {
-		w.Known, w.Used, w.Renews, w.Pace, w.Credits = true, l.used, l.renews, l.pace, l.credits
+		w.Known, w.Used, w.Renews, w.Pace, w.Credits, w.CreditsFirst = true, l.used, l.renews, l.pace, l.credits, l.first
 		if !l.fullest.IsZero() {
 			ur := l.fullest
 			w.UsedRenews = &ur
@@ -513,8 +555,11 @@ func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from 
 		if !l.due.IsZero() {
 			due := l.due
 			w.Due = &due
-			if l.dueRestart {
+			switch {
+			case l.dueRestart:
 				w.DueBy = "reset"
+			case l.dueExpiry:
+				w.DueBy = "expiry"
 			}
 		}
 		if rs := l.restarts; !rs.IsZero() && len(l.soon) > 0 && rs.Equal(l.soon[0]) {
@@ -549,6 +594,8 @@ type trace struct {
 	routes []*Route
 	wake   chan struct{}
 	totals Totals
+	// activity is the route-events feed's last changes (route_events.go)
+	activity routeActivityLog
 	// bodies are the last requests' masked bodies, for their prompts'
 	// text (PromptText): in memory only, never in the history
 	bodies []keptBody
@@ -652,6 +699,7 @@ func (t *trace) begin(r Route) *Route {
 	t.trim()
 	t.changed()
 	rp.Seq = t.seq
+	t.noteActivity(rp, "request_started")
 	return rp
 }
 
@@ -725,7 +773,13 @@ func (t *trace) trim() {
 			}
 			i = 0
 		}
+		gone := t.routes[i]
 		t.routes = slices.Delete(t.routes, i, i+1)
+		if !gone.Done {
+			// a request still going is dropped only past twice traceKeep:
+			// the route-events feed is told it went, as it hears of no end
+			t.noteDropped(gone)
+		}
 	}
 }
 
@@ -737,6 +791,9 @@ func (t *trace) drop(rt *Route) {
 	if i := slices.Index(t.routes, rt); i >= 0 {
 		t.routes = slices.Delete(t.routes, i, i+1)
 		t.changed()
+		if !rt.Done {
+			t.noteDropped(rt)
+		}
 	}
 }
 
@@ -758,6 +815,7 @@ func (t *trace) update(r *Route, f func(r *Route)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	done := r.Done
+	before := activityOf(r)
 	f(r)
 	if r.Done && !done {
 		t.totals.Requests++
@@ -769,7 +827,7 @@ func (t *trace) update(r *Route, f func(r *Route)) {
 		if r.Status >= 400 || r.Error != "" {
 			t.totals.Errors++
 		}
-		t.turns.end(r, r.Status < 400 && r.Error == "" && !r.tools.called(), time.Now())
+		t.turns.end(r, turnFinal(r), time.Now())
 		if keepsRoutes() {
 			c := *r
 			c.Order = append([]Weighed{}, r.Order...) // [] for none: the GUI reads it as a list
@@ -781,6 +839,9 @@ func (t *trace) update(r *Route, f func(r *Route)) {
 	}
 	t.changed()
 	r.Seq = t.seq
+	if after := activityOf(r); before != after {
+		t.noteActivity(r, activityChange(before, after))
+	}
 }
 
 // gatewayTrace tells this gateway's routing to another magpie on the same
@@ -988,5 +1049,5 @@ func routeUsage(id, model string, u Usage) []RouteUsage {
 	}
 	return append(out, RouteUsage{Provider: id, Model: model, Input: u.Input, Output: u.Output,
 		CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Reasoning: u.Reasoning,
-		CacheUnknown: u.cacheNotCounted()})
+		CacheUnknown: u.cacheNotCounted(), Credits: u.Credits})
 }

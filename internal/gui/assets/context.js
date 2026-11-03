@@ -206,6 +206,7 @@
     for (const e of all) {
       if (!e.target.isConnected) { cardSizes.unobserve(e.target); continue; }
       const card = e.target, w = e.contentRect.width;
+      if (!w) continue; // out of sight (#4652)
       cardWidth[card.dataset.place] = w;
       // on the next frame: a class changed in the observer's own call
       // changes the card's height, which WebKit reports as a
@@ -723,7 +724,7 @@
         parts = cur = null;
         return;
       }
-      rid = r.id;
+      rid = r;
       const window = p.window || 0;
       const full = window ? p.tokens / window : 0;
       const live = !r.done;
@@ -789,8 +790,13 @@
         if (r.agent) route.append(el("span", "ctx-sep", "›"));
         route.append(what);
       }
-      head.append(route);
-      head.append(st);
+      // the route and the state go together: where the title leaves them
+      // too little room they take a line of their own, the model id cut
+      // to fit there, and nothing is drawn over the title (packinggoods on
+      // Discord: in a narrow window the provider's icon sat on it)
+      const end = el("span", "ctx-end");
+      end.append(route, st);
+      head.append(end);
 
       // how full, and the cache
       const top = el("div", "ctx-top");
@@ -970,11 +976,7 @@
 
   // A part of the card clicked opens what the request sent there, read
   // from the request's body: an item alone (a tool, a file, a turn), or
-  // the part's items, each opened to its text. magpie keeps the last few
-  // requests' bodies, masked, in memory only, so an older one's text is
-  // gone. A long text comes a stretch at a time, so a prompt of megabytes
-  // doesn't hold the window up.
-  // in ctxtext.js, loaded when a part is first opened
+  // the part's items, each opened to its text (ctxtext.js, loaded then)
   const openCtxText = (...a) => import("./ctxtext.js").then((m) => m.open({ fmtK, partName, itemName, itemLabel, tagOf }, ...a)).catch(statusErr);
   window.openCtxText = openCtxText;
   window.ctxFmt = fmtK;
@@ -1282,9 +1284,8 @@
     const same = String(cur) === String(best);
     const saves = r.cost > 0 ? (r.cost - r.low) / r.cost : 0;
     const set = a.setting || {};
-    // a model's own Compact at is where Codex runs, over Long conversations:
-    // the value put in there isn't "In use", and putting another in moves
-    // nothing (hoobnn on Discord: "In use" for 170K beside "Now 430K")
+    // a model's own Compact at is where Codex runs, over Long conversations
+    // (hoobnn on Discord: "In use" for 170K beside "Now 430K")
     const own = a.own;
     const held = !!(set.locked || own);
     const applied = !own && set.ours && String(set.value) === String(best);
@@ -1346,6 +1347,8 @@
       why.textContent = t("{quick} of your calls came within 5 minutes of the one before, {pause} after a pause of 5 to 60 minutes.", { quick: pct(f.quick || 0), pause: pct(f.pause || 0) });
     }
     row.append(why);
+    // one with its own Compact at, which Use doesn't move (hoobnn)
+    for (const m of a.apart || []) row.append(el("p", "ctx-tune-caveat ctx-tune-apart", t("{model} compacts at its own {value}, which this doesn't move", { model: m.model, value: fmtK(m.value) })));
     // a window advised is weighed by tokens alone: what a compaction loses of
     // the task isn't measured, and a smaller one compacts more often (#1854)
     if (a.compact && (!same || lean)) row.append(el("p", "ctx-tune-caveat", timed
@@ -1353,11 +1356,13 @@
       : t("A token estimate only: it doesn't measure how well the agent keeps the task after a compaction. The lower the window, the more often it compacts.")));
 
     const foot = el("div", "ctx-tune-foot");
+    // the advice magpie put in is "In use" in every range, Now at it too
+    // (hoobnn: over 7 and 30 days it read "Already the leanest")
     const verdict = !lean && (same || applied)
       ? el("span", "ctx-chip good", "")
       : el("span", "ctx-chip info", "");
     verdict.append(el("i"), lean ? t("Not the leanest: {range} spends the fewest tokens", { range: bandName })
-      : same ? t("Already the leanest for how you work") : applied ? t("In use") : t("{pct} fewer tokens · {tokens} over the range", { pct: pct(saves), tokens: fmtK(Math.round(r.cost - r.low)) }));
+      : applied ? t("In use") : same ? t("Already the leanest for how you work") : t("{pct} fewer tokens · {tokens} over the range", { pct: pct(saves), tokens: fmtK(Math.round(r.cost - r.low)) }));
     foot.append(verdict, el("span", "grow"));
     const note = el("div", "ctx-tune-src");
     title.after(note);

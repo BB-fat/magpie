@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,6 +24,10 @@ type groupsJSON struct {
 	// Deciders: the decision providers' models (Jev), which may only be a
 	// group's classifier
 	Deciders []modelRef `json:"deciders"`
+	// Drawers: the providers' image models (gateway.OfferedDrawers) not
+	// among Models, which a group may hold to draw with at the images API
+	// (jzw690 on X); agents are never offered them for a conversation
+	Drawers []modelRef `json:"drawers"`
 	// Found: magpie finds groups on its own (provider.AutoGroupsOn)
 	Found bool `json:"found"`
 	// Skip: the providers kept out of found groups, by id
@@ -48,6 +53,10 @@ type groupsJSON struct {
 	// Imported: import's answer, the group added and what of the text
 	// this magpie has none of (provider.ImportGroup)
 	Imported *provider.Imported `json:"imported,omitempty"`
+	// Accounts: by provider id, the accounts and keys a group may be held
+	// to (Group.Accounts), as a gateway key's list has them (#905): each
+	// provider with more than one, or one a group names already
+	Accounts map[string][]keyModelJSON `json:"accounts"`
 }
 
 type skippableJSON struct {
@@ -130,6 +139,10 @@ type memberJSON struct {
 	// own `images` decides then). Named apart from the Gateway page's
 	// `imageSet`, which means the user answered for the model themselves
 	ImagesUnknown bool `json:"imagesUnknown,omitempty"`
+	// Free: Free first and Cheapest first count it as costing nothing
+	// (provider.FreeModel): its provider is the user's Free for me, or its
+	// vendor serves it free. The Routing page tags it (jiabubu on Discord)
+	Free bool `json:"free,omitempty"`
 }
 
 type modelRef struct {
@@ -245,9 +258,35 @@ type clockJSON struct {
 	Offset int    `json:"offset"`
 }
 
+// groupAccounts is groupsJSON's Accounts: the accounts and keys of each
+// provider with more than one, which a group may be held to some of, and
+// of each one a group in gs names already, so its choice can be undone.
+func groupAccounts(gs []provider.Group) map[string][]keyModelJSON {
+	named := map[string]bool{}
+	for _, g := range gs {
+		for _, a := range g.Accounts {
+			if pid, _, ok := strings.Cut(a, "/"); ok {
+				named[strings.ToLower(pid)] = true
+			}
+		}
+	}
+	out := map[string][]keyModelJSON{}
+	for _, p := range provider.All() {
+		refs := p.AccountIDs()
+		if len(refs) < 2 && !named[strings.ToLower(p.ID)] {
+			continue
+		}
+		name := cmp.Or(p.Name, p.ID)
+		for _, a := range refs {
+			out[p.ID] = append(out[p.ID], keyModelJSON{ID: p.ID + "/" + a.ID, Name: a.Shown(p), Provider: p.ID, ProviderName: name, Account: !a.Key, Key: a.Key, Plan: a.Plan})
+		}
+	}
+	return out
+}
+
 func groupsState() groupsJSON {
 	_, offset := time.Now().Zone()
-	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Found: provider.AutoGroupsOn(), Templates: provider.Templates(),
+	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Drawers: []modelRef{}, Found: provider.AutoGroupsOn(), Templates: provider.Templates(),
 		Clock: clockJSON{Zone: provider.LocalZone(), Offset: offset}}
 	for i := range out.Templates {
 		if out.Templates[i].Group.Members == nil {
@@ -267,10 +306,31 @@ func groupsState() groupsJSON {
 	for _, e := range provider.OfferedDeciders(func(id string) bool { return named[id] }) {
 		out.Deciders = append(out.Deciders, modelRef{ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon, Sub: e.Provider.Account != nil})
 	}
+	out.Accounts = groupAccounts(all)
 	served := provider.Served()
+	chat := map[string]bool{}
 	for _, e := range served {
 		if e.Group == "" {
+			chat[e.ID] = true
 			out.Models = append(out.Models, servedRef(e))
+		}
+	}
+	// the image models, as Settings › Images lists them: each provider's
+	// Drawers less those unticked in its editor, but one a group names
+	// already, so its card still reads it. draws: every one, an unticked
+	// one included, which draws all the same
+	draws := map[string]provider.Provider{}
+	for _, p := range provider.All() {
+		if !p.On() || p.DecideOnly() {
+			continue
+		}
+		for _, m := range gateway.Drawers(p) {
+			ref := p.ID + "/" + m.ID
+			draws[ref] = p
+			if chat[ref] || p.DrawerHidden(m.ID) && !named[ref] {
+				continue
+			}
+			out.Drawers = append(out.Drawers, modelRef{ID: ref, Name: cmp.Or(m.Name, m.ID), Provider: p.ID, PName: p.Name, Icon: p.Icon, VendorPicks: gateway.VendorPicksDrawer(p)})
 		}
 	}
 	// every provider's models read once for the groups, not once a group
@@ -338,6 +398,7 @@ func groupsState() groupsJSON {
 				m.CanFast = provider.CanFast(p, model)
 				m.OwnFast = m.CanFast && provider.OwnFast(p, model)
 				m.Fast = m.CanFast && g.IsFast(id)
+				m.Free = p.FreeModel(model)
 				for _, e := range served {
 					if e.Group == "" && e.Provider.ID == p.ID && e.Model == model {
 						m.Context, m.Images, m.ImagesUnknown = e.Context, seesImages(e), imagesUnknown(e)
@@ -345,6 +406,13 @@ func groupsState() groupsJSON {
 						break
 					}
 				}
+				gj.Ready = true
+			} else if p, ok := draws[of]; ok && effort == "" {
+				// an image model its provider's picks leave out: the group
+				// draws on it (gateway.drawingMembers)
+				_, who := onOf(p)
+				_, model, _ := strings.Cut(of, "/")
+				m.Ready, m.Provider, m.Name, m.Icon, m.Model, m.On = true, p.ID, p.Name, p.Icon, model, max(len(who), 1)
 				gj.Ready = true
 			} else if pid, model, ok := strings.Cut(of, "/"); ok {
 				if p, err := provider.Find(pid); err == nil && !p.On() {

@@ -104,7 +104,7 @@ func codebuddyIn(at place) *Agent {
 				if v := cur["model"]; v != "" && !usesMagpie(v) {
 					out = append(out, Option{Value: v, Icon: modelIcon("", v)})
 				}
-				return append(out, viaMagpie("codebuddy", magpieID+"/")...)
+				return withVia(out, "codebuddy", magpieID+"/")
 			},
 		}},
 	}

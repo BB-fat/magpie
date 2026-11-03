@@ -11,8 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/mcpauth"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // The problems of the last change to the library stay on the page until the
@@ -150,17 +152,21 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		writeJSON(rw, v)
 	})
 	mux.HandleFunc("GET /api/library/skill", func(rw http.ResponseWriter, r *http.Request) {
-		text, err := library.SkillText(r.URL.Query().Get("name"))
+		f, err := library.ReadSkillFile(r.URL.Query().Get("name"), r.URL.Query().Get("file"))
 		if err != nil {
 			fail(rw, err)
 			return
 		}
-		writeJSON(rw, map[string]string{"text": text, "path": library.SkillPath(r.URL.Query().Get("name"))})
+		writeJSON(rw, f)
 	})
 	// the market: what it offers for a search, and each skill's description
 	// once asked for, which skills.sh gives one at a time
 	mux.HandleFunc("GET /api/library/market/servers", func(rw http.ResponseWriter, r *http.Request) {
 		list, err := library.MarketServers(r.URL.Query().Get("q"))
+		for i := range list {
+			// magpie's own that can't answer yet says why on its row
+			list[i].Unready = gateway.OwnUnready(list[i].ID)
+		}
 		m := marketOf(list, err)
 		m.Custom = library.CustomAt(r.URL.Query().Get("q"), list)
 		writeJSON(rw, m)
@@ -452,6 +458,7 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			Subagent library.Subagent
 			Agent    string            // the agent whose own skill is in the library's way
 			App      string            // the app the MCP hub is added to (servers/hub-open)
+			Note     string            // what the MCP router says of itself (servers/hub-note), or a skill's note (skills/note)
 			ID       string            // a market server's, or a market skill's in its repository
 			Values   map[string]string // what a market server needs
 			Dir      string            // a project's folder
@@ -462,6 +469,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			// Replace updates a skill changed here all the same, its
 			// changed version kept with the backups (#1449)
 			Replace bool
+			// a skill's file saved: its place in the skill, its new text,
+			// and what it held when the page opened it
+			File, Text, Was string
 			library.InstructionsChange
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -484,6 +494,10 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		case "servers/hub":
 			// magpie as the agents' one MCP server (#2679)
 			res, err = library.SetMCPHub(in.On)
+		case "servers/hub-note":
+			// what the router says of itself to the agents, this
+			// computer's own (settings.RouterNote)
+			err = settings.SetRouterNote(in.Note)
 		case "servers/hub-open":
 			// the hub added to another app through its install link,
 			// built here: the page names the app, never the link
@@ -539,8 +553,14 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.UpdateSomeSkills(in.Names)
 		case "skills/agents":
 			res, err = library.SkillAgents(in.Name, in.Agents)
+		case "skills/save":
+			// a skill's file edited in the page, given to its agents again
+			res, err = library.SaveSkillFile(in.Name, in.File, in.Text, in.Was)
 		case "skills/here":
 			res, err = library.SkillHere(in.Name, in.On)
+		case "skills/note":
+			// the user's own note on it, which no agent is given
+			res, err = library.SkillNote(in.Name, in.Note)
 		case "skills/agents-all":
 			res, err = library.EverySkillAgents(in.Agents, in.On)
 		case "skills/agents-some":
@@ -572,6 +592,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.UseLibrarySkills(oneOrMore(in.Name, in.Names), in.Agent)
 		case "skills/how":
 			res, err = library.SetSkillHow(in.Agent, in.How)
+		case "skills/where":
+			// each agent's own folder, or ~/.agents/skills too (skills_shared.go)
+			res, err = library.SetSkillsWhere(in.How)
 		case "skills/keep-own":
 			res, err = library.KeepAgentSkills(oneOrMore(in.Name, in.Names), in.Agent)
 		case "market/server":

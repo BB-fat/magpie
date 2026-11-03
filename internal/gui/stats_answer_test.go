@@ -87,6 +87,9 @@ func TestSameAnswerNotHeldWhole(t *testing.T) {
 // writeJSONRows holds no answer-sized buffer: the list goes out a row at a
 // time, and the whole answer was 25 MB of a warm start's live heap (#2278).
 func TestJSONRowsNotHeldWhole(t *testing.T) {
+	if raceOn {
+		t.Skip("-race: sync.Pool drops what it holds, so allocations are not what a build allocates")
+	}
 	big := string(bytes.Repeat([]byte("x"), 64<<10))
 	rows := make([]rowsBufRow, 64)
 	for i := range rows {

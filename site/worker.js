@@ -23,6 +23,10 @@
 //                          a picture a plugin, market or import link names,
 //                          fetched here so its host sees Cloudflare, not the
 //                          user (the app fetches every remote icon this way)
+//   /docs/contributors, /docs/zh/contributors, /docs/ja/contributors
+//                          the contributors page, its table put in from
+//                          public/contributors/<lang>.html (credits-cli.mjs
+//                          wall, at each deploy)
 //   /download              the Apple Silicon dmg
 //   /download/mac-arm64    the same;  /download/mac-intel  the Intel dmg
 //   /download/windows      the Windows app (x64);  /download/windows-arm64
@@ -146,7 +150,7 @@ export default {
       // a page not written in that language yet stays English
       if (DOC_LANGS.includes(lang) && (await env.ASSETS.fetch(new Request(new URL(there, url), { method: "HEAD" }))).ok)
         return new Response(null, { status: 302, headers: { Location: there + url.search, ...vary } });
-      const res = beacon(await env.ASSETS.fetch(req));
+      const res = beacon(await withWall(await env.ASSETS.fetch(req), env, url));
       const out = new Response(res.body, res);
       out.headers.append("Vary", "Accept-Language, Cookie");
       out.headers.set("Cache-Control", "no-cache");
@@ -171,7 +175,7 @@ export default {
     }
     if (url.pathname === "/install.sh" && req.method === "GET")
       ctx.waitUntil(capture("magpie site install script", { client: client(req), country: country(req) }));
-    return beacon(await env.ASSETS.fetch(req));
+    return beacon(await withWall(await env.ASSETS.fetch(req), env, url));
   },
   // the cron (wrangler.jsonc's triggers) keeps the ledger the Stable
   // channel is chosen from
@@ -361,6 +365,22 @@ export async function relay(req, url) {
 // Privacy Control. Its project is the daily count's.
 const WEB_ANALYTICS = `<script>if(!(navigator.doNotTrack=="1"||window.doNotTrack=="1"||navigator.globalPrivacyControl)){!function(t,e){var o,n,p,r;e.__SV||(window.posthog&&window.posthog.__loaded)||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+" (stub)"},o="capture register unregister opt_out_capturing opt_in_capturing has_opted_out_capturing set_config".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);posthog.init("${POSTHOG_KEY}",{api_host:location.origin+"/r",ui_host:"https://us.posthog.com",persistence:"localStorage",person_profiles:"identified_only",capture_pageview:true,capture_pageleave:true,autocapture:true,enable_heatmaps:true,capture_dead_clicks:true,capture_exceptions:true,capture_performance:{web_vitals:true,network_timing:true},session_recording:{maskAllInputs:true},disable_surveys:true,respect_dnt:true})}</script>`;
 const BEACON = `<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "c09e76abf16b40b2aa5571c196efb847"}'></script>` + WEB_ANALYTICS;
+
+// The contributors page: its #wall gets the table credits-cli.mjs rendered
+// for that language at deploy. Without it (a deploy that couldn't build
+// it) the page keeps the line it is written with.
+const WALL_PAGE = /^\/docs\/(?:(zh|ja)\/)?contributors(?:\.html)?$/;
+export async function withWall(res, env, url) {
+  const m = url.pathname.match(WALL_PAGE);
+  if (!m || !res.ok || !(res.headers.get("Content-Type") || "").startsWith("text/html")) return res;
+  let table = "";
+  try {
+    const got = await env.ASSETS.fetch(new Request(new URL(`/contributors/${m[1] || "en"}.html`, url)));
+    if (got.ok) table = await got.text();
+  } catch {}
+  if (!table.includes("<table")) return res;
+  return new HTMLRewriter().on("#wall", { element: (el) => el.setInnerContent(table, { html: true }) }).transform(res);
+}
 
 function beacon(res) {
   if (!(res.headers.get("Content-Type") || "").startsWith("text/html")) return res;

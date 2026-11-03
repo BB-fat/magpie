@@ -50,7 +50,7 @@ var grokModelTable = `model."` + magpieID + "/"
 func grokModelTables(v1 string, had, wrote map[string]int) ([]edit.Table, map[string]int) {
 	var out []edit.Table
 	st, gave := settings.Load(), map[string]int{}
-	for _, m := range magpieModels("grok") {
+	for _, m := range sharedModels("grok") {
 		kvs := []edit.KV{
 			{Path: "model", Value: m.ID},
 			{Path: "name", Value: m.Name},
@@ -196,7 +196,7 @@ func grokIn(at place) *Agent {
 			return err
 		}
 		var wrote map[string]int
-		saved := stashLoad()[keyWindows]
+		saved := stashShared()[keyWindows]
 		if saved != "" {
 			json.Unmarshal([]byte(saved), &wrote)
 		}

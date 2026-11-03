@@ -120,6 +120,9 @@ body.window .sm-group .row.sm-sess { padding-left: 32px; }
 .sm-provider-list li .name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sm-provider-list li .note { flex: none; font-size: 11px; color: var(--faint); }
 .sm-provider-list { max-height: min(300px, 45vh); overflow-y: auto; }
+.sm-provider-pick { grid-column: 1 / -1; min-width: 0; display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; }
+.sm-provider-pick .grow { flex: 1; }
+.sm-provider-pick .text { flex: none; font-size: 12px; }
 /* Recording gateway conversations (#1355): a setting card above the list,
    its switch, what it keeps and where, and a labelled delete */
 .list.row.sm-record { gap: 6px 12px; min-height: 48px; padding: 9px 11px 9px 13px; height: auto; flex-wrap: wrap; }

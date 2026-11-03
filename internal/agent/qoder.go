@@ -189,7 +189,7 @@ func qoderAt(at place, b qoderBuild) *Agent {
 				return edit.SetJSON(path, edit.KV{Path: "model.name", Value: v})
 			},
 			Options: func(cur map[string]string) []Option {
-				return append(ownOptions("", cur["model"]), viaMagpie(b.id, magpieID+"/")...)
+				return withVia(ownOptions("", cur["model"]), b.id, magpieID+"/")
 			},
 		}, {
 			// the effort of the model in use, in its model.preferences
@@ -297,7 +297,7 @@ func qoderProvider(agent, model string) map[string]any {
 // at v1.
 func qoderProviderAt(agent, model, v1 string) map[string]any {
 	var ms []map[string]any
-	for _, m := range magpieModels(agent) {
+	for _, m := range sharedModels(agent) {
 		caps := map[string]any{"tools": true, "vision": m.Images}
 		var levels []string
 		for _, e := range m.Efforts {

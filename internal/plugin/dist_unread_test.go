@@ -120,3 +120,44 @@ func TestDistReadFailedIsntMissing(t *testing.T) {
 		t.Fatalf("npmAsk of a package neither has: %v; want errNotFound", err)
 	}
 }
+
+// A "not on npm" an older build kept (one that took a cut-off dist read
+// for the branch having nothing) is unknown once it is an hour old and
+// the branch still can't be read: neither the listings (InfoCached) nor
+// Info give it, so the page offers Install rather than Coming soon
+// (zhudabao8433 on Discord: PowerContext, installable the day before).
+// One said within the hour still stands.
+func TestStaleMissingIsUnknownWhileDistUnread(t *testing.T) {
+	sandbox(t)
+	const pkg = "@magpie-community/gateway-powercontext"
+	const fresh = "@magpie-community/opencode-nothing-auth"
+	npmHasNothing(t)
+	var fail atomic.Bool
+	fail.Store(true)
+	open := gatedDist(t, pkg, []string{"0.2.0"}, &fail)
+	open()
+	wait := distWait
+	distWait = 0
+	t.Cleanup(func() { distWait = wait })
+	npmEach, npmAll = 5*time.Second, 10*time.Second
+
+	npmMu.Lock()
+	npmCached()[pkg] = npmEntry{NPM{}, time.Now().Add(-2 * time.Hour)}
+	npmCached()[fresh] = npmEntry{NPM{}, time.Now().Add(-time.Minute)}
+	npmMu.Unlock()
+
+	if info, ok := InfoCached([]string{pkg})[pkg]; ok {
+		t.Fatalf("listings give an hours-old \"not on npm\" as %+v; want it unknown", info)
+	}
+	if info, ok := Info(context.Background(), []string{pkg})[pkg]; ok {
+		t.Fatalf("with the dist branch failing the market says %+v from an hours-old answer; want it unknown", info)
+	}
+	if _, ok := InfoCached([]string{fresh})[fresh]; !ok {
+		t.Fatal("a \"not on npm\" said a minute ago was dropped; it stands for the hour")
+	}
+	fail.Store(false)
+	distSettled(t)
+	if info := Info(context.Background(), []string{pkg})[pkg]; info.Version != "0.2.0" {
+		t.Fatalf("once the dist branch answered the market says %+v; want its 0.2.0", info)
+	}
+}

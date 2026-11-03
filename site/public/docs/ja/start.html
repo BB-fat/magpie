@@ -30,7 +30,10 @@
 <link rel="alternate" hreflang="en" href="https://usemagpie.ai/docs/start">
 <link rel="alternate" hreflang="zh" href="https://usemagpie.ai/docs/zh/start">
 <link rel="alternate" hreflang="ja" href="https://usemagpie.ai/docs/ja/start">
+<link rel="alternate" hreflang="x-default" href="https://usemagpie.ai/docs/start">
+<link rel="canonical" href="https://usemagpie.ai/docs/ja/start">
 <link rel="stylesheet" href="/docs.css">
+<meta property="og:site_name" content="magpie">
 <meta property="og:title" content="magpie をはじめる">
 <meta property="og:description" content="手持ちのプロバイダを追加し、エージェントごとにモデルを選ぶ。セットアップを順を追って解説します。">
 <meta property="og:image" content="https://usemagpie.ai/img/og.png">
@@ -141,6 +144,7 @@
     <ul>
       <li><b>モデルをクリック</b>するとピッカーが開きます。モデルはエージェント自身のもの、ルーティンググループ、追加した各プロバイダの順にまとめられています。入力して絞り込むことも、一覧にないモデル id を直接入力することもできます。</li>
       <li><b>推論の強さ</b>は、エージェントが対応している場合（Codex の <em>effort</em>、Pi の <em>thinking</em>）、一覧の下のスライダーで設定します。</li>
+      <li><b>高速モード</b>：高速モードのあるモデルは、その行のスターの横に稲妻ボタンがあります。選択中の行とポインタを合わせた行に表示されます。対象は ChatGPT（Codex）アカウントの GPT モデル、OpenAI キーの GPT と o シリーズのモデル、高速版のある Cursor のモデル、Anthropic キーの Claude Opus、そして priority で提供するとプラグインや別の magpie が示すモデルです。クリックすると、このエージェントがそのモデルに送るすべてのリクエストがベンダーの高速モードになり、速くなる代わりに料金は高めです。エージェントがどの API を使っていても、Codex 自身の <code>/fast</code> と同じ <code>service_tier: "priority"</code>、Claude なら <code>speed: "fast"</code> を付けます。ChatGPT アカウントがそのモデルで Ultrafast を提供していれば、もう一度クリックで Ultrafast、さらにクリックで通常の速度に戻ります。エージェントごとに別々に設定でき、そのモデルのフォールバックはそのまま送られます。ルーティンググループでは、各メンバーの行に同じスイッチがあります。</li>
       <li><b>magpie 経由の Claude Code</b> では、opus・sonnet・haiku の各ティアに個別のモデルを割り当てることもできます。デフォルトではメインのモデルに従います。</li>
     </ul>
     <p>モデルを選ぶと、エージェント自身の設定ファイルに書き込まれます。変更されるのは magpie が必要とするキーだけで、コメント、順序、インデントはそのまま残り、書き込みはアトミックに行われます。</p>
@@ -151,6 +155,7 @@
       <tr><td>OpenCode、MiMo Code、DevEco Code、Pi、Crush</td><td><code>magpie</code> プロバイダのエントリと <code>magpie/provider/model</code></td></tr>
       <tr><td>AtomCode</td><td><code>~/.atomcode/config.toml</code>：<code>magpie</code> プロバイダアカウントと、カタログ内の各モデルのエントリ</td></tr>
       <tr><td>Snow CLI</td><td><code>~/.snow/profiles/magpie.json</code>：<code>magpie</code> プロファイルを作り、使用中のプロファイルにする（Snow App は「Sync Snow CLI API config」で取り込む）</td></tr>
+      <tr><td>QwenPaw</td><td><code>~/.qwenpaw.secret/providers/custom/magpie.json</code> の <code>magpie</code> プロバイダーと、各エージェントの <code>agent.json</code> の <code>active_model</code>。初回の接続後に QwenPaw を再起動</td></tr>
       <tr><td>Gemini CLI</td><td>ゲートウェイを指す <code>GOOGLE_GEMINI_BASE_URL</code>、API キー認証、そしてモデル</td></tr>
     </table></div>
     <p><b>実行中のセッションは、開始時のモデルを使い続けます。</b> エージェントは起動時に設定を読むので、変更は次のセッションから反映されます。Codex は起動時にモデル一覧も作るため、切り替えたら Codex アプリと開いている <code>codex</code> セッションを再起動してください。</p>
@@ -166,27 +171,28 @@
     </figure>
 
     <h3>1 つのプロバイダに複数のアカウントやキー</h3>
-    <p>プロバイダの行を開き、使うアカウントやキーをすべてチェックします。<span class="ui">Routing</span> はリクエストをそれらにどう振り分けるかを決めます：<span class="ui">Smart</span>（デフォルト）、<span class="ui">In order</span>、<span class="ui">In turn</span>、<span class="ui">Least used first</span>、<span class="ui">Weekly pace</span>、<span class="ui">By weight</span>（各アカウントやキーが横で設定した重みで取り分を受けます。たとえば Max アカウントは 5、Pro は 1）、<span class="ui">Speed first</span>（最近いちばん速く応答したキーが先）。<span class="ui">Fallback</span> には、プロバイダのクォータ切れ、レート制限、ダウン時に代わりに使うモデルを並べます。</p>
+    <p>プロバイダの行を開き、使うアカウントやキーをすべてチェックします。<span class="ui">Routing</span> はリクエストをそれらにどう振り分けるかを決めます：<span class="ui">Smart</span>（デフォルト）、<span class="ui">In order</span>、<span class="ui">Until used up</span>（使い切ったら次へ移り、前のものが回復しても戻りません）、<span class="ui">In turn</span>、<span class="ui">Least used first</span>、<span class="ui">Use before expiry</span>、<span class="ui">By weight</span>（各アカウントやキーが横で設定した重みで取り分を受けます。たとえば Max アカウントは 5、Pro は 1）、<span class="ui">Speed first</span>（最近いちばん速く応答したキーが先）。<span class="ui">Fallback</span> には、プロバイダのクォータ切れ、レート制限、ダウン時に代わりに使うモデルを並べます。</p>
 
     <h3>1 つのモデルを複数のプロバイダで</h3>
     <p>グループとは、1 つまたは複数のプロバイダのモデルを、エージェントが 1 つとして選べるようにまとめたものです。ピッカーの <em>Routing groups</em> の下に <code>group/&lt;id&gt;</code> として表示されます。2 つのプロバイダが同じ名前で提供しているモデルは、それだけでグループになります。<span class="ui">Routing</span> タブの <span class="ui">New group</span> では、好きなモデルを組み合わせてグループを作れます。グループで何ができるかは、最初のモデルが基準になります。</p>
     <div class="callout"><b>何もしなくてもできるグループ。</b> すでに持っているモデルを提供する 2 つ目のプロバイダを追加すると（Claude サブスクリプションと Copilot の Claude Opus、DeepSeek 自身の API と OpenRouter の DeepSeek など）、magpie はそれを提供するすべてのプロバイダにまたがるグループ <code>auto/&lt;model&gt;</code>（モデル自身の ID。例: <code>auto/claude-opus-4.6</code>。以前の <code>group/auto-…</code> も引き続き使えます）を自動で作ります。名前はベンダーごとの表記の違い（<code>deepseek/deepseek-chat</code>、<code>deepseek-chat</code>）を吸収して照合されます。エージェントにこれを選ぶとリクエストがすべてに分散されます。不要なものは <code>magpie group rm</code> で非表示にできます。</div>
-    <div class="callout"><b>プロバイダ独自の id に自分の id を。</b> プロバイダによっては <code>deepseek-v4.1-flash-1017</code> や <code>grok-4.6@500k</code> のような独自の id でモデルを提供します。プロバイダの編集画面の <span class="ui">名前と推論レベル</span> で、<span class="ui">同じモデル</span> の隣の <span class="ui">表示 ID</span> に使いたい id を入れて <span class="ui">保存</span>、または <code>magpie model id relay/grok-4.6@500k grok-4.6</code> を実行します。以後 magpie は一覧、ルーティング、他のプロバイダの <code>grok-4.6</code> とまとめた <code>auto/grok-4.6</code> グループ、ゲートウェイキーの制限、使用量の記録をすべて <code>grok-4.6</code> で行い、プロバイダには <code>grok-4.6@500k</code> で問い合わせます。1 つのプロバイダで 1 つの id は 1 つのモデルです。最後に付けたものが有効で、その間プロバイダ自身のその id のモデルは一覧から外れます。<code>magpie model id relay/grok-4.6 --reset</code> で元に戻し、<code>magpie model ids</code> で一覧を表示します。サインインしたサブスクリプションやプラグインのプロバイダでも同じです（<code>magpie model id cursor/deepseek-v41-flash-1017 deepseek-v4.1-flash</code>）。アカウントやプラグインには引き続き元の id で問い合わせます。</div>
+    <div class="callout"><b>プロバイダ独自の id に自分の id を。</b> プロバイダによっては <code>deepseek-v4.1-flash-1017</code> や <code>grok-4.6@500k</code> のような独自の id でモデルを提供します。プロバイダの編集画面の <span class="ui">名前・価格・推論レベル</span> で、<span class="ui">同じモデル</span> の隣の <span class="ui">表示 ID</span> に使いたい id を入れて <span class="ui">保存</span>、または <code>magpie model id relay/grok-4.6@500k grok-4.6</code> を実行します。以後 magpie は一覧、ルーティング、他のプロバイダの <code>grok-4.6</code> とまとめた <code>auto/grok-4.6</code> グループ、ゲートウェイキーの制限、使用量の記録をすべて <code>grok-4.6</code> で行い、プロバイダには <code>grok-4.6@500k</code> で問い合わせます。1 つのプロバイダで 1 つの id は 1 つのモデルです。最後に付けたものが有効で、その間プロバイダ自身のその id のモデルは一覧から外れます。<code>magpie model id relay/grok-4.6 --reset</code> で元に戻し、<code>magpie model ids</code> で一覧を表示します。サインインしたサブスクリプションやプラグインのプロバイダでも同じです（<code>magpie model id cursor/deepseek-v41-flash-1017 deepseek-v4.1-flash</code>）。アカウントやプラグインには引き続き元の id で問い合わせます。</div>
     <div class="table-wrap"><table>
       <tr><th>ルーティング</th><th>先に使われるもの</th></tr>
       <tr><td>スマート <code>smart</code></td><td>デフォルトです。メンバーのアカウントとキーをまとめて扱い（グループ内のグループは 1 つとして扱います。下記参照）、クォータに余裕のあるサブスクリプションのうち、利用枠が最も早く更新されるもの。基準は週の枠です。週の枠がなく 5 時間枠だけのアカウント（Claude Enterprise）は 5 時間枠で判断されるため、それより後に週の枠が更新されるものすべてより先になります。リセットのないクレジット（WorkBuddy のパッケージはそれぞれの日に失効します）は、残りのうち最も早く失効する時点で判断されるため、クレジットが最も早く失効する WorkBuddy アカウントが先になります。同時に更新されるアカウント（無料アカウントはすべて月末）は、その後に残りのクレジットが先に失効するものが先になります。失敗後に休止中のものは最後に回ります。</td></tr>
       <tr><td>順番どおり <code>order</code></td><td>最初のモデルが応答できなくなるまでそれを使い、次へ進みます。</td></tr>
+      <tr><td>使い切ってから次へ <code>drain</code></td><td>1 つのアカウントやキーを使い切るまで使い、その後は次へ移ってそのまま使い続けます。その間に前のものが回復しても戻りません。レート制限やエラーのものは休止中だけ飛ばします。</td></tr>
       <tr><td>持ち回り <code>rotate</code></td><td>各会話の次のターンを、次のメンバーのアカウントやキーに送り、負荷を分散します。</td></tr>
       <tr><td>使用量の少ない順 <code>usage</code></td><td>利用枠の残りが最も多いアカウントやキー。</td></tr>
-      <tr><td>週のペース <code>pace</code></td><td>更新までの 1 時間あたりの週の枠の残りが最も多いアカウント、つまりリセット時に失う分が最も多いもの。これにより各メンバーの週の枠がリセットで無駄になりにくくなります。週の枠がなく 5 時間枠だけのアカウント（Claude Enterprise）は、更新までの 1 時間あたりの 5 時間枠の残りで判断されるので、ほぼ常に最初になります。使用率が 90% 以上のものは、他が応答できなくなるまで待ちます。キーは最近送ったトークン数で判断します。</td></tr>
+      <tr><td>期限前に使い切る <code>pace</code></td><td>更新までの 1 時間あたりの週の枠の残りが最も多いアカウント、つまりリセット時に失う分が最も多いもの。これにより各メンバーの週の枠がリセットで無駄になりにくくなります。週の枠がなく 5 時間枠だけのアカウント（Claude Enterprise）は、更新までの 1 時間あたりの 5 時間枠の残りで判断されるので、ほぼ常に最初になります。リセットより早く期限切れになるクレジットがあるアカウントは、最初に期限切れになる分を期限までの 1 時間あたりで数え、そのほうが多ければそれで判断します（WorkBuddy のチェックインで得たクレジットなど）。使用率が 90% 以上のものは、他が応答できなくなるまで待ちます。キーは最近送ったトークン数で判断します。</td></tr>
       <tr><td>重み順 <code>weight</code></td><td>グループ編集画面で各モデルの横に設定した重み（1〜1000、未設定は 1）に応じてリクエストを分けます。重み 3 のモデルは重み 1 のモデルが 1 件受けるごとに 3 件受け、まとめてではなく均等に散らします。各モデルは自分のプロバイダーのルーティングで自分のアカウントやキーを使い、グループ内のグループは 1 つとして数えます。失敗して休んでいるものはその回から外れ、失敗したときは次のモデルが代わりに答えます。</td></tr>
       <tr><td>速度優先 <code>fast</code></td><td>このモデルに最近いちばん速く応答したメンバー、アカウント、キーが先です。最初のトークンまでの時間と出力の速さで比べ、新しい応答ほど重く数えます。差が 1 割以内のものは並び順のままです。1 時間測っていないものには 5 件に 1 件を回すので、一度遅かったチャネルもまた試されます。失敗して休んでいるものは最後です。測るのはストリーミングの応答だけで、再起動すると測り直します。</td></tr>
-      <tr><td>最安優先 <code>cheap</code></td><td>ルーティンググループのみ。いまモデルが最も安いメンバーが先です。Usage が数えるのと同じく、この時間帯の入力・出力 100 万トークンあたりの価格で比べます：自分で設定した価格、なければ定価に、プロバイダの価格倍率と時間帯倍率をかけたもの。DeepSeek 公式 API、Command Code と OpenCode Go の DeepSeek モデルはピーク時間帯（平日 UTC 01:00–04:00 と 06:00–10:00）に 2 倍になるので、2 つのプロバイダにある同じ DeepSeek モデルはその時間に安い方へ送られます。同じ価格のものは順番どおり、価格が分からないものは最後です。</td></tr>
+      <tr><td>最安優先 <code>cheap</code></td><td>ルーティンググループのみ。いまモデルが最も安いメンバーが先です。Usage が数えるのと同じく、この時間帯の入力・出力 100 万トークンあたりの価格で比べます：自分で設定した価格、なければ定価に、プロバイダの価格倍率と時間帯倍率をかけたもの。DeepSeek 公式 API、Command Code と OpenCode Go の DeepSeek モデルはピーク時間帯（平日 UTC 01:00–04:00 と 06:00–10:00）に、Ollama Cloud の DeepSeek V4.1 Flash と V4 Pro は自社のピーク時間帯（平日 UTC 12:00–18:00、それ以外は半額）に 2 倍になるので、2 つのプロバイダにある同じ DeepSeek モデルはその時間に安い方へ送られます。同じ価格のものは順番どおり、価格が分からないものは最後です。</td></tr>
     </table></div>
     <div class="table-wrap"><table>
       <tr><th>維持</th><th>会話が、応答したアカウントやキーに留まる期間</th></tr>
       <tr><td>自動 <code>auto</code></td><td>デフォルトです。ターン内では常に、ターンをまたいでは、ベンダーがキャッシュした内容が保持する価値のある間。</td></tr>
-      <tr><td>セッション <code>session</code></td><td>応答できる限り、セッション全体。ルーティングがスマート、使用量の少ない順、週のペースのとき、新しいセッションは他のセッションが最も少ないアカウントやキーに割り当てられ、同時に開いたセッションはそれぞれ別のものを使います。</td></tr>
+      <tr><td>セッション <code>session</code></td><td>応答できる限り、セッション全体。ルーティングがスマート、使用量の少ない順、「期限前に使い切る」のとき、新しいセッションは他のセッションが最も少ないアカウントやキーに割り当てられ、同時に開いたセッションはそれぞれ別のものを使います。</td></tr>
       <tr><td>ターン内 <code>turn</code></td><td>エージェントがツールの結果を返している間。あなたが再び発言すると、ルーティングが改めて決めます。</td></tr>
       <tr><td>オフ <code>off</code></td><td>リクエストごとに改めてルーティングします。</td></tr>
       <tr><td>厳格 <code>strict</code></td><td>使用量上限を超えても、他のアカウントやキーへは移りません。レート制限や割り当て切れのときは、エラーがそのままエージェントに渡ります。新しい会話は「セッション」と同じく分散されます。</td></tr>
@@ -208,8 +214,8 @@
     <p>グループのモデルには別のグループも含められます。<span class="ui">Add a model</span> の <em>Routing groups</em> の下から選ぶか、ターミナルで <code>models+=group/&lt;id&gt;</code> を使います。中に入ったグループは順序の中でその位置を占め、自分のモデルの間では自分のルーティングとルールに従って振り分けます。たとえば Coder を <code>deepseek-v4-pro</code>、次に <em>Fast</em> とし、Fast は安いモデルを独自の順序で並べる、といった構成ができます。Coder のルールでターンを <code>group/fast</code> に送れば、どのモデルを先にするかは Fast 自身のルールが決めます。</p>
     <ul>
       <li><b>ループは不可。</b> グループは、直接でも中のグループ経由でも、自分自身を含められません。Coder が Fast を含んでいるときに、Coder を含む Fast を保存しようとすると拒否され、ピッカーにもそのようなグループは表示されません。入れ子は最大 8 階層です。他のグループに含まれているグループは削除できないので、先にそちらから外してください。</li>
-      <li><b>各グループは自分のルーティングに従います。</b> 外側のグループのルーティングが何であれ、内側のグループの中には及びません。スマート、持ち回り、使用量の少ない順、週のペースは、内側のグループを 1 つのメンバーとして、内側のグループが最初に試すアカウントやキーで評価します。そこが選ばれると、内側のグループが丸ごと、自分の順序で試されます。Claude（順番どおり）と GPT（順番どおり）を含むスマートの Coder は、両者のアカウントをすべてまとめて比べるのではなく、Claude の先頭と GPT の先頭を比べます。</li>
-      <li><b>独自のルーティングを持つプロバイダーも同じです。</b> プロバイダーのアカウントやキーのルーティングを順番どおり、持ち回り、使用量の少ない順、週のペース、重みにしたモデルは、どのグループの中でもそれを保ちます。グループはそれが最初に試すアカウントやキーで比べ、選ばれたら自分の順序で丸ごと試します。既定のスマートのままのプロバイダーは、アカウントがグループの他のものとまとめて比べられ、どのプロバイダーのものでも枠が最も早くリセットされるものが先になります。</li>
+      <li><b>各グループは自分のルーティングに従います。</b> 外側のグループのルーティングが何であれ、内側のグループの中には及びません。スマート、持ち回り、使用量の少ない順、期限前に使い切るは、内側のグループを 1 つのメンバーとして、内側のグループが最初に試すアカウントやキーで評価します。そこが選ばれると、内側のグループが丸ごと、自分の順序で試されます。Claude（順番どおり）と GPT（順番どおり）を含むスマートの Coder は、両者のアカウントをすべてまとめて比べるのではなく、Claude の先頭と GPT の先頭を比べます。</li>
+      <li><b>独自のルーティングを持つプロバイダーも同じです。</b> プロバイダーのアカウントやキーのルーティングを順番どおり、持ち回り、使用量の少ない順、期限前に使い切る、重みにしたモデルは、どのグループの中でもそれを保ちます。グループはそれが最初に試すアカウントやキーで比べ、選ばれたら自分の順序で丸ごと試します。既定のスマートのままのプロバイダーは、アカウントがグループの他のものとまとめて比べられ、どのプロバイダーのものでも枠が最も早くリセットされるものが先になります。</li>
       <li><b>フェイルオーバーは通ります。</b> 内側のグループのモデルがすべて失敗すると、他のメンバーと同様に、外側のグループの次のメンバーが応答します。</li>
       <li>2 回現れるモデル（単独と、中のグループ内）は、最初の位置で一度だけ問い合わせます。</li>
     </ul>
@@ -348,6 +354,7 @@ IP-CIDR6,::1/128,DIRECT,no-resolve</pre>
     <a href="/docs/integrate">アプリ連携</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>
     <a href="https://discord.gg/vGSnD3ZKQF">Discord</a>
+    <a href="/docs/ja/contributors">コントリビューター</a>
     <a href="https://github.com/yetone/magpie-releases/releases">リリース</a>
   </div>
 </div></footer>

@@ -481,6 +481,57 @@ func TestDshFillNewProfilesFillsABareProfile(t *testing.T) {
 	}
 }
 
+// zyh6036 on X: DeepSeek Harness Desktop's picker listed only "DeepSeek 账号"
+// while the web profile, wired, started on one of dsh's own models. A new
+// profile was filled only when a wired one started on magpie's route, so
+// the desktop app's stayed dsh's empty template. It now gets magpie's route
+// beside dsh's own models, and no start model: the user's pick stays theirs.
+func TestDshFillNewProfilesWhenTheStartIsTheUsers(t *testing.T) {
+	home, dir, web := dshRouteHome(t)
+	desktop := filepath.Join(dir, "profiles", "desktop", "cordis.patch.yml")
+	os.MkdirAll(filepath.Dir(desktop), 0o755)
+	os.WriteFile(web, []byte("# Your patch layer for this dsh profile.\n"+
+		dshRouteFixture("deepseek/pro", "deepseek/flash")+
+		"- id: agent-default-model\n  config:\n    provider: deepseek-account\n    model: deepseek-v4-pro\n"), 0o644)
+	os.WriteFile(desktop, []byte(dshProfileTemplate), 0o644)
+	if err := dshSync(dir, gateway.URL()); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(desktop)
+	for _, want := range []string{"id: llm-pi-ai", "displayName: Magpie", "      magpie:", "id: deepseek/pro"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("the desktop profile not given %q:\n%s", want, b)
+		}
+	}
+	if strings.Contains(string(b), "agent-default-model") {
+		t.Fatalf("a start model written where the user had picked theirs:\n%s", b)
+	}
+	if d := dsh(home).Check(); d != "" {
+		t.Fatalf("check: %s", d)
+	}
+
+	// the serving round, for a profile the app makes while magpie runs
+	os.WriteFile(desktop, []byte(dshProfileTemplate), 0o644)
+	if trouble := dshWiredOnce(); trouble != "" {
+		t.Fatal(trouble)
+	}
+	if b, _ := os.ReadFile(desktop); !strings.Contains(string(b), "apiKeyEnv: "+dshKeyRef) {
+		t.Fatalf("the round left the desktop profile bare:\n%s", b)
+	}
+
+	// no profile wired, dsh not set up through magpie: none is filled
+	os.WriteFile(web, []byte(dshProfileTemplate), 0o644)
+	os.WriteFile(desktop, []byte(dshProfileTemplate), 0o644)
+	if err := dshSync(dir, gateway.URL()); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{web, desktop} {
+		if b, _ := os.ReadFile(f); string(b) != dshProfileTemplate {
+			t.Fatalf("%s filled with nothing wired:\n%s", f, b)
+		}
+	}
+}
+
 func TestDshWriteErrorReadsTheSameEveryRound(t *testing.T) {
 	one := dshWriteError(&os.PathError{Op: "open", Path: "/x/.cordis.patch.yml.4236419057.tmp", Err: os.ErrPermission})
 	two := dshWriteError(&os.PathError{Op: "open", Path: "/x/.cordis.patch.yml.3958428140.tmp", Err: os.ErrPermission})

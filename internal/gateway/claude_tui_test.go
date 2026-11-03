@@ -136,6 +136,7 @@ func TestClaudeTUIToolNamesComeBackAsDeclared(t *testing.T) {
 	offered := claudebridge.MCPToolPrefix() + claudebridge.ToolName(declared)
 	rows := []string{
 		`{"type":"assistant","uuid":"t1","session_id":"s1","message":{"id":"m1","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"toolu_1","name":"` + offered + `","input":{"task":"x"}}]}}`,
+		`{"type":"result","session_id":"s1","stop_reason":"tool_use"}`,
 	}
 	p := tuiAccount(t, tuiWrapper(t, rows...))
 	s := tuiTestServer(t)

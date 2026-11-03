@@ -8,7 +8,7 @@ import (
 
 // streamedContent is an Anthropic reply's content as a client that read
 // its stream keeps it: every block, whole, in order.
-func streamedContent(t *testing.T, body string) []map[string]any {
+func streamedContentBlocks(t *testing.T, body string) []map[string]any {
 	t.Helper()
 	var content []map[string]any
 	partial := map[int]string{}
@@ -96,7 +96,7 @@ func TestClaudeTUIRuntimeReplyRecorderKeepsMessagesBlocks(t *testing.T) {
 				enc.event(ev)
 			}
 			enc.finish()
-			content := streamedContent(t, rec.Body.String())
+			content := streamedContentBlocks(t, rec.Body.String())
 			if len(content) != tc.blocks {
 				t.Fatalf("the client was sent %d blocks, want %d: %v", len(content), tc.blocks, content)
 			}

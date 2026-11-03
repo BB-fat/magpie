@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/ghtoken"
 	"github.com/yetone/magpie/internal/source"
 	"github.com/yetone/magpie/internal/update"
@@ -32,17 +33,27 @@ import (
 //go:embed market.json
 var builtinMarket []byte
 
+// builtinParsed is the built-in copy, parsed once; shared, so only read.
+var builtinParsed = sync.OnceValue(func() []Listing {
+	l, _ := parseMarket(builtinMarket)
+	return l
+})
+
 // MarketURL is where the list is kept; MAGPIE_PLUGIN_MARKET moves it, and
 // "off" keeps to the built-in copy.
 const MarketURL = "https://raw.githubusercontent.com/magpie-community/plugins/main/registry.json"
 
-// Listing is a plugin the market suggests.
+// Listing is a plugin the market suggests. One not Community is an
+// author's own package the list names, published from their repository
+// (the owner on magpie-community/plugins#479: PinK, WispTerm): the page
+// shows it to a search alone, under its publisher; it is never browsed,
+// suggested as an agent or called by a short name.
 type Listing struct {
 	Package   string            `json:"package"`
 	Name      string            `json:"name"`
 	Icon      string            `json:"icon,omitempty"`
 	Providers []string          `json:"providers,omitempty"` // OpenCode's ids of those it signs in to
-	Community bool              `json:"community,omitempty"` // written by magpie's community
+	Community bool              `json:"community,omitempty"` // written by magpie's community; see Listing
 	Replaces  string            `json:"replaces,omitempty"`  // the built-in subscription it does the work of
 	Kind      string            `json:"kind,omitempty"`      // "middleware" for gateway middleware, "agent" for an agent, "tools" for tools alone, "page" for a page alone; none for a provider
 	Summary   map[string]string `json:"summary,omitempty"`   // by language: en, zh
@@ -149,11 +160,22 @@ func InfoCached(names []string) map[string]NPM {
 	c := npmCached()
 	out := map[string]NPM{}
 	for _, n := range names {
-		if e, ok := c[n]; ok {
+		if e, ok := c[n]; ok && !e.missingStale(time.Hour) {
 			out[n] = e.Info
 		}
 	}
 	return out
+}
+
+// missingStale is whether e is "not on npm" said over age ago: unknown
+// now, not missing. A package only the community repo's dist branch has
+// was kept as missing by builds before v0.1.2413 whenever the branch's
+// read was cut off (zhudabao8433 on Discord: PowerContext, installable the
+// day before, read Coming soon), and an ask that still can't read the
+// branch leaves that answer standing; a page told "unknown" offers
+// Install instead of a Coming soon nothing has confirmed.
+func (e npmEntry) missingStale(age time.Duration) bool {
+	return e.Info.Version == "" && time.Since(e.At) >= age
 }
 
 func marketCache() string { return filepath.Join(appdir.Cache(), "plugin-market.json") }
@@ -165,9 +187,11 @@ func parseMarket(b []byte) ([]Listing, error) {
 	}
 	out := r.Plugins[:0]
 	for _, l := range r.Plugins {
-		// magpie's community's alone: others' OpenCode plugins weren't
-		// written against magpie's sign-ins, and are found by a search
-		if l.Package != "" && pkgName.MatchString(l.Package) && l.Community {
+		// an author's own package is kept too, marked as not the
+		// community's (Community false): the page shows it to a search
+		// alone, and only the community's are browsed, suggested as
+		// agents or called by a short name (Community)
+		if l.Package != "" && pkgName.MatchString(l.Package) {
 			if l.Name == "" {
 				l.Name = l.Package
 			}
@@ -178,6 +202,17 @@ func parseMarket(b []byte) ([]Listing, error) {
 		return nil, errors.New("the list has no plugins")
 	}
 	return out, nil
+}
+
+// Community is the listings of l magpie's community wrote, in l's order.
+func Community(l []Listing) []Listing {
+	out := []Listing{}
+	for _, x := range l {
+		if x.Community {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // Market is the list of plugins magpie suggests: fetched at most every six
@@ -337,7 +372,10 @@ func infoWithin(ctx context.Context, names []string, age time.Duration) map[stri
 		asked[n] = true
 		e, hit := cache[n]
 		if hit {
-			out[n] = e.Info // what it said last, until it says otherwise
+			// what it said last, until it says otherwise
+			if !e.missingStale(time.Hour) {
+				out[n] = e.Info
+			}
 			if time.Since(e.At) < age {
 				continue
 			}
@@ -773,6 +811,9 @@ func Upgrade(ctx context.Context, name string) error {
 	for _, e := range Load().Plugins {
 		if (Name(e.Spec) == name || e.Spec == name) && IsGit(e.Spec) {
 			err := reinstall(ctx, e.Spec)
+			if err == nil {
+				settleWaiting()
+			}
 			Restart()
 			return err
 		}
@@ -795,11 +836,12 @@ func Icon(spec, id string) string {
 	l := marketList
 	marketMu.Unlock()
 	if l == nil {
-		if b, err := os.ReadFile(marketCache()); err == nil {
-			l, _ = parseMarket(b)
-		}
+		// parsed once for each copy, not for each plugin each look: the
+		// Providers page parsed it for every plugin's row each poll, 13 MB
+		// of what twenty polls allocated with real accounts
+		l, _ = filememo.Read("plugin-market", marketCache(), parseMarket)
 		if l == nil {
-			l, _ = parseMarket(builtinMarket)
+			l = builtinParsed()
 		}
 	}
 	pkg := Name(spec)
@@ -811,7 +853,7 @@ func Icon(spec, id string) string {
 	if ic, ok := otherIcons[pkg]; ok {
 		return ic
 	}
-	for _, x := range l {
+	for _, x := range Community(l) {
 		for _, p := range x.Providers {
 			if p == id && x.Icon != "" {
 				return x.Icon

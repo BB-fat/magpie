@@ -25,10 +25,12 @@ var readOnlyRefused = []string{
 	"POST /api/show", "POST /api/chat", "POST /api/generate",
 	// writes, another key's routes, the whole trace, debugging
 	"POST /v1/magpie/usage/requests", "POST " + provider.RemoteRefreshPath,
+	// a Codex reset, which can't be undone (#3850)
+	"POST " + provider.RemoteCodexResetPath,
 	"GET /v1/magpie/route", "GET /v1/magpie/trace",
 	"GET " + ClaudeRunsPath, "GET " + HeapPath, "GET " + CPUPath, "GET " + GoroutinesPath,
 	"POST " + RestartPath,
-	"POST " + KeysPath, "GET " + KeysPath, "DELETE " + KeysPath + "/{id}",
+	"POST " + KeysPath, "GET " + KeysPath, "DELETE " + KeysPath + "/{id}", "POST " + OIDCKeysPath,
 	"GET /v1/magpie/omarchy", "OPTIONS /v1/magpie/omarchy",
 	// models, a WebSocket's upgrade and count_tokens among them
 	"POST /v1/chat/completions", "POST /chat/completions",
@@ -42,6 +44,7 @@ var readOnlyRefused = []string{
 	"POST /v1/audio/speech", "POST /audio/speech",
 	"POST /v1/videos", "POST /videos", "GET /v1/videos/{id}", "GET /videos/{id}",
 	"GET /v1/videos/{id}/content", "GET /videos/{id}/content",
+	"POST " + NativePath + "{provider}/{path...}", "GET " + NativePath + "{provider}/{path...}", "DELETE " + NativePath + "{provider}/{path...}",
 	// MCP servers, plugins' and Codex's backends, Gemini, everything else
 	"POST " + claudeMCPPath + "{token}", "/mcp/{name}", "/mcp/run/{name}",
 	SearchMCPPath, VisionMCPPath, ImageMCPPath, ImageMCPFiles + "{name}",

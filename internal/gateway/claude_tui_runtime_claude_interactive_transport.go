@@ -1093,9 +1093,19 @@ func tuiRuntimeInteractiveImageID(p Part) string {
 }
 
 // interactiveTools are the tools req's tool_choice lets its run call, with
-// the private image tool when the turn has images.
+// the private image tool when the turn has images. The standard bridge's
+// bridgeTools keeps every tool on tool_choice none for Anthropic's cache;
+// the TUI hot-config hash still needs the offered set alone so a none turn
+// does not take an idle process that offers the tools (and vice versa).
 func tuiRuntimeInteractiveTools(req *tuiRuntimeRequest, hasImages bool) []tuiRuntimeBridgeTool {
-	return tuiRuntimeWithImageTool(bridgeTools(&req.Request), hasImages)
+	tools := make([]tuiRuntimeBridgeTool, 0, len(req.Tools))
+	for _, t := range req.Tools {
+		if !toolChoiceOffers(req.ToolChoice, t.Name) {
+			continue
+		}
+		tools = append(tools, tuiRuntimeBridgeTool(bridgeToolDef(t)))
+	}
+	return tuiRuntimeWithImageTool(tools, hasImages)
 }
 
 // interactiveDefinedTools are the definitions req's run is started with:

@@ -33,7 +33,60 @@ type ExternalSession struct {
 // read-only (no file of the agent's to resume or open) with a gateway transcript
 // reader; magpie's own record of one is deleted by DeleteGateway.
 func MergeExternal(native []Session, external []ExternalSession) []Session {
+	added := externalAdded(native, external)
+	out := make([]Session, len(native), len(native)+len(added))
+	copy(out, native)
+	out = append(out, added...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Last.After(out[j].Last) })
+	return out
+}
+
+// EachMerged calls each with every session MergeExternal(native, external)
+// lists, in its order, until each returns false, without making that list:
+// the Sessions page's poll copied all ~17k sessions into it, then into its
+// own rows. external holds none of native's sessions, as GatewaySessions
+// gives them for native's GatewayKeys: the set of native's keys made again
+// to look was ~2 MB a poll. native is written by neither; when it isn't
+// newest first, as List gives it, it is sorted in a copy first.
+func EachMerged(native []Session, external []ExternalSession, each func(*Session) bool) {
+	newest := func(a, b Session) int { return b.Last.Compare(a.Last) }
+	if !slices.IsSortedFunc(native, newest) {
+		native = slices.Clone(native)
+		slices.SortStableFunc(native, newest)
+	}
+	// external's sessions in the order externalSessions then a stable
+	// sort by Last give them, as indexes: a row is made only when it is
+	// reached. Every gateway session past what native lists was made into
+	// a row on each poll, ~22 MB of a poll over ~15k sessions while one
+	// grew, though the page stops at sessions.All rows.
+	added := make([]int, 0, len(external))
+	for k, e := range external {
+		if e.Agent != "" && e.ID != "" {
+			added = append(added, k)
+		}
+	}
+	slices.SortStableFunc(added, func(a, b int) int { return external[b].Last.Compare(external[a].Last) })
 	names := desktopExternalTitles(external)
+	// a merge of the two, natives first among equals, as SliceStable over
+	// native then added gives
+	i, j := 0, 0
+	for i < len(native) || j < len(added) {
+		var s *Session
+		if j < len(added) && (i == len(native) || external[added[j]].Last.After(native[i].Last)) {
+			row := externalSession(external[added[j]], names)
+			s, j = &row, j+1
+		} else {
+			s, i = &native[i], i+1
+		}
+		if !each(s) {
+			return
+		}
+	}
+}
+
+// externalAdded are the external sessions MergeExternal adds to native, in
+// external's order.
+func externalAdded(native []Session, external []ExternalSession) []Session {
 	// keyed by the pair, not "agent|id": a string made for each of ~5000
 	// sessions on each of a poll's listings, and the set and the list grown
 	// an append at a time, were ~200 MB in 80s of polls (#2278)
@@ -55,32 +108,43 @@ func MergeExternal(native []Session, external []ExternalSession) []Session {
 			seen[agentID{s.Agent, id}] = struct{}{}
 		}
 	}
-	added := func(e ExternalSession) bool {
-		_, dup := seen[agentID{e.Agent, e.ID}]
-		return e.Agent != "" && e.ID != "" && !dup
-	}
-	n := len(native)
+	var not []ExternalSession
 	for _, e := range external {
-		if added(e) {
-			n++
+		if _, dup := seen[agentID{e.Agent, e.ID}]; !dup {
+			not = append(not, e)
 		}
 	}
-	out := make([]Session, len(native), n)
-	copy(out, native)
+	return externalSessions(not)
+}
+
+// externalSessions are external's sessions as a list shows them, those
+// with an agent and an id, in external's order.
+func externalSessions(external []ExternalSession) []Session {
+	names := desktopExternalTitles(external)
+	var out []Session
 	for _, e := range external {
-		if !added(e) {
+		if e.Agent == "" || e.ID == "" {
 			continue
 		}
-		s := Session{ReadOnly: true, Gateway: true, Transcript: true, Agent: e.Agent, ID: e.ID, Title: cmp.Or(names[e.Agent+"|"+e.ID], e.Title, e.ID), Start: e.Start, Last: e.Last, Models: []Model{}, Unpriced: e.Unpriced}
-		for _, m := range e.Models {
-			s.Models = append(s.Models, Model{Model: m.Model, Tokens: m.Tokens, Cost: m.Cost, Priced: m.Priced})
-			s.Tokens.add(m.Tokens)
-		}
-		s.Cost = e.Cost
-		out = append(out, s)
+		out = append(out, externalSession(e, names))
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Last.After(out[j].Last) })
 	return out
+}
+
+// externalSession is e as a list shows it; names are
+// desktopExternalTitles'.
+func externalSession(e ExternalSession, names map[string]string) Session {
+	name := ""
+	if len(names) > 0 {
+		name = names[e.Agent+"|"+e.ID]
+	}
+	s := Session{ReadOnly: true, Gateway: true, Transcript: true, Agent: e.Agent, ID: e.ID, Title: cmp.Or(name, e.Title, e.ID), Start: e.Start, Last: e.Last, Models: []Model{}, Unpriced: e.Unpriced}
+	for _, m := range e.Models {
+		s.Models = append(s.Models, Model{Model: m.Model, Tokens: m.Tokens, Cost: m.Cost, Priced: m.Priced})
+		s.Tokens.add(m.Tokens)
+	}
+	s.Cost = e.Cost
+	return s
 }
 
 // desktopExternalTitles are the names an app saved for its sessions among

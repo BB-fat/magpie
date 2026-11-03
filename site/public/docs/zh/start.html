@@ -30,7 +30,10 @@
 <link rel="alternate" hreflang="en" href="https://usemagpie.ai/docs/start">
 <link rel="alternate" hreflang="zh" href="https://usemagpie.ai/docs/zh/start">
 <link rel="alternate" hreflang="ja" href="https://usemagpie.ai/docs/ja/start">
+<link rel="alternate" hreflang="x-default" href="https://usemagpie.ai/docs/start">
+<link rel="canonical" href="https://usemagpie.ai/docs/zh/start">
 <link rel="stylesheet" href="/docs.css">
+<meta property="og:site_name" content="magpie">
 <meta property="og:title" content="magpie 快速上手">
 <meta property="og:description" content="添加你已有的供应商，给每个 Agent 选模型。一步步配置。">
 <meta property="og:image" content="https://usemagpie.ai/img/og.png">
@@ -141,6 +144,7 @@
     <ul>
       <li><b>点模型</b>打开选择列表。模型分组显示：Agent 自带的、你的路由组、再是你添加的每个供应商。输入可以筛选，也可以直接输入列表里没有的模型 ID。</li>
       <li><b>推理强度</b>：Agent 有这个选项时（Codex 的 <em>推理强度</em>、Pi 的 <em>思考</em>），列表下方会出现滑块。</li>
+      <li><b>快速模式</b>：有快速模式的模型，在列表里那一行的星标旁有一个闪电按钮，选中的那一行和鼠标指着的那一行会显示。包括 ChatGPT（Codex）账号的 GPT 模型、OpenAI Key 的 GPT 和 o 系列模型、有快速版本的 Cursor 模型、Anthropic Key 的 Claude Opus，以及插件或另一个 magpie 说明支持 priority 的模型。点一下，这个 Agent 发给这个模型的每个请求都会用服务商的快速模式，更快，价格更高：不管 Agent 用哪种 API，都加上 <code>service_tier: "priority"</code>（和 Codex 自己的 <code>/fast</code> 发的一样），Claude 则是 <code>speed: "fast"</code>。ChatGPT 账号在这个模型上提供 Ultrafast 时，再点一下是 Ultrafast，再点一下恢复普通速度。每个 Agent 分开设置，这个模型的备用模型照常发送。路由组里每个成员那一行也有同样的开关。</li>
       <li><b>Claude Code 通过 magpie 使用模型时</b>，opus、sonnet、haiku 各档还可以单独指定模型；默认跟随主模型。</li>
     </ul>
     <p>选好的模型会写进 Agent 自己的配置文件。只改 magpie 需要的那几个键；注释、顺序、缩进都保留，写入是原子的。</p>
@@ -151,6 +155,7 @@
       <tr><td>OpenCode、MiMo Code、DevEco Code、Pi、Crush</td><td>一个 <code>magpie</code> 供应商条目，以及 <code>magpie/provider/model</code></td></tr>
       <tr><td>AtomCode</td><td><code>~/.atomcode/config.toml</code>：一个 <code>magpie</code> 供应商账号，以及目录中每个模型各自的条目</td></tr>
       <tr><td>Snow CLI</td><td><code>~/.snow/profiles/magpie.json</code>：一个 <code>magpie</code> 配置文件，并设为当前配置（Snow App 用“同步 Snow CLI API 配置”导入）</td></tr>
+      <tr><td>QwenPaw</td><td><code>~/.qwenpaw.secret/providers/custom/magpie.json</code> 中的 <code>magpie</code> 提供商，以及每个智能体 <code>agent.json</code> 里的 <code>active_model</code>。首次连接后需重启 QwenPaw</td></tr>
       <tr><td>Gemini CLI</td><td><code>GOOGLE_GEMINI_BASE_URL</code> 指向网关、API 密钥认证，以及模型</td></tr>
     </table></div>
     <p><b>已在运行的会话保持它启动时的模型。</b>Agent 启动时读取配置，所以改动从下一个会话生效。Codex 也在启动时生成模型列表：切换后请重启 Codex 应用和已打开的 <code>codex</code> 会话。</p>
@@ -166,27 +171,28 @@
     </figure>
 
     <h3>一个供应商里的多个账号或密钥</h3>
-    <p>展开供应商那一行，勾选要用的每个账号或密钥。<span class="ui">路由</span> 决定请求怎么分给它们：<span class="ui">智能</span>（默认）、<span class="ui">按顺序</span>、<span class="ui">轮流</span>、<span class="ui">用量少的优先</span>、<span class="ui">重置前用完</span>、<span class="ui">按权重</span>（每个账号或密钥按旁边设的权重分得请求，比如 Max 账号设 5、Pro 账号设 1）或 <span class="ui">速度优先</span>（最近回答最快的密钥先用）。<span class="ui">备用</span> 里列出这个供应商额度用完、被限流或不可用时改用的模型。</p>
+    <p>展开供应商那一行，勾选要用的每个账号或密钥。<span class="ui">路由</span> 决定请求怎么分给它们：<span class="ui">智能</span>（默认）、<span class="ui">按顺序</span>、<span class="ui">用完再换</span>（一个用完再换下一个，前面的恢复了也不切回去）、<span class="ui">轮流</span>、<span class="ui">用量少的优先</span>、<span class="ui">到期前用完</span>、<span class="ui">按权重</span>（每个账号或密钥按旁边设的权重分得请求，比如 Max 账号设 5、Pro 账号设 1）或 <span class="ui">速度优先</span>（最近回答最快的密钥先用）。<span class="ui">备用</span> 里列出这个供应商额度用完、被限流或不可用时改用的模型。</p>
 
     <h3>跨供应商的同一个模型</h3>
     <p>路由组是几个模型（来自一个或多个供应商），Agent 把它当作一个来选：<code>group/&lt;id&gt;</code>，在选择列表的 <em>路由组</em> 下面。两个供应商用同一个名字提供的模型会自动成组；在 <span class="ui">路由</span> 标签页点 <span class="ui">新建组</span> 可以把任意模型组到一起。排第一的模型决定这个组对外的能力。</p>
     <div class="callout"><b>不用手动建的组。</b>再加一个供应商，只要它提供的模型和已有的同名（比如 Claude 订阅和 Copilot 都有 Claude Opus，DeepSeek 官方 API 和 OpenRouter 都有 DeepSeek），magpie 就会自动把它们组成一个路由组：<code>auto/&lt;模型&gt;</code>（模型自己的 id，比如 <code>auto/claude-opus-4.6</code>；以前的 <code>group/auto-…</code> 也照样能用），包含所有提供这个模型的供应商。名字按各家不同的写法匹配（<code>deepseek/deepseek-chat</code> 和 <code>deepseek-chat</code> 算同一个）。给 Agent 选这个组，请求就会分摊到这些供应商上；不想要的可以用 <code>magpie group rm</code> 隐藏。</div>
-    <div class="callout"><b>给供应商的怪名字起个自己的 id。</b>有的供应商用自己的 id 提供模型，比如 <code>deepseek-v4.1-flash-1017</code>、<code>grok-4.6@500k</code>。在供应商编辑页的 <span class="ui">名称与推理档位</span> 里，<span class="ui">等同于</span> 旁边的 <span class="ui">列为</span> 填上你想要的 id，再点 <span class="ui">保存</span>；或者运行 <code>magpie model id relay/grok-4.6@500k grok-4.6</code>。之后 magpie 列出、路由、把它和其他供应商的 <code>grok-4.6</code> 合进 <code>auto/grok-4.6</code> 组、限制网关密钥、记录用量，都用 <code>grok-4.6</code>，向供应商请求时仍然发 <code>grok-4.6@500k</code>。一个供应商里一个 id 只对应一个模型：最后设上的那个生效，期间供应商自己叫这个 id 的模型不再列出。<code>magpie model id relay/grok-4.6 --reset</code> 改回来，<code>magpie model ids</code> 列出全部。登录的订阅和插件的供应商也一样（<code>magpie model id cursor/deepseek-v41-flash-1017 deepseek-v4.1-flash</code>）：账号或插件收到的仍是它自己的 id。</div>
+    <div class="callout"><b>给供应商的怪名字起个自己的 id。</b>有的供应商用自己的 id 提供模型，比如 <code>deepseek-v4.1-flash-1017</code>、<code>grok-4.6@500k</code>。在供应商编辑页的 <span class="ui">名称、价格与推理档位</span> 里，<span class="ui">等同于</span> 旁边的 <span class="ui">列为</span> 填上你想要的 id，再点 <span class="ui">保存</span>；或者运行 <code>magpie model id relay/grok-4.6@500k grok-4.6</code>。之后 magpie 列出、路由、把它和其他供应商的 <code>grok-4.6</code> 合进 <code>auto/grok-4.6</code> 组、限制网关密钥、记录用量，都用 <code>grok-4.6</code>，向供应商请求时仍然发 <code>grok-4.6@500k</code>。一个供应商里一个 id 只对应一个模型：最后设上的那个生效，期间供应商自己叫这个 id 的模型不再列出。<code>magpie model id relay/grok-4.6 --reset</code> 改回来，<code>magpie model ids</code> 列出全部。登录的订阅和插件的供应商也一样（<code>magpie model id cursor/deepseek-v41-flash-1017 deepseek-v4.1-flash</code>）：账号或插件收到的仍是它自己的 id。</div>
     <div class="table-wrap"><table>
       <tr><th>路由</th><th>谁排在前面</th></tr>
       <tr><td>智能 <code>smart</code></td><td>默认。把成员的账号和 Key 放在一起排（组里的路由组算一个，见下文）：还有余量的订阅里，额度最先重置的排第一。看周额度的重置时间；只有 5 小时额度、没有周额度的账号（如 Claude Enterprise）看它的 5 小时重置，所以排在所有更晚重置的周额度前面。没有重置时间的积分（WorkBuddy 的积分包，各自到期）按剩余积分最早过期的时间算，所以积分最先过期的 WorkBuddy 账号排第一；同时重置的账号（免费账号都在月底）再看剩余积分哪个先过期。失败后在休息的排最后。</td></tr>
       <tr><td>按顺序 <code>order</code></td><td>先用第一个模型，它答不了再换下一个。</td></tr>
+      <tr><td>用完再换 <code>drain</code></td><td>一个账号或 Key 用到额度用完，再换下一个，并一直用它：前面的额度恢复了也不会切回去。被限流或出错的只在休息期间跳过。</td></tr>
       <tr><td>轮流 <code>rotate</code></td><td>会话的每一轮交给下一个成员的账号或 Key，均摊负载。</td></tr>
       <tr><td>最少使用 <code>usage</code></td><td>剩余额度最多的账号或 Key 排第一。</td></tr>
-      <tr><td>重置前用完 <code>pace</code></td><td>每周剩余额度除以距重置的小时数，最高的账号排第一——重置时损失最多的那个——少让成员的周额度到重置时作废；只有 5 小时额度、没有周额度的账号（如 Claude Enterprise）按 5 小时窗口的剩余额度除以距它重置的小时数算，所以几乎总排第一。用到 90% 以上的等其他账号都答不了时才用。Key 按最近发给它的 token 数排。</td></tr>
+      <tr><td>到期前用完 <code>pace</code></td><td>每周剩余额度除以距重置的小时数，最高的账号排第一——重置时损失最多的那个——少让成员的周额度到重置时作废；只有 5 小时额度、没有周额度的账号（如 Claude Enterprise）按 5 小时窗口的剩余额度除以距它重置的小时数算，所以几乎总排第一。账号里有比重置更早过期的积分时（如 WorkBuddy 签到得的积分），按最先过期的那部分除以距过期的小时数算，比周额度的更高就按它排。用到 90% 以上的等其他账号都答不了时才用。Key 按最近发给它的 token 数排。</td></tr>
       <tr><td>按权重 <code>weight</code></td><td>每个模型按群组编辑器里它旁边设的权重（1 到 1000，不设为 1）分得请求：权重 3 的模型每拿三个，权重 1 的拿一个，均匀穿插而不是成批。每个模型按它自己提供方的路由用自己的账号或 Key，群组里的群组算一个成员。失败后歇着的那个退出这一轮；一个失败时，下一个模型接上。</td></tr>
       <tr><td>速度优先 <code>fast</code></td><td>最近回答这个模型最快的成员、账号或 Key 先用：看首字时间和输出速度，越新的回答算得越重。相差不到一成的保持原来的顺序。一小时内没测过的每五个请求分到一个，慢过一次的渠道还会再试；失败后歇着的排最后。只测流式回复，重启后重新测。</td></tr>
-      <tr><td>最便宜优先 <code>cheap</code></td><td>仅限路由组。此刻模型最便宜的成员先用，按 Usage 计费的方式算这个时段每百万输入、输出 token 的价格：你自己设的价格，否则用标价，再乘以提供方的价格倍率和分时倍率。DeepSeek 官方 API、Command Code 和 OpenCode Go 的 DeepSeek 模型在高峰时段（工作日 UTC 01:00–04:00 和 06:00–10:00）双倍计价，所以同一个 DeepSeek 模型挂在两个提供方上时，会交给这个时段更便宜的那个。价格相同的保持原来的顺序；不知道价格的排最后。</td></tr>
+      <tr><td>最便宜优先 <code>cheap</code></td><td>仅限路由组。此刻模型最便宜的成员先用，按 Usage 计费的方式算这个时段每百万输入、输出 token 的价格：你自己设的价格，否则用标价，再乘以提供方的价格倍率和分时倍率。DeepSeek 官方 API、Command Code 和 OpenCode Go 的 DeepSeek 模型在高峰时段（工作日 UTC 01:00–04:00 和 06:00–10:00）双倍计价，Ollama Cloud 的 DeepSeek V4.1 Flash 和 V4 Pro 则按它自己的高峰时段（工作日 UTC 12:00–18:00，其余时间半价），所以同一个 DeepSeek 模型挂在两个提供方上时，会交给这个时段更便宜的那个。价格相同的保持原来的顺序；不知道价格的排最后。</td></tr>
     </table></div>
     <div class="table-wrap"><table>
       <tr><th>会话保持</th><th>会话在回答过它的账号或 Key 上留多久</th></tr>
       <tr><td>自动 <code>auto</code></td><td>默认。一轮之内总是保持，跨轮则在厂商缓存还值得保留时保持。</td></tr>
-      <tr><td>整个会话 <code>session</code></td><td>整个会话，只要它还能回答。路由为智能、最少使用或重置前用完时，新会话交给当前会话最少的账号或 Key，同时开的几个会话各占一个。</td></tr>
+      <tr><td>整个会话 <code>session</code></td><td>整个会话，只要它还能回答。路由为智能、最少使用或到期前用完时，新会话交给当前会话最少的账号或 Key，同时开的几个会话各占一个。</td></tr>
       <tr><td>一轮之内 <code>turn</code></td><td>Agent 回传工具结果时不换；你再次发言时，路由重新决定。</td></tr>
       <tr><td>关闭 <code>off</code></td><td>每个请求都重新路由。</td></tr>
       <tr><td>严格 <code>strict</code></td><td>绝不换到别的账号或密钥，即使超过其用量上限也一样：它被限流或额度用完时，错误直接交给 Agent。新会话像“整个会话”一样分开。</td></tr>
@@ -208,8 +214,8 @@
     <p>路由组的成员也可以是另一个路由组：在 <span class="ui">添加模型</span> 的 <em>路由组</em> 分类里选它，或者在终端里用 <code>models+=group/&lt;id&gt;</code>。子组占据它在顺序里的位置，在自己的模型之间按自己的路由方式和规则分配。比如 Coder 可以是 <code>deepseek-v4-pro</code>，然后是 <em>Fast</em>，而 Fast 是几个便宜模型的顺序。Coder 的规则可以把一轮对话交给 <code>group/fast</code>，再由 Fast 自己的规则决定它里面哪个模型排第一。</p>
     <ul>
       <li><b>不会无限递归。</b>一个组不能包含它自己，无论是直接包含，还是经由它里面的组间接包含。Coder 已经包含 Fast 时，再把 Coder 放进 Fast 会被拒绝，选择器里也不会列出这样的组。最多嵌套 8 层。一个组被别的组包含时不能删除，要先从那个组里移除它。</li>
-      <li><b>每一层按自己的路由。</b>外层组不管用什么路由，都不会伸进它里面的组：智能、轮流、最少使用、重置前用完都把子组当作一个成员，拿子组自己会先用的那个账号或 Key 来比；排到它时，子组按自己的顺序整体尝试。Coder 设为智能、里面放 Claude（按顺序）和 GPT（按顺序）两个组时，比较的是 Claude 组的第一个和 GPT 组的第一个，不会把两组的账号混在一起排。</li>
-      <li><b>服务商自己的路由也一样。</b>一个模型的服务商把账号或 Key 设为按顺序、轮流、用量少的优先、重置前用完或按权重时，在任何路由组里都保持这个路由：组拿它会先用的那个账号或 Key 来比，排到它时按它自己的顺序整体尝试。保持默认“智能”的服务商，它的账号和组里其他账号放在一起排，额度最先重置的排第一，不管属于哪个服务商。</li>
+      <li><b>每一层按自己的路由。</b>外层组不管用什么路由，都不会伸进它里面的组：智能、轮流、最少使用、到期前用完都把子组当作一个成员，拿子组自己会先用的那个账号或 Key 来比；排到它时，子组按自己的顺序整体尝试。Coder 设为智能、里面放 Claude（按顺序）和 GPT（按顺序）两个组时，比较的是 Claude 组的第一个和 GPT 组的第一个，不会把两组的账号混在一起排。</li>
+      <li><b>服务商自己的路由也一样。</b>一个模型的服务商把账号或 Key 设为按顺序、轮流、用量少的优先、到期前用完或按权重时，在任何路由组里都保持这个路由：组拿它会先用的那个账号或 Key 来比，排到它时按它自己的顺序整体尝试。保持默认“智能”的服务商，它的账号和组里其他账号放在一起排，额度最先重置的排第一，不管属于哪个服务商。</li>
       <li><b>故障转移照常。</b>子组里的模型全部失败时，由外层组的下一个成员接手，和其他成员一样。</li>
       <li>同一个模型出现两次（单独一次，子组里一次）时只问一次，按它第一次出现的位置。</li>
     </ul>
@@ -348,6 +354,7 @@ IP-CIDR6,::1/128,DIRECT,no-resolve</pre>
     <a href="/docs/zh/integrate">接入应用</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>
     <a href="https://discord.gg/vGSnD3ZKQF">Discord</a>
+    <a href="/docs/zh/contributors">贡献墙</a>
     <a href="https://github.com/yetone/magpie-releases/releases">版本发布</a>
   </div>
 </div></footer>

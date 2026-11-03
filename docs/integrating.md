@@ -61,7 +61,23 @@ it takes images. List them from there rather than shipping a list: the
 user adds and removes providers in magpie. Reasoning is asked in your
 API's own field (`reasoning_effort`, `reasoning.effort`, Anthropic's
 `thinking` or `output_config.effort`). `?format=text` gives the ids one a
-line.
+line. The list holds chat models only. Ask for image and video models
+with `?kind=image,video` (or `?kind=chat,image,video`, or `?kind=all`).
+Each of them is marked `"kind": "image"` or `"kind": "video"` and goes to
+`/v1/images/generations` or `/v1/videos`, never to a chat route.
+
+**A vendor's own fields.** `/v1/images/generations` and `/v1/videos`
+take OpenAI's fields and pass the others on to a vendor that takes them:
+Volcengine Ark's `content` (reference video and audio, `draft_task`),
+`ratio`, `resolution`, `duration: -1`, `tools`, `watermark`,
+`sequential_image_generation` and the rest. A video's answer carries
+Ark's own fields too (`content.last_frame_url`, `usage`, `resolution`).
+For the rest of Ark's API (an image stream, the task list, cancelling a
+task) use `/v1/magpie/native/<provider>/<path>`: `POST
+images/generations`, `POST` or `GET contents/generations/tasks`, `GET` or
+`DELETE contents/generations/tasks/<id>`, sent and answered in Ark's own
+shape on the user's Ark key. It takes the same gateway key as every route,
+and a key held to models, accounts or a budget is refused it.
 
 **Optional.** Send `X-Magpie-Session: <id>` with a conversation's requests
 and `GET /v1/magpie/route?session=<id>` says which model a routing group

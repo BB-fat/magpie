@@ -493,6 +493,7 @@ const notLeanest = {
   ja: "最少ではありません：230K–270K でトークンが最も少なくなります",
   de: "Nicht am sparsamsten: 230K–270K verbraucht die wenigsten Tokens",
 };
+const inUse = { en: "In use", zh: "使用中", "zh-TW": "使用中", ja: "使用中", de: "In Verwendung" };
 const leanest = { en: "Already the leanest for how you work", zh: "已是最适合你用法的最省配置", "zh-TW": "已是最適合你用法的最省配置", ja: "すでにあなたの使い方で最も省トークン", de: "Schon am sparsamsten für deine Arbeitsweise" };
 const use270 = { en: "Use 270K", zh: "使用 270K", "zh-TW": "使用 270K", ja: "270K にする", de: "270K verwenden" };
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -545,9 +546,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await use.evaluate((b) => b.click());
         await row.locator(".ctx-tune-foot .ctx-chip.good").waitFor();
         assert.deepEqual(posts.map((p) => [p.agent, p.knob, p.model, p.value]), [["claude", "compact", "claude-opus-5-5", "270000"]]);
-        // inside the band: the leanest, and no button to change it
+        // inside the band: magpie's pick is in use, and no button to change it
         const row2 = page.locator(".ctx-tune-row").nth(0);
-        assert.equal(await row2.locator(".ctx-tune-foot .ctx-chip").innerText(), leanest[lang]);
+        assert.equal(await row2.locator(".ctx-tune-foot .ctx-chip").innerText(), inUse[lang]);
         assert.equal(await row2.locator(".ctx-tune-foot button.primary").count(), 0);
         await ctx.close();
       });
@@ -578,7 +579,6 @@ const ownNote = {
   ja: "cpa/gpt-6-astra には独自の圧縮しきい値 430K があり、そちらが優先されます",
   de: "cpa/gpt-6-astra hat ein eigenes „Komprimieren ab“ (430K), das Vorrang hat",
 };
-const inUse = { en: "In use", zh: "使用中", "zh-TW": "使用中", ja: "使用中", de: "In Verwendung" };
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   test(`${engine}: a model's own Compact at isn't called In use`, async (t) => {
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
@@ -620,7 +620,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         own = false;
         await page.evaluate(() => window.loadContext());
         await page.locator(".ctx-tune-row.done .ctx-chip.good").waitFor();
-        assert.equal(await page.locator(".ctx-tune-row .ctx-tune-foot .ctx-chip").innerText(), leanest[lang]);
+        assert.equal(await page.locator(".ctx-tune-row .ctx-tune-foot .ctx-chip").innerText(), inUse[lang]);
         await ctx.close();
       });
     }
@@ -730,6 +730,158 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await row.locator(".ctx-tune-caveat.ctx-tune-async", { hasText: "0.162.1" }).waitFor();
         assert.equal(await go.count(), 0);
         assert.deepEqual(await over(), []);
+        await ctx.close();
+      });
+    }
+    assert.deepEqual(errors, []);
+  });
+}
+
+// hoobnn on Discord (11-01): over 7 or 30 days, Use on Codex's window did
+// nothing. Those ranges held a model with a Compact at of its own (430K),
+// which "Now" was read from, so a Use moved Codex's other models and the
+// card still read 430K. Now "Now" is where Long conversations has the
+// others, and the model kept apart is named under the row. The click
+// asks the range shown again, and the row then says the advice is in.
+// In both engines, every language, a phone's width and a desk's.
+const apartTune = (days, at) => ({
+  days: +days,
+  agents: [{ agent: "codex", calls: 2808, advice: [
+    { knob: "compact", setting: { value: String(at), source: "long", ...(at === 170000 ? { ours: true } : {}) },
+      apart: [{ model: "own/gpt-own-1m", value: 430000 }],
+      compact: { model: "gpt-5.5", current: at, window: 1000000, best: 170000, cost: at === 170000 ? 1.02e9 : 1.4e9, low: 1.02e9, curve: curve(50000, 500000, 170000), facts } },
+  ] }],
+});
+const apartNote = {
+  en: "own/gpt-own-1m compacts at its own 430K, which this doesn't move",
+  zh: "own/gpt-own-1m 有自己的压缩阈值 430K，这里不会改动它",
+  "zh-TW": "own/gpt-own-1m 有自己的壓縮閾值 430K，這裡不會改動它",
+  ja: "own/gpt-own-1m には独自の圧縮しきい値 430K があり、ここでは変わりません",
+  de: "own/gpt-own-1m hat ein eigenes „Komprimieren ab“ (430K), das sich hier nicht ändert",
+};
+const use170 = { en: "Use 170K", zh: "使用 170K", "zh-TW": "使用 170K", ja: "170K にする", de: "170K verwenden" };
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  test(`${engine}: Use on Codex's window lands over 7 and 30 days, a model's own Compact at named apart`, async (t) => {
+    const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+    const errors = [];
+    t.after(() => browser.close());
+    for (const days of ["7", "30"]) for (const lang of Object.keys(heading)) for (const [width, height] of [[360, 760], [1100, 760]]) {
+      await t.test(`${days} days, ${lang}, ${width}x${height}`, async () => {
+        const ctx = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce" });
+        await ctx.addInitScript((d) => { try { localStorage.setItem("magpie.usageTab", "context"); localStorage.setItem("magpie.ctxDays", d); } catch {} }, days);
+        const page = await ctx.newPage();
+        page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
+        page.on("pageerror", (e) => errors.push(e.message));
+        const posts = [], asked = [];
+        let at = 272000;
+        const base = serve(lang, posts);
+        await page.route("**/*", (r) => {
+          const url = new URL(r.request().url());
+          if (url.pathname === "/api/tune") {
+            asked.push(url.searchParams.get("days"));
+            return r.fulfill({ json: apartTune(url.searchParams.get("days"), at) });
+          }
+          if (url.pathname === "/api/tune/apply") at = +JSON.parse(r.request().postData()).value;
+          return base(r);
+        });
+        await page.goto("http://magpie.test/?view=usage");
+        const row = page.locator(".ctx-tune-row").nth(0);
+        await row.locator(".ctx-tune-foot .ctx-chip").waitFor();
+        assert.deepEqual([...new Set(asked)], [days]);
+        assert.equal(await row.locator(".ctx-tune-apart").innerText(), apartNote[lang]);
+        const go = row.locator(".ctx-tune-foot button.primary");
+        assert.equal(await go.innerText(), use170[lang]);
+        const over = await page.evaluate(() => {
+          const view = document.querySelector("#view-usage");
+          const out = view.scrollWidth > view.clientWidth + 1 ? ["page " + view.scrollWidth + ">" + view.clientWidth] : [];
+          const b = document.querySelector(".ctx-tune").getBoundingClientRect();
+          for (const e of document.querySelectorAll(".ctx-tune *")) {
+            const r = e.getBoundingClientRect();
+            if (r.width && (r.right > b.right + 1 || r.left < b.left - 1)) out.push((e.className.baseVal ?? e.className) + " " + Math.round(r.left) + "–" + Math.round(r.right));
+          }
+          return out;
+        });
+        assert.deepEqual(over, []);
+        await go.click();
+        await page.locator(".ctx-tune-row.done .ctx-chip.good").waitFor();
+        assert.deepEqual(posts.map((b) => [b.path, b.agent, b.knob, b.value]), [["/api/tune/apply", "codex", "compact", "170000"]]);
+        assert.deepEqual([...new Set(asked)], [days], "the range shown is asked again");
+        assert.equal(await row.locator(".ctx-tune-foot .ctx-chip").first().innerText(), inUse[lang]);
+        assert.equal(await row.locator(".ctx-tune-foot button.primary").count(), 0);
+        assert.equal(await row.locator(".ctx-tune-apart").innerText(), apartNote[lang]);
+        await ctx.close();
+      });
+    }
+    assert.deepEqual(errors, []);
+  });
+}
+
+// hoobnn on Discord (11-01), after v0.1.2572: Use on Codex's window said
+// "In use" with Undo over Today, but not "In use" over 7 or 30 days. Today's
+// calls were Codex's own models, whose window Long conversations doesn't
+// move, so Now stayed and the row read "In use"; over 7 and 30 days a
+// provider's model moved with it, Now read the advice, and the row said
+// "Already the leanest" instead. The advice magpie put in is "In use" in
+// each range, Undo beside it, and Undo puts Use back. In both engines,
+// every language, a phone's width and a desk's.
+const rangeTune = (days, set) => ({
+  days: +days,
+  agents: [{ agent: "codex", calls: 2808, advice: [
+    { knob: "compact", setting: set ? { value: "170000", source: "long", ours: true } : { value: "272000", source: "long" },
+      compact: { model: "gpt-5.5", current: set && days !== "1" ? 170000 : 272000, window: 1000000, best: 170000, cost: 1.4e9, low: 1.02e9, curve: curve(50000, 500000, 170000), facts } },
+  ] }],
+});
+const undoName = { en: "Undo", zh: "撤销", "zh-TW": "復原", ja: "取り消す", de: "Rückgängig" };
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  test(`${engine}: Use on Codex's window is In use with Undo over Today, 7 and 30 days`, async (t) => {
+    const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+    const errors = [];
+    t.after(() => browser.close());
+    for (const days of ["1", "7", "30"]) for (const lang of Object.keys(heading)) for (const [width, height] of [[360, 760], [1100, 760]]) {
+      await t.test(`${days} days, ${lang}, ${width}x${height}`, async () => {
+        const ctx = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce" });
+        await ctx.addInitScript((d) => { try { localStorage.setItem("magpie.usageTab", "context"); localStorage.setItem("magpie.ctxDays", d); } catch {} }, days);
+        const page = await ctx.newPage();
+        page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
+        page.on("pageerror", (e) => errors.push(e.message));
+        const posts = [];
+        let set = false;
+        const base = serve(lang, posts);
+        await page.route("**/*", (r) => {
+          const url = new URL(r.request().url());
+          if (url.pathname === "/api/tune") return r.fulfill({ json: rangeTune(url.searchParams.get("days"), set) });
+          if (url.pathname === "/api/tune/apply") set = true;
+          if (url.pathname === "/api/tune/undo") set = false;
+          return base(r);
+        });
+        await page.goto("http://magpie.test/?view=usage");
+        const row = page.locator(".ctx-tune-row").nth(0);
+        const go = row.locator(".ctx-tune-foot button.primary");
+        await go.waitFor();
+        assert.equal(await go.innerText(), use170[lang]);
+        await go.click();
+        const undo = row.locator(".ctx-tune-foot button.text:not(.primary)", { hasText: undoName[lang] });
+        await undo.waitFor();
+        assert.equal(await row.locator(".ctx-tune-foot .ctx-chip").innerText(), inUse[lang]);
+        assert.equal(await row.locator(".ctx-tune-foot .ctx-chip").getAttribute("class"), "ctx-chip good");
+        assert.equal(await row.locator(".ctx-tune-foot button.primary").count(), 0);
+        const over = await page.evaluate(() => {
+          const view = document.querySelector("#view-usage");
+          const out = view.scrollWidth > view.clientWidth + 1 ? ["page " + view.scrollWidth + ">" + view.clientWidth] : [];
+          const b = document.querySelector(".ctx-tune").getBoundingClientRect();
+          for (const e of document.querySelectorAll(".ctx-tune-foot *")) {
+            const r = e.getBoundingClientRect();
+            if (r.width && (r.right > b.right + 1 || r.left < b.left - 1)) out.push(e.className + " " + Math.round(r.left) + "–" + Math.round(r.right));
+          }
+          return out;
+        });
+        assert.deepEqual(over, []);
+        await undo.click();
+        await go.waitFor();
+        assert.equal(await go.innerText(), use170[lang]);
+        assert.deepEqual(posts.map((b) => [b.path, b.agent, b.knob, b.value]), [["/api/tune/apply", "codex", "compact", "170000"], ["/api/tune/undo", "codex", "compact", ""]]);
         await ctx.close();
       });
     }

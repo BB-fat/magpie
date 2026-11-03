@@ -75,7 +75,7 @@ type AgentCount struct {
 // those kept as files of their own, in a layout magpie knows whole.
 func Deletable(agent string) bool {
 	switch agent {
-	case "claude", "qoder", "qoder-cn", "workbuddy", "codebuddy", "codex", "pi", "raft", "omp", "cursor", "dsh", "droid", "agy":
+	case "claude", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "codebuddy", "codex", "pi", "raft", "cindy", "omp", "cursor", "dsh", "droid", "agy":
 		return true
 	}
 	return false
@@ -198,7 +198,7 @@ func readFor(want, all []file, quick bool) (pending map[string]bool, done func()
 // session's file, not taken from its name (as assemble does).
 func idInFile(agent string) bool {
 	switch agent {
-	case "codex", "pi", "raft", "omp", "dsh", "grok", "droid":
+	case "codex", "pi", "raft", "cindy", "omp", "dsh", "grok", "droid":
 		return true
 	}
 	return false
@@ -532,7 +532,7 @@ func sessionPaths(agent, id string, fs []file) []string {
 			}
 			// the folder beside it: a Claude Code session's subagents and
 			// tool results, an omp session's artifacts
-			if agent != "codex" && agent != "pi" && agent != "raft" {
+			if agent != "codex" && agent != "pi" && agent != "raft" && agent != "cindy" {
 				if d := strings.TrimSuffix(f.path, ".jsonl"); d != f.path {
 					if fi, err := os.Stat(d); err == nil && fi.IsDir() {
 						add(d)

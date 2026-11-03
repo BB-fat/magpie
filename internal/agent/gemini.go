@@ -261,7 +261,7 @@ func geminiIn(at place) *Agent {
 						}
 					}
 					own := group("Gemini CLI", options(ms, ""))
-					return append(own, viaMagpie("gemini", "")...)
+					return withVia(own, "gemini", "")
 				},
 			},
 		},

@@ -34,16 +34,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/wslrun"
 )
 
 // ReadyWait is how long Claude Code may take to show its prompt before
-// the helper becomes -p (printMode). The bridge's wait for the helper's
-// answer to its initialize request is longer by as much as -p takes to
-// answer it (#4504): a wait shorter than this one ended the helper as it
-// waited, before it became -p, and the turn was answered 502.
+// the helper ends, saying why. The bridge's wait for the helper's answer
+// to its initialize request is longer (#4504): a wait shorter than this
+// one ended the helper as it waited, and the turn was answered 502 with
+// no reason.
 const ReadyWait = 45 * time.Second
 
 // how long Claude Code may take to show its prompt, a pasted message to
@@ -73,6 +75,12 @@ type shim struct {
 	screenMu sync.Mutex
 	screen   []byte
 	changed  chan struct{}
+	// grid is the screen as a terminal shows it (screen.go), drawn from
+	// the start; panel is how it looked last while a /usage read was
+	// going (watch) and showed a window, "" once the screen is cleared
+	grid  *grid
+	watch bool
+	panel string
 
 	// rows ticks when a user message (or one queued mid-turn) reaches the
 	// transcript: a pasted message was sent
@@ -91,21 +99,31 @@ type shim struct {
 	nimages int
 
 	// wsl is a Claude Code in a WSL distro (WSLEnv); nil for this
-	// machine's
-	wsl *WSL
+	// machine's. wslr reads its transcript inside the distro, when
+	// Windows can't (wslread.go)
+	wsl  *WSL
+	wslr *wslRead
 
 	// tap copies the replies' streams (tap.go), nil with none; env is
 	// what Claude Code is given for it
 	tap *tap
 	env []string
+
+	// listed is the file magpie's tool server writes once Claude Code has
+	// listed its tools (mcpListed), "" for a run without it
+	listed string
+
+	// doing is what Claude Code is being waited on for, as late says it
+	// once its caller stops waiting (DeadlineEnv)
+	doing atomic.Value
 }
 
 // Run runs Claude Code at path, args being the bridge's `claude -p` ones,
 // with stream-json on standard input and output: interactive, with the
 // same model, tools and settings (interactiveArgs). One that doesn't come
-// up becomes the -p run it stands for (printMode), reading the input
-// still unread, unless the user has it never be -p (OnlyEnv): then it
-// ends, saying why.
+// up ends, saying why: it never becomes the -p run it stands for, as a -p
+// request counts against the plan as another client's would, and starts
+// without the interactive mode's cache.
 func Run(args []string) error {
 	if len(args) < 1 {
 		return errors.New("usage: magpie " + Command + " <claude> [claude -p's arguments]")
@@ -114,28 +132,18 @@ func Run(args []string) error {
 	var wsl *WSL
 	if v := os.Getenv(WSLEnv); v != "" {
 		wsl = &WSL{}
-		if err := json.Unmarshal([]byte(v), wsl); err != nil || len(wsl.Args) == 0 || wsl.Projects == "" {
+		if err := json.Unmarshal([]byte(v), wsl); err != nil || len(wsl.Args) == 0 || wsl.Projects == "" && wsl.Distro == "" {
 			return fmt.Errorf("%s: %q", WSLEnv, v)
 		}
 		// wsl.exe's own arguments, then Claude Code's
 		pargs = append(slices.Clone(wsl.Args), pargs...)
 	}
-	only := os.Getenv(OnlyEnv) == "1"
-	// fallBack is the -p run, or with OnlyEnv the end, for why
-	fallBack := func(why string) error {
-		if only {
-			fmt.Fprintf(os.Stderr, "claude-tui: %s; the interactive mode only is set, so this run doesn't fall back to -p\n", why)
-			return fmt.Errorf("Claude Code's interactive mode didn't run, and magpie is set to use only it: %s", why)
-		}
-		fmt.Fprintf(os.Stderr, "claude-tui: %s; this run is -p\n", why)
-		return printMode(path, pargs)
-	}
-	if since, ok := BrokenSince(); ok && !only {
-		fmt.Fprintf(os.Stderr, "claude-tui: Claude Code's interactive mode failed to start %s ago; this run is -p\n", time.Since(since).Round(time.Second))
-		return printMode(path, pargs)
+	fail := func(why string) error {
+		fmt.Fprintf(os.Stderr, "claude-tui: %s\n", why)
+		return fmt.Errorf("Claude Code's interactive mode didn't run: %s", why)
 	}
 	args = interactiveArgs(pargs[len(wslArgs(wsl)):])
-	s := &shim{out: os.Stdout, changed: make(chan struct{}, 1), rowsCh: make(chan struct{}, 1), exited: make(chan struct{}), wsl: wsl}
+	s := &shim{out: os.Stdout, changed: make(chan struct{}, 1), rowsCh: make(chan struct{}, 1), exited: make(chan struct{}), wsl: wsl, listed: mcpListed(args)}
 	resume := ""
 	for i, a := range args {
 		if a == "--resume" && i+1 < len(args) {
@@ -149,8 +157,19 @@ func Run(args []string) error {
 		args = append(args, "--session-id", s.sid)
 	}
 	s.projects = filepath.Join(configDir(), "projects")
-	if wsl != nil {
+	if wsl != nil && wsl.Projects != "" {
 		s.projects = wsl.Projects
+	} else if wsl != nil {
+		dir, err := os.MkdirTemp("", "magpie-claude-wsl-")
+		if err != nil {
+			return fail(err.Error())
+		}
+		defer os.RemoveAll(dir)
+		if s.wslr, err = startWSLRead(wsl.Distro, s.sid, dir); err != nil {
+			return fail(err.Error())
+		}
+		defer s.wslr.stop()
+		s.projects = dir
 	}
 	// a resumed session's file has its earlier turns: only what is
 	// written after the start is read
@@ -166,8 +185,7 @@ func Run(args []string) error {
 	defer s.tap.drop()
 	if err := s.start(path, append(slices.Clone(wslArgs(wsl)), args...)); err != nil {
 		s.tap.drop()
-		MarkBroken()
-		return fallBack(fmt.Sprintf("Claude Code's interactive mode could not start (%v)", err))
+		return fail(fmt.Sprintf("Claude Code's interactive mode could not start (%v)", err))
 	}
 	defer s.stop()
 	defer s.dropImages()
@@ -181,16 +199,24 @@ func Run(args []string) error {
 		s.tap.drop()
 		os.Exit(1)
 	}()
+	if by, ok := deadline(os.Getenv(DeadlineEnv)); ok {
+		started := time.Now()
+		t := time.AfterFunc(time.Until(by), func() {
+			fmt.Fprintf(os.Stderr, "claude-tui: %s\n", s.late(time.Since(started)))
+			s.stop()
+			s.dropImages()
+			s.tap.drop()
+			os.Exit(1)
+		})
+		defer t.Stop()
+	}
+	s.doing.Store("showed no prompt")
 	if err := s.ready(); err != nil {
-		if !errors.Is(err, errUntrusted) {
-			MarkBroken()
-		}
 		signal.Reset()
 		s.stop()
 		s.tap.drop()
-		return fallBack(err.Error())
+		return fail(err.Error())
 	}
-	clearBroken()
 	s.emit(map[string]any{"type": "system", "subtype": "init", "session_id": s.sid})
 	go s.tail(from)
 	return s.input(os.Stdin)
@@ -207,7 +233,7 @@ func wslArgs(wsl *WSL) []string {
 
 // configDir is the folder Claude Code keeps its state in.
 func configDir() string {
-	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+	if d := appdir.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
 		return d
 	}
 	home, _ := os.UserHomeDir()
@@ -267,6 +293,18 @@ func (s *shim) read() {
 			if len(s.screen) > 256<<10 {
 				s.screen = append([]byte(nil), s.screen[len(s.screen)-128<<10:]...)
 			}
+			if s.grid == nil {
+				s.grid = newGrid(screenSize())
+			}
+			s.grid.write(d)
+			if s.watch {
+				// a panel can be drawn only for a moment (Claude Code
+				// 2.1.316 draws /usage's windows, then the panel again
+				// without them), so each look of it is kept
+				if t := s.grid.text(); usageUsed.MatchString(t) {
+					s.panel = t
+				}
+			}
 			s.screenMu.Unlock()
 			select {
 			case s.changed <- struct{}{}:
@@ -293,7 +331,34 @@ func (s *shim) plain() string {
 func (s *shim) clearScreen() {
 	s.screenMu.Lock()
 	s.screen = s.screen[:0]
+	s.panel = ""
 	s.screenMu.Unlock()
+}
+
+// screenCols and screenRows are the size of Claude Code's terminal, the
+// pseudo-terminal (child_unix.go) and Windows' pseudo console
+// (child_windows.go) made alike, and the grid the helper reads it on. A
+// grid of another size misreads the screen: an 80 by 24 one, on macOS and
+// Linux while their pseudo-terminal was 200 by 50, drew every row under
+// the 24th over the 24th, and /usage's panel, at the foot of the screen,
+// was told as one window or as a figure since drawn again (#4988, shinnqy
+// on X).
+const (
+	screenCols = 200
+	screenRows = 50
+)
+
+func screenSize() (cols, rows int) { return screenCols, screenRows }
+
+// looks is the screen as it is now, and the last look of it with a
+// usage window since it was cleared, while watched.
+func (s *shim) looks() (now, panel string) {
+	s.screenMu.Lock()
+	defer s.screenMu.Unlock()
+	if s.grid != nil {
+		now = s.grid.text()
+	}
+	return now, s.panel
 }
 
 // lastScreen is the end of what Claude Code drew, for an error to say.
@@ -321,35 +386,110 @@ func lastAt(re *regexp.Regexp, p string) int {
 	return m[len(m)-1][0]
 }
 
-var errUntrusted = errors.New("Claude Code asks whether to trust the folder, which only its user answers")
+// deadline reads DeadlineEnv's value: when the caller stops waiting.
+func deadline(v string) (time.Time, bool) {
+	ms, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || ms <= 0 {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(ms), true
+}
+
+// late is why the run ends at its caller's deadline (DeadlineEnv), d
+// after it started: what Claude Code hadn't done by then, and what it
+// last drew.
+func (s *shim) late(d time.Duration) string {
+	doing, _ := s.doing.Load().(string)
+	if doing == "" {
+		doing = "showed no prompt"
+	}
+	return fmt.Sprintf("Claude Code %s in the %s its caller waits for it: %s", doing, d.Round(100*time.Millisecond), s.lastScreen())
+}
+
+var errUntrusted = errors.New(Untrusted + ", which only its user answers")
 
 // signIn is what Claude Code's interactive mode shows where it is not
 // signed in, as -p may be (CLAUDE_CODE_OAUTH_TOKEN, a container whose
 // ~/.claude.json has no onboarding done): nothing the helper may answer.
 var signIn = regexp.MustCompile(`Select login method|Log in with your Claude account|claude\.ai/oauth/authorize`)
 
-// firstRun is the notes Claude Code's interactive mode shows where its
-// onboarding isn't done (a config folder only -p was run in, given
-// CLAUDE_CODE_OAUTH_TOKEN): agreeing to them is the user's, as is what
-// comes after them. It is matched in the screen's words, any space
-// between them one: Claude Code draws some by moving the cursor.
-var firstRun = regexp.MustCompile(`Security notes:.*Press Enter to continue`)
+// The screens Claude Code's interactive mode shows where its onboarding
+// isn't done (a config folder only -p was run in, or one signed in where
+// `claude` was never run, #4817), after its text style (theme): the
+// security notes, which Enter goes past as it would for a person, and,
+// in a terminal it knows how to set up (TERM_PROGRAM Apple_Terminal,
+// vscode, …), whether to set it up, which Esc skips: magpie's terminal is
+// no one's. Once past them, Claude Code records the onboarding done
+// itself (2.1.316: hasCompletedOnboarding, lastOnboardingVersion), and
+// the next run shows none of them. They are matched in the screen's
+// words, any space between them one: Claude Code draws some by moving the
+// cursor.
+var (
+	firstRun      = regexp.MustCompile(`Security notes:.*Press Enter to continue`)
+	terminalSetup = regexp.MustCompile(`terminal setup\?.*Esc to skip`)
+)
+
+// onboardTries is how often one onboarding screen is answered before the
+// run ends.
+const onboardTries = 3
 
 // ready waits for Claude Code's prompt. Asked whether to trust the folder
 // it runs in, it is told yes, as a person would, when TrustEnv says so.
 func (s *shim) ready() error {
 	deadline := time.After(readyWait)
 	answered := 0
+	prompted := false
 	var yesAt, downAt time.Time
+	// an onboarding screen is answered once it has stayed drawn
+	// trustSettle: a key sent as it is first drawn can be lost to its
+	// being drawn again, and nothing then draws it once more
+	shownAt := map[string]time.Time{}
+	pressed := map[string]int{}
+	// the folder the trust question is about, for the reason a run that
+	// ends on it gives: "showed no prompt" said nothing of the question
+	// a saved account's reads waited out on (#4830, mydosu)
+	folder, _ := os.Getwd()
+	if folder == "" {
+		folder = "the folder it runs in"
+	}
+	asking := "asked whether to trust " + folder + ", not answered"
+	onboard := func(screen, key string) error {
+		if shownAt[screen].IsZero() {
+			shownAt[screen] = time.Now()
+		}
+		if time.Since(shownAt[screen]) < trustSettle {
+			return nil
+		}
+		if pressed[screen] >= onboardTries {
+			return fmt.Errorf("Claude Code's interactive mode stays on its first-run screens, its onboarding not done; run Claude Code once in a terminal and go through them: %s", s.lastScreen())
+		}
+		pressed[screen]++
+		delete(shownAt, screen)
+		s.clearScreen()
+		_, _ = io.WriteString(s.pty, key)
+		return nil
+	}
 	for {
 		p := s.plain()
+		words := strings.Join(strings.Fields(p), " ")
+		doing := "showed no prompt"
+		if strings.Contains(p, "trust this folder") {
+			doing = asking
+		}
+		s.doing.Store(doing)
 		switch {
 		case strings.Contains(p, "trust this folder") && os.Getenv(TrustEnv) != "1":
 			return errUntrusted
 		case signIn.MatchString(p):
 			return fmt.Errorf("Claude Code's interactive mode asks to sign in: %s", s.lastScreen())
-		case firstRun.MatchString(strings.Join(strings.Fields(p), " ")):
-			return fmt.Errorf("Claude Code's interactive mode shows its first-run notes, its onboarding not done: %s", s.lastScreen())
+		case firstRun.MatchString(words):
+			if err := onboard("notes", "\r"); err != nil {
+				return err
+			}
+		case terminalSetup.MatchString(words):
+			if err := onboard("terminal", "\x1b"); err != nil {
+				return err
+			}
 		case strings.Contains(p, "trust this folder") && answered < 3:
 			// the choice is the last one drawn after ❯, "No, exit" at
 			// first. A key sent as the question is first drawn can be lost
@@ -380,11 +520,21 @@ func (s *shim) ready() error {
 			// --no-chrome
 			s.clearScreen()
 			_, _ = io.WriteString(s.pty, "\x1b")
-		case strings.Contains(p, "Choose the text style"):
-			s.clearScreen()
-			_, _ = io.WriteString(s.pty, "\r")
+		case strings.Contains(words, "Choose the text style"):
+			if err := onboard("theme", "\r"); err != nil {
+				return err
+			}
 		case strings.Contains(p, "❯ "):
-			// drawn: a moment for its input to be listened to
+			if !s.toolsListed() {
+				// drawn before Claude Code has its MCP servers' tools: it
+				// connects them as the prompt shows, and a message sent
+				// now is answered without the agent's tools, which
+				// magpie's tool server carries (MinhuWang on X)
+				prompted = true
+				break
+			}
+			// drawn: a moment for its input to be listened to, and for
+			// the tools just listed to be taken up
 			time.Sleep(300 * time.Millisecond)
 			return nil
 		}
@@ -394,9 +544,48 @@ func (s *shim) ready() error {
 		case <-s.exited:
 			return fmt.Errorf("Claude Code ended before it showed its prompt (%v): %s", s.exit, s.lastScreen())
 		case <-deadline:
-			return fmt.Errorf("Claude Code showed no prompt in %s: %s", readyWait, s.lastScreen())
+			if prompted {
+				return fmt.Errorf("Claude Code showed its prompt, but hadn't listed the tools of magpie's tool server in %s", readyWait)
+			}
+			doing, _ := s.doing.Load().(string)
+			return fmt.Errorf("Claude Code %s in %s: %s", doing, readyWait, s.lastScreen())
 		}
 	}
+}
+
+// toolsListed is whether Claude Code has listed magpie's tool server's
+// tools, or the run has no such server.
+func (s *shim) toolsListed() bool {
+	if s.listed == "" {
+		return true
+	}
+	_, err := os.Stat(s.listed)
+	return err == nil
+}
+
+// mcpListed is the file magpie's tool server (MCPCommand) is told, in the
+// --mcp-config of args, to write once Claude Code has listed its tools;
+// "" when it isn't told one.
+func mcpListed(args []string) string {
+	for i, a := range args {
+		if a != "--mcp-config" || i+1 >= len(args) {
+			continue
+		}
+		var c struct {
+			Servers map[string]struct {
+				Args []string `json:"args"`
+			} `json:"mcpServers"`
+		}
+		if json.Unmarshal([]byte(args[i+1]), &c) != nil {
+			continue
+		}
+		for _, srv := range c.Servers {
+			if len(srv.Args) == 4 && srv.Args[0] == MCPCommand {
+				return srv.Args[3]
+			}
+		}
+	}
+	return ""
 }
 
 func (s *shim) emit(v any) {
@@ -422,6 +611,7 @@ func (s *shim) input(r io.Reader) error {
 			Message struct {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
+			Command string `json:"command"`
 		}
 		if json.Unmarshal(sc.Bytes(), &m) != nil {
 			continue
@@ -434,7 +624,12 @@ func (s *shim) input(r io.Reader) error {
 					"error": "Claude Code's interactive mode takes no " + m.Request.Subtype + " request"}
 			}
 			s.emit(map[string]any{"type": "control_response", "response": resp})
+		case "command":
+			if err := s.command(m.Command); err != nil {
+				return err
+			}
 		case "user":
+			s.doing.Store("hadn't answered")
 			pieces, err := s.userPieces(m.Message.Content)
 			if err != nil {
 				s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
@@ -452,6 +647,179 @@ func (s *shim) input(r io.Reader) error {
 		}
 	}
 	return sc.Err()
+}
+
+// how long a command's panel may take to be drawn, and how long it stays
+// as it is before it is taken as drawn whole
+var (
+	commandWait   = 20 * time.Second
+	commandSettle = time.Second
+)
+
+// command runs /usage, which Claude Code answers itself, asking no model:
+// it is typed, and what Claude Code shows for it is told as the result -p's
+// /usage gives (usageText), its local_command named. The panel is closed
+// after. It is the one command a line {"type":"command"} runs: the plan's
+// allowance read in the interactive mode, where -p's /usage tells no
+// window of it (Claude Code 2.1.316).
+func (s *shim) command(name string) error {
+	s.doing.Store("hadn't drawn " + name + "'s panel")
+	if name != "/usage" {
+		s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
+			"result": "the helper types no " + name + " in Claude Code's interactive mode"})
+		return nil
+	}
+	for _, c := range name {
+		if _, err := io.WriteString(s.pty, string(c)); err != nil {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// the command menu drawn as it was typed settles, and is left out of
+	// what is read
+	time.Sleep(commandSettle)
+	s.clearScreen()
+	if _, err := io.WriteString(s.pty, "\r"); err != nil {
+		return err
+	}
+	s.screenMu.Lock()
+	s.watch = true
+	s.screenMu.Unlock()
+	defer func() {
+		s.screenMu.Lock()
+		s.watch = false
+		s.screenMu.Unlock()
+	}()
+	by := time.After(commandWait)
+	last, quiet, drawn, retried := "", time.Now(), false, false
+	var now, panel string
+	for waiting := true; waiting; {
+		p := s.plain()
+		now, panel = s.looks()
+		if p+now != last {
+			last, quiet = p+now, time.Now()
+		}
+		still := time.Since(quiet)
+		loading, failed := usageLoading.MatchString(now), usageFailed.MatchString(now)
+		figures := panel != "" || usageUsed.MatchString(p)
+		switch {
+		case loading:
+			// the panel is drawn before its figures, which Claude Code
+			// asks Anthropic for: a slow answer kept "Loading usage
+			// data…" on screen past the 3s below, and the panel's
+			// frame was told as the figures (Seagull fries)
+			s.doing.Store("was still loading " + name + "'s figures")
+			if figures && still >= 3*commandSettle {
+				drawn = true
+			}
+		case failed && !figures && !retried && still >= commandSettle:
+			// "Error: Failed to load usage data", "r to retry"
+			s.doing.Store("couldn't load " + name + "'s figures")
+			if _, err := io.WriteString(s.pty, "r"); err != nil {
+				return err
+			}
+			retried, quiet = true, time.Now()
+		// drawn: its windows, and the panel still a moment; or the
+		// panel's words with no window (a failure, a plan with no
+		// allowance) still for longer. Claude Code draws itself again
+		// first (its banner, the folder, the prompt's rules), which
+		// stays still while a slow /usage loads: told as the panel, its
+		// banner was read as an allowance (ikunbots on X, v0.1.2738).
+		// Anything else is waited for only once the panel's tabs are
+		// drawn, and not loading.
+		case figures && still >= commandSettle,
+			(failed || usageDrawn(p) || usageDrawn(now)) && still >= 3*commandSettle:
+			drawn = true
+		}
+		if drawn {
+			break
+		}
+		select {
+		case <-s.changed:
+		case <-time.After(100 * time.Millisecond):
+		case <-by:
+			waiting = false
+		case <-s.exited:
+			return fmt.Errorf("Claude Code ended (%v): %s", s.exit, s.lastScreen())
+		}
+	}
+	_, _ = io.WriteString(s.pty, "\x1b")
+	p := s.plain()
+	text := usageText(panel)
+	if panel == "" {
+		text = usageText(p)
+	}
+	switch {
+	case !usageUsed.MatchString(panel+p) && (usageLoading.MatchString(now) || usageFailed.MatchString(now)):
+		// no figures, the panel still loading them or saying it
+		// couldn't: unknown, not a plan with no allowance
+		s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
+			"result": name + " couldn't load the plan's usage: " + strings.Join(strings.Fields(now), " ")})
+		return nil
+	case !drawn:
+		s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
+			"result": fmt.Sprintf("Claude Code hadn't drawn /usage's panel in %s: %s", commandWait, s.lastScreen())})
+		return nil
+	}
+	s.emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": s.sid,
+		"local_command": "usage", "result": text})
+	return nil
+}
+
+// usageDrawn is /usage's panel drawn and loaded: the tabs of the Settings
+// it opens in ("Settings  Status  Config  Usage  Stats", Claude Code
+// 2.1.316), with nothing still loading.
+func usageDrawn(screen string) bool {
+	t := strings.Join(strings.Fields(screen), " ")
+	return usagePanel.MatchString(t) && !usageLoading.MatchString(t)
+}
+
+// /usage's panel once its figures failed to load (Claude Code 2.1.316)
+var usageFailed = regexp.MustCompile(`Failed to load usage data`)
+
+var (
+	usageName    = regexp.MustCompile(`^(session|week(?: \([^)]*\))?)`)
+	usageUsed    = regexp.MustCompile(`([0-9.]+)%\s+used`)
+	usageReset   = regexp.MustCompile(`Resets (.*?\))`)
+	usagePanel   = regexp.MustCompile(`\bSettings\b.*\bUsage\b`)
+	usageLoading = regexp.MustCompile(`(?i)\bloading\b`)
+)
+
+// usageText is the plan's allowance as /usage's panel shows it, each
+// window a bar ("Current session ███▌ 99% used", then "Resets 7pm
+// (Asia/Shanghai)" below), said as -p's lines say it: "Current session:
+// 99% used · resets 7pm (Asia/Shanghai)", a window drawn again told as
+// drawn last. Overages are said as /usage says them. A panel with no
+// window is told as drawn, for its words to say why.
+func usageText(screen string) string {
+	t := strings.Join(strings.Fields(screen), " ")
+	var names []string
+	said := map[string]string{}
+	for _, chunk := range strings.Split(t, "Current ")[1:] {
+		name, used := usageName.FindString(chunk), usageUsed.FindStringSubmatch(chunk)
+		if name == "" || used == nil {
+			continue
+		}
+		line := "Current " + name + ": " + used[1] + "% used"
+		if r := usageReset.FindStringSubmatch(chunk[strings.Index(chunk, used[0]):]); r != nil {
+			line += " · resets " + r[1]
+		}
+		if _, ok := said[name]; !ok {
+			names = append(names, name)
+		}
+		said[name] = line
+	}
+	var lines []string
+	for _, n := range names {
+		lines = append(lines, said[n])
+	}
+	if strings.Contains(t, "using your overages") {
+		lines = append(lines, "You are currently using your overages to power your Claude Code usage.")
+	}
+	if len(lines) == 0 {
+		return t
+	}
+	return strings.Join(lines, "\n")
 }
 
 // piece is a part of a user message as it is pasted: words, or the path
@@ -710,6 +1078,13 @@ func (s *shim) pasteImage(path string, after int) (int, error) {
 	}
 }
 
+// shownWait is how long a paste of n bytes may take to show: Claude Code
+// takes a long one in at about 100KB a second (a real 3MB paste showed
+// "[Pasted text" after 35s), so pasteWait and a second for every 64KB.
+func shownWait(n int) time.Duration {
+	return pasteWait + time.Duration(n/(64<<10))*time.Second
+}
+
 // shown waits for the prompt to show pasted text: its last words, or
 // Claude Code's "[Pasted text" for a long one. Text "" waits for nothing.
 func (s *shim) shown(text string) error {
@@ -723,7 +1098,7 @@ func (s *shim) shown(text string) error {
 	if r := []rune(tail); len(r) > 16 {
 		tail = string(r[len(r)-16:])
 	}
-	shownBy := time.After(pasteWait)
+	shownBy := time.After(shownWait(len(text)))
 shown:
 	for {
 		p := s.plain()
@@ -813,6 +1188,7 @@ func (s *shim) tail(from int64) {
 		select {
 		case <-s.exited:
 			// what it wrote last
+			s.wslr.settle()
 			if line, _ := rd.ReadBytes('\n'); len(line) > 0 {
 				t.row(append(part, line...))
 			}
@@ -865,79 +1241,4 @@ func interactiveArgs(pargs []string) []string {
 		out = append(out, a)
 	}
 	return append(out, "--permission-mode", "default", "--allowedTools", strings.Join(allowed, ","), "--no-chrome")
-}
-
-// broken is where a failed start is kept: for a while after it
-// (brokenFor), runs go straight to -p, rather than each waiting out
-// readyWait. It holds how many starts in a row failed.
-func broken() string {
-	dir, err := os.UserCacheDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(dir, "magpie", "claude-tui-broken")
-}
-
-// brokenFor is how long runs go to -p after the interactive mode failed
-// to start n times in a row: 30 minutes, doubled with each failure after,
-// to a day. A machine where it never starts (a container whose Claude Code
-// is signed in for -p only, #4504) waits out readyWait about once a day.
-func brokenFor(n int) time.Duration {
-	d := 30 * time.Minute
-	for i := 1; i < n && d < 24*time.Hour; i++ {
-		d *= 2
-	}
-	return min(d, 24*time.Hour)
-}
-
-func brokenRead() (time.Time, int, bool) {
-	p := broken()
-	if p == "" {
-		return time.Time{}, 0, false
-	}
-	fi, err := os.Stat(p)
-	if err != nil {
-		return time.Time{}, 0, false
-	}
-	b, _ := os.ReadFile(p)
-	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || n < 1 {
-		// a mark from before the count, or one half written
-		n = 1
-	}
-	return fi.ModTime(), n, true
-}
-
-// BrokenSince is when the interactive mode last failed to start, while
-// runs go to -p for it.
-func BrokenSince() (time.Time, bool) {
-	at, n, ok := brokenRead()
-	if !ok || time.Since(at) > brokenFor(n) {
-		return time.Time{}, false
-	}
-	return at, true
-}
-
-// MarkBroken notes that the interactive mode failed to start: by the
-// helper, and by the bridge when the helper didn't answer in time.
-func MarkBroken() {
-	p := broken()
-	if p == "" {
-		return
-	}
-	n := 1
-	if _, was, ok := brokenRead(); ok {
-		n = was + 1
-	}
-	_ = os.MkdirAll(filepath.Dir(p), 0o700)
-	_ = os.WriteFile(p, []byte(strconv.Itoa(n)), 0o600)
-	now := time.Now()
-	_ = os.Chtimes(p, now, now)
-}
-
-// clearBroken forgets failed starts once one shows its prompt.
-func clearBroken() {
-	if p := broken(); p != "" {
-		_ = os.Remove(p)
-	}
 }

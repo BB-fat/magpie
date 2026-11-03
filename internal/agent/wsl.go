@@ -441,7 +441,7 @@ var wslKinds = []wslKind{
 					// over several accounts magpie routes, so they are
 					// offered via magpie too, as on a live Codex (#1603)
 					if codexFailover() {
-						return append(group("OpenAI", options(ownCodex(), "")), viaMagpie("codex", "")...)
+						return withVia(group("OpenAI", options(ownCodex(), "")), "codex", "")
 					}
 					own := codexInMagpie(group("OpenAI", options(ownCodex(), "")))
 					return append(own, codexViaMagpieFor(own)...)
@@ -471,7 +471,7 @@ var wslKinds = []wslKind{
 			if key == "model" {
 				// the providers of its auth.json are the distro's files
 				return func(cur map[string]string) []Option {
-					return append(ownOptions("", cur["model"]), viaMagpie("pi", magpieID+"/")...)
+					return withVia(ownOptions("", cur["model"]), "pi", magpieID+"/")
 				}
 			}
 			return nil
@@ -482,7 +482,7 @@ var wslKinds = []wslKind{
 		asleep: func(key string) func(map[string]string) []Option {
 			if key == "model" {
 				return func(cur map[string]string) []Option {
-					return append(ownOptions("", cur["model"]), viaMagpie("omo", magpieID+"/")...)
+					return withVia(ownOptions("", cur["model"]), "omo", magpieID+"/")
 				}
 			}
 			return nil
@@ -493,7 +493,7 @@ var wslKinds = []wslKind{
 		asleep: func(key string) func(map[string]string) []Option {
 			if key == "model" {
 				return func(cur map[string]string) []Option {
-					return append(ownOptions("", cur["model"]), viaMagpie("prime-agent", magpieID+"/")...)
+					return withVia(ownOptions("", cur["model"]), "prime-agent", magpieID+"/")
 				}
 			}
 			return nil
@@ -508,10 +508,11 @@ var wslKinds = []wslKind{
 			case "model":
 				// whether it has a base URL of its own is the distro's file
 				return func(cur map[string]string) []Option {
-					return append(group("Claude Code", claudeOwn(cur["model"], nil, catalog.Provider("anthropic"))), claudeViaMagpie(false)...)
+					return joinedVia(group("Claude Code", claudeOwn(cur["model"], nil, catalog.Provider("anthropic"))), claudeViaShared(false), [2]string{"\x00claude-via", "\x00asleep"})
 				}
-			case "effort", "ultracode":
-				// their own options read only what was last seen
+			case "effort", "ultracode", "statusline":
+				// their own options read only what was last seen; magpie's
+				// status line isn't offered in a distro
 				return nil
 			case "login":
 				// its sign-in, while the model last seen is magpie's
@@ -560,7 +561,7 @@ var wslKinds = []wslKind{
 				return nil
 			}
 			return func(cur map[string]string) []Option {
-				return append(kimiOwnOptions("", cur["model"]), viaMagpie("kimi", magpieID+"/")...)
+				return withVia(kimiOwnOptions("", cur["model"]), "kimi", magpieID+"/")
 			}
 		}},
 	// Qwen Code's ~/.qwen, one settings.json of the same shape as this
@@ -572,7 +573,7 @@ var wslKinds = []wslKind{
 				return nil
 			}
 			return func(cur map[string]string) []Option {
-				return append(qwenOwnOptions("", cur["model"]), viaMagpie("qwen", magpieID+"/")...)
+				return withVia(qwenOwnOptions("", cur["model"]), "qwen", magpieID+"/")
 			}
 		}},
 	{id: "omp", name: "omp", dir: ".omp", bin: "omp", in: ompIn, version: true,
@@ -582,7 +583,7 @@ var wslKinds = []wslKind{
 				return nil
 			}
 			return func(cur map[string]string) []Option {
-				return append(ompOwnOptions("", cur[key]), viaMagpie("omp", magpieID+"/")...)
+				return withVia(ompOwnOptions("", cur[key]), "omp", magpieID+"/")
 			}
 		}},
 	{id: "crush", name: "Crush", dir: ".config/crush", bin: "crush", in: crushIn,
@@ -620,7 +621,7 @@ var wslKinds = []wslKind{
 				if c := cur["model"]; c != "" && !usesMagpie(c) {
 					own = append(own, Option{Value: c, Icon: modelIcon("", c)})
 				}
-				return append(group("Droid", own), viaMagpie("droid", magpieID+"/")...)
+				return withVia(group("Droid", own), "droid", magpieID+"/")
 			}
 		}},
 	// no bin: fx is also the JSON viewer's name
@@ -635,7 +636,7 @@ var wslKinds = []wslKind{
 				return nil
 			}
 			return func(cur map[string]string) []Option {
-				return append(miniMaxOwnOptions("", cur["model"]), viaMagpie("minimax-code", magpieID+"/")...)
+				return withVia(miniMaxOwnOptions("", cur["model"]), "minimax-code", magpieID+"/")
 			}
 		}},
 	// version: a dsh with no profile yet is told from one before profiles
@@ -651,7 +652,7 @@ var wslKinds = []wslKind{
 					for i := range own {
 						own[i].Direct = "DeepSeek"
 					}
-					return append(own, viaMagpie("dsh", magpieID+"/")...)
+					return withVia(own, "dsh", magpieID+"/")
 				}
 			}
 			if key != "effort" {
@@ -692,7 +693,7 @@ var wslKinds = []wslKind{
 			}
 			// the models of its config.toml are the distro's files
 			return func(cur map[string]string) []Option {
-				return append(atomcodeOwnModels("", cur["model"]), viaMagpie("atomcode", magpieID+"/")...)
+				return withVia(atomcodeOwnModels("", cur["model"]), "atomcode", magpieID+"/")
 			}
 		}},
 	// Snow CLI's ~/.snow, its profiles the distro's own; a stopped
@@ -737,7 +738,7 @@ var wslKinds = []wslKind{
 				if c := cur["model"]; c != "" && !usesMagpie(c) {
 					own = append(own, Option{Value: c, Icon: modelIcon("", c), Direct: "Google"})
 				}
-				return append(group("Antigravity CLI", own), viaMagpie("agy", magpieID+"/")...)
+				return withVia(group("Antigravity CLI", own), "agy", magpieID+"/")
 			}
 		}},
 	// Block's goose, by its folder alone: a goose command may be pressly's
@@ -766,7 +767,7 @@ var wslKinds = []wslKind{
 			switch key {
 			case "model", "planner":
 				return func(cur map[string]string) []Option {
-					out := append(ownOptions("", cur[key]), viaMagpie("reasonix", magpieID+"/")...)
+					out := append(ownOptions("", cur[key]), viaMagpieShared("reasonix", magpieID+"/")...)
 					if key == "planner" {
 						out = append([]Option{{Value: "off", Label: "off", Note: "Disable the separate planner"}}, out...)
 					}
@@ -799,7 +800,7 @@ func wslOwnAsleep(id string, keys ...string) func(string) func(map[string]string
 			return nil
 		}
 		return func(cur map[string]string) []Option {
-			return append(ownOptions("", cur[key]), viaMagpie(id, magpieID+"/")...)
+			return withVia(ownOptions("", cur[key]), id, magpieID+"/")
 		}
 	}
 }

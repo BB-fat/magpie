@@ -170,7 +170,7 @@ func empryoAt(at place) *Agent {
 					_, id, _ := strings.Cut(c, "/")
 					own = append(own, Option{Value: c, Icon: modelIcon("", id)})
 				}
-				return append(group("Empryo", own), viaMagpie("empryo", magpieID+"/")...)
+				return withVia(group("Empryo", own), "empryo", magpieID+"/")
 			},
 		}},
 	}, path)

@@ -52,7 +52,9 @@ type callbackResponse struct {
 var listWait = 5 * time.Second
 
 // RunMCP runs the hidden stdio MCP subprocess. args are callback URL and tools
-// JSON path, or, for an agent whose MCP servers are set once for every run
+// JSON path, and for Claude Code's interactive mode a file written once
+// Claude Code has listed the tools, which its first message waits for
+// (claudetui.MCPCommand); or, for an agent whose MCP servers are set once for every run
 // (Grok), MAGPIE_MCP_CALLBACK and MAGPIE_MCP_TOOLS in the environment it
 // hands down. It intentionally implements only the MCP methods Claude Code needs.
 func RunMCP(args []string) error {
@@ -62,10 +64,21 @@ func RunMCP(args []string) error {
 	if len(args) == 0 && os.Getenv("MAGPIE_MCP_CALLBACK") != "" {
 		args = []string{os.Getenv("MAGPIE_MCP_CALLBACK"), os.Getenv("MAGPIE_MCP_TOOLS")}
 	}
-	if len(args) != 2 {
+	if len(args) != 2 && len(args) != 3 {
 		return errors.New("claude MCP helper expects callback URL and tools file")
 	}
 	callbackURL, toolsPath := args[0], args[1]
+	var listedOnce sync.Once
+	listedFile := func() {
+		listedOnce.Do(func() {
+			// Custom TUI wrapper waits on tools.json.listed (CLAUDE_BRIDGE_MCP_LISTED_PATH).
+			_ = os.WriteFile(toolsPath+".listed", []byte("1\n"), 0o600)
+			// Upstream interactive mode waits on the optional 3rd arg path.
+			if len(args) == 3 {
+				_ = os.WriteFile(args[2], nil, 0o600)
+			}
+		})
+	}
 	if !strings.HasPrefix(callbackURL, "http://") && !strings.HasPrefix(callbackURL, "https://") {
 		// the file magpie wrote it in, which keeps its token off the
 		// command line
@@ -202,10 +215,9 @@ func RunMCP(args []string) error {
 			}
 			respond(response)
 			if req.Method == "tools/list" {
-				// The Claude TUI bridge's wrapper sends the first prompt
-				// only once Claude Code has its tools: a prompt sent before
-				// runs with none, and the model writes its calls out as text.
-				_ = os.WriteFile(toolsPath+".listed", []byte("1\n"), 0o600)
+				// after the answer: Claude Code has the tools as the
+				// interactive mode's first message is sent
+				listedFile()
 			}
 		}(req)
 	}

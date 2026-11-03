@@ -21,6 +21,7 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/tidwall/gjson"
 
+	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/filelock"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/settings"
@@ -101,6 +102,8 @@ type codexConfig struct {
 	Profiles   map[string]struct {
 		Provider string `toml:"model_provider"`
 	} `toml:"profiles"`
+	// the ids of its [model_providers] tables
+	Providers map[string]any `toml:"model_providers"`
 }
 
 // readCodexConfig is the folder's codexConfig, parsed again only when
@@ -137,7 +140,7 @@ func codexStateDBs(home string) []string {
 	if c := readCodexConfig(home); c.SQLiteHome != "" && home == CodexDir() {
 		dir = c.SQLiteHome
 	}
-	if d := os.Getenv("CODEX_SQLITE_HOME"); d != "" && home == CodexDir() {
+	if d := appdir.Getenv("CODEX_SQLITE_HOME"); d != "" && home == CodexDir() {
 		dir = d
 	}
 	out, _ := filepath.Glob(filepath.Join(dir, "state_*.sqlite"))

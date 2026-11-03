@@ -65,6 +65,12 @@ func TestFakeMCPServer(t *testing.T) {
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	}
+	// a server that needs its token, as GitHub's does: it exits when the
+	// token isn't the one MAGPIE_FAKE_MCP_WANT names
+	if want, ok := os.LookupEnv("MAGPIE_FAKE_MCP_WANT"); ok && os.Getenv("MAGPIE_FAKE_MCP_TOKEN") != want {
+		fmt.Fprintf(os.Stderr, "Error: bad token %q\n", os.Getenv("MAGPIE_FAKE_MCP_TOKEN"))
+		os.Exit(4)
+	}
 	// ok: a log line on stdout first, as some servers write
 	fmt.Println("server starting on stdio")
 	sc := bufio.NewScanner(os.Stdin)

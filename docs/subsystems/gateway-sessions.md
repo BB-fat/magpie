@@ -106,7 +106,15 @@ is some. The overview's top summaries (`MergeExternalStats`) carry
 where a folder would be, with "(prompt not recorded)" when no text was kept,
 so it doesn't read as a native session with an empty prompt (#2285: a Pi
 subagent whose session file is in a temp folder). Verification:
-`TestTopSessionsMarkWhatOnlyTheGatewaySaw`, `sessions-overview.test.cjs`. Their
+`TestTopSessionsMarkWhatOnlyTheGatewaySaw`, `sessions-overview.test.cjs`.
+`/api/sessions` makes a row only of the gateway sessions its limit can
+show: `usage.EachGatewaySession` walks the projection newest first without
+a copy, `listedExternal` stops at the limit, and `sessions.EachMerged`
+makes each row when the merge reaches it. Every one of ~10k gateway
+sessions past the natives' cap was copied three times and made a row on
+each poll while a session grew. Verification:
+`TestSessionsListMakesOnlyTheGatewayRowsItShows`,
+`TestEachMergedMakesOnlyTheRowsItReaches`. Their
 models, token totals, start/last timestamps and effective prices come from the
 same usage records used by Usage and stats endpoints.
 
@@ -542,7 +550,12 @@ are read (`sessions.Calls`, from `callSources` in
 Code's, Claude Desktop's and Cowork's, Codex's (and both in WSL), and,
 read a file at a time (`wholeCallReaders` in
 [`call_cache.go`](../../internal/sessions/call_cache.go)), OpenCode's
-(#680), ZCode's, DeepSeek Harness's (`dsh`), WorkBuddy's, CodeBuddy
+(#680), ZCode's, DeepSeek Harness's (`dsh`), WorkBuddy's, WorkBuddy
+AI's (the international build's own `~/.workbuddy-ai`, read as
+WorkBuddy's with its own models.json, listed and deletable under its own
+name, and read once as WorkBuddy's when it is a link to `~/.workbuddy`:
+`TestWorkBuddyAI`, `TestWorkBuddyAIGatewayIsItsOwn`,
+`TestWorkBuddyAISessionsListedUnderTheirName`), CodeBuddy
 Code's (#1779; its sessions are on the Sessions page too, from the same
 `projects/<cwd>/<id>.jsonl` files read as WorkBuddy's, resumed with
 `codebuddy --resume <id>` and deletable, #2657: `TestCodeBuddy`,
@@ -562,7 +575,38 @@ too ("usage" and omp's "model_usage" entries, a compaction's, a branch
 summary's and a tool result's usage, on the model and provider in use);
 the provider `magpie` (or `dial`) is magpie's entry, a failed call has no
 usage, and a fork's copy of its parent's entries (written before its
-header) is the parent's. The other agents the Sessions page reads (Cline,
+header) is the parent's. A Codex fork (/fork, a spawn_agent with the
+parent's context) writes every line of its parent's rollout into its own
+first, token_count events included, stamped at the fork's time; its
+session_meta names the parent (`forked_from_id`), and a checkpoint the
+parent's rollout holds (its total and last call alike) is the parent's,
+on Usage and Sessions both (`codexRolloutOf`, `codexCheckpointsOf` in
+[`codex_fork.go`](../../internal/sessions/codex_fork.go)). The copies
+are the head of the fork only: its first turn the parent never had (a
+`turn_id` of its own) ends them, so a call of the fork's own is counted
+even when its numbers are those of one the parent made after the fork.
+The parent is
+looked for in the same Codex home, by the UUIDv7 day of its id, then
+every day, then `archived_sessions`; one not found leaves the fork read
+as before. A ZCode side chat, fork or restored checkpoint copies its
+session's messages with new ids and the originals' times and tokens,
+each naming its original in `metadata.forkOrigin.messageId`; a copy
+whose original is still in the database is not counted (`zcDB.copied`
+in [`zcode.go`](../../internal/sessions/zcode.go)), one whose original
+is gone is. The message without a `forkOrigin` is the session's own and
+is counted: copies are marked by row, since a row's id is in its own
+column and not in its data (v0.1.2847 marked them by that empty id and
+left out every call of a fork that held one copy). Both came from Sky
+(skyhuang1994): a ZCode side chat put a
+10-31 session's 0.42B tokens on 10-31 again, and a week of gpt-5.4 read
+5.1B tokens; then a ZCode fork's 11,409 calls of its own (3.49B tokens)
+went missing. Verification: `TestCodexForkCountsOnlyItsOwnCalls`,
+`TestCodexForkWithoutItsParentCountsTheCopies`,
+`TestCodexForkThatWentOnWorkingKeepsItsOwnCalls`,
+`TestZCodeCopiesCountedOnce`,
+`TestZCodeForkThatWentOnWorkingKeepsItsOwnCalls`. OpenCode's fork copies the same way with
+no pointer to the original, and is still counted twice (#5072).
+The other agents the Sessions page reads (Cline,
 Qoder, Grok, Droid, Cursor, Hermes, Alma) have no reader yet (#1607). The
 Context page reads the gateway's own traces, so it shows none of these
 calls. Verification: `TestMiniMaxCodeCalls`, `TestKimiCode*` (the
@@ -652,7 +696,9 @@ however old, so a client's history can be backfilled.
   speed is `usage.DecodeOf`'s, as a gateway row's is, on the server
   (`Row.Decode`, the totals' `DecodeN`) and in `page.js`'s `ledDecode`. A
   row that reasoned tells none without `first_text_ms`; `ThinkPace` and,
-  with `flow_ms`, `HeldShare` tell a reply let go in a burst. `first_text_ms`
+  with `flow_ms`, `HeldShare` tell a reply let go in a burst, as does
+  `HeldWindowMs`: a window under a second after a wait over four times
+  longer. `first_text_ms`
   may not be before `ttft_ms` (the first text is content too) or after `ms`;
   `flow_ms` is the middle 80% of the content's time scaled by 10/8, as
   `firstToken.flowMs` measures it, so it is bounded by `ms` × 10/8, not
@@ -716,6 +762,15 @@ arguments are never kept, not even masked.
 `TestMCPCalledFromStdioIsARow` and the others in `mcp_calls_test.go`,
 `TestToolCallsAreReported` (imagemcp), `TestMCPCallRowsListedNotCounted`
 (usage) and `usage-ledger-mcp.test.cjs` cover it.
+
+A request a provider plugin sends its vendor by itself (Devin's cache
+keep-alive ping, plugins#592) never passes the gateway. The plugin
+reports it through `input.magpie.usage` and `usage.pluginCall` writes it
+as a row of agent `magpie` with the plugin's kind (`cache_keepalive`,
+"Cache keep-alive" in `purposeKinds`). Unlike a probe it is counted:
+priced and in every total (see
+[provider-plugins.md](provider-plugins.md#a-request-a-plugin-sends-by-itself)).
+`TestPluginKeepaliveIsCounted`.
 
 ### Requests magpie sends on its own
 
@@ -898,6 +953,23 @@ not listed is an error. See `TestClaudeSubagents`, `TestQoderSubagents`,
 `TestKimiSubagentTask`, `TestSubagentTaskReadOnlyWhenTheFileChanges`,
 `TestSubagentWithMetaTaskIsNotReadForIt`, `TestStatsReadNoSubagentFile` and
 `TestSessionSubagentTranscript`.
+
+A session's listed `resume` line is made on every listing and reads no more
+than the listing did. The line that runs when the user opens it, from the
+GUI's Terminal or the TUI, is `sessions.ResumeNow` ([`codex_resume.go`](../../internal/sessions/codex_resume.go)).
+Codex 0.166 resumes a thread only on the provider it was saved with (its
+state-database row, else its `session_meta`): on another, `codex resume`
+stops at `modelProviderMismatch`, and at `modelProviderNotConfigured` when
+config.toml has no table of that provider any more, and no flag lets a
+resume go on another provider (codex-rs `config_manager.rs`
+`load_for_resume`). So a Codex thread saved on a provider other than the
+one Codex is on runs as `codex resume -c model_provider=<its provider> <id>`
+while config.toml has that table, or it is a built-in (`openai`, `ollama`,
+…), and Codex runs it embedded, on its own provider; when the provider is
+gone, `MoveCodexProvider` moves it to the one Codex is on first (its files
+in magpie's trash), and it resumes there (mrten_95615 on Discord). A WSL
+distro's Codex session is as listed. `TestCodexResumeOnItsProvider`; both
+cases were resumed by a real Codex 0.166.0 in a sandbox `CODEX_HOME`.
 
 The Sessions page draws only main sessions on top. A session's subagents are
 folded under its row ("2 subagents"); unfolded, each is a row of its task and

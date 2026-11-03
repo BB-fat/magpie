@@ -42,14 +42,17 @@ const providerUsage = `usage:
                                           compaction=native asks the provider Codex's own compaction and hands
                                           Codex its sealed item as it came (a Responses API, a ChatGPT account,
                                           Copilot), compaction=magpie, the default, has magpie summarise
-                                          routing=smart|order|rotate|usage|pace|weight|free|fast spreads requests
-                                          over its keys or accounts (fast: the one that answered fastest lately first);
+                                          routing=smart|order|rotate|usage|pace|weight|free|fast|drain spreads requests
+                                          over its keys or accounts (fast: the one that answered fastest lately first;
+                                          drain: one until it is used up, then the next, never back to an earlier one);
                                           prompt=as-written sends Antigravity the system prompt exactly as written;
                                           prompt=default, the default, breaks up the lines Google answers with a
                                           false 429 (Codex's, Claude Code's, Hermes' old persona) with a zero-width space
                                           additional-tools=on sends a tool Claude Code's tool search loads to its
                                           Responses API where it was loaded (an additional_tools item, which
-                                          keeps the cache); additional-tools=default puts it with the other tools
+                                          keeps the cache); OpenAI's API and a ChatGPT (Codex) account do so by
+                                          default; additional-tools=off puts it with the other tools,
+                                          additional-tools=default is magpie's
                                           patience=2m keeps a request to it alone (not through a group) that long
                                           while it is busy or briefly rate limited, asking again after a pause
                                           (at most 4m); patience=off hands the agent the error at once;
@@ -84,6 +87,10 @@ const providerUsage = `usage:
   magpie provider account-concurrency <id> [account|key [n|off|default]]
                                           how many requests one account or key has out at once, over every model,
                                           routing group and agent: its own, off for none, default for the provider's
+  magpie provider spend-cap <id> [key [usd [day|month|total]|off]]
+                                          how much an API key may spend, in USD as the Usage page prices its calls,
+                                          a day (the default), a month or in all from now: at it, routing takes the
+                                          key for used up and goes on to the other keys and the fallbacks
   magpie provider account-weight <id> [account [n|default]]
                                           a subscription account's share of the requests with routing=weight:
                                           one weighing 3 takes three for each one weighing 1 takes (default 1)
@@ -92,6 +99,10 @@ const providerUsage = `usage:
                                           past either a request is turned away with a 429 (0: no bound)
   magpie provider rpm <id> [n|off]        how many requests each account or key sends the vendor in any minute;
                                           one more waits for room, up to 2 minutes, then is turned away with a 429
+  magpie provider at-once <id> [n|off|default]
+                                          how many of its accounts or keys take requests at the same time, the first
+                                          in the list; the next takes over when one runs out or fails (off: no limit,
+                                          default: what its plugin says)
   magpie provider quota-rest <id> [30m|6h|7d|until 08:00|until 00:00+08:00|default]
                                           how long a key sits out once the vendor says it is out of its allowance
                                           without saying when it is back (default: 15 minutes; at most 8 days),
@@ -624,12 +635,16 @@ func providerCmd(args []string) error {
 		return poolCmd(rest)
 	case "account-concurrency", "account-limit":
 		return accountConcurrencyCmd(rest)
+	case "spend-cap", "spend-caps":
+		return spendCapCmd(rest)
 	case "account-weight", "account-weights":
 		return accountWeightCmd(rest)
 	case "queue":
 		return queueCmd(rest)
 	case "rpm":
 		return rpmCmd(rest)
+	case "at-once", "accounts-at-once":
+		return atOnceCmd(rest)
 	case "refresh-every":
 		return refreshEveryCmd(rest)
 	case "auto-include":
@@ -1069,7 +1084,8 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			for _, r := range pr.Regions {
 				ids = append(ids, r.ID)
 			}
-			i := slices.IndexFunc(pr.Regions, func(r provider.Region) bool { return strings.EqualFold(r.ID, v) })
+			id := provider.RegionID(p.Preset, v)
+			i := slices.IndexFunc(pr.Regions, func(r provider.Region) bool { return strings.EqualFold(r.ID, id) })
 			if i < 0 {
 				return fmt.Errorf("%s=%s: %s's are %s", k, v, pr.Name, strings.Join(ids, ", "))
 			}
@@ -1141,14 +1157,18 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 		case "additional-tools":
 			// on: a tool an Anthropic client's tool search loads goes to
 			// the provider's Responses API in an additional_tools item
-			// where it was loaded, which keeps the cached prefix (#2660)
+			// where it was loaded, which keeps the cached prefix (#2660);
+			// off: in the tools, where magpie's default sends the item
+			// (OpenAI's API, a ChatGPT account, #4738); default: magpie's
 			switch strings.ToLower(v) {
 			case "on", "yes":
-				p.AdditionalTools = true
-			case "default", "no", "off":
-				p.AdditionalTools = false
+				p.AdditionalTools, p.AdditionalToolsOff = true, false
+			case "off", "no":
+				p.AdditionalTools, p.AdditionalToolsOff = false, true
+			case "default":
+				p.AdditionalTools, p.AdditionalToolsOff = false, false
 			default:
-				return fmt.Errorf("additional-tools=on|default, not %q", v)
+				return fmt.Errorf("additional-tools=on|off|default, not %q", v)
 			}
 		case "patience":
 			// how long a request to the provider alone is kept while it
@@ -1234,7 +1254,7 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			if r == provider.Manual || r == provider.Cheapest {
 				// cheap: its keys and accounts all bill the provider's one
 				// price, so there is nothing to weigh
-				return fmt.Errorf("routing=%s is a group's: a provider's keys or accounts are routed smart, order, rotate, usage, pace, weight, free or fast", r)
+				return fmt.Errorf("routing=%s is a group's: a provider's keys or accounts are routed smart, order, rotate, usage, pace, weight, free, fast or drain", r)
 			}
 			p.Routing = r
 		case "icon":
@@ -1325,20 +1345,12 @@ func ago(t time.Time) string {
 	}
 }
 
-// refreshLive re-fetches the model list of every ready provider; `magpie sync`
-// calls it after the catalog download.
+// refreshLive re-fetches the model list of every ready provider not
+// switched off; `magpie sync` calls it after the catalog download.
 func refreshLive(ctx context.Context) {
 	var names []string
-	for _, p := range provider.All() {
-		if !p.Ready() {
-			continue
-		}
-		c, cancel := context.WithTimeout(ctx, 8*time.Second)
-		ms, err := p.Fetch(c)
-		cancel()
-		if err == nil {
-			names = append(names, fmt.Sprintf("%s (%d)", p.ID, len(ms)))
-		}
+	for _, l := range provider.RefreshLists(ctx) {
+		names = append(names, fmt.Sprintf("%s (%d)", l.ID, l.Models))
 	}
 	if len(names) > 0 {
 		fmt.Println(green.Render("✓"), "model lists:", strings.Join(names, ", "))
@@ -1360,8 +1372,19 @@ func keyNote() string {
 }
 
 // containerNote follows the addresses magpie finds for itself in a
-// container, which are the container's own.
+// container, which are the container's own: other machines reach it at
+// the host's, and other containers on the host at the bridge's gateway
+// (jiezhengj on Discord: 172.17.0.1 on a NAS), containerLine's.
 const containerNote = "these are the container's own addresses: other machines use the host's, and MAGPIE_PUBLIC_URL=http://<host>:<port> puts it here"
+
+// containerLine is where other containers on this host reach the gateway
+// while magpie runs in one, "" when that isn't known.
+func containerLine() string {
+	if u := gateway.ContainerHostURL(); u != "" {
+		return muted.Render("  other containers on this host ") + u
+	}
+	return ""
+}
 
 // shareLines are where other machines reach the gateway while it is shared
 // from Settings, for the banner.
@@ -1375,6 +1398,9 @@ func shareLines() []string {
 	}
 	if gateway.ContainerAddrs() {
 		out = append(out, muted.Render("  "+containerNote))
+	}
+	if l := containerLine(); l != "" {
+		out = append(out, l)
 	}
 	return out
 }
@@ -1846,6 +1872,47 @@ func rpmCmd(rest []string) error {
 		fmt.Printf("%s · each account or key: at most %d requests a minute\n", p.Name, n)
 	} else {
 		fmt.Printf("%s · each account or key: no limit on requests a minute\n", p.Name)
+	}
+	return nil
+}
+
+// atOnceCmd shows, or sets, how many of a provider's accounts or keys take
+// requests at the same time (01huadalang on Discord: three ZCode accounts
+// at once got the address refused with a 405, two didn't). The others wait
+// in reserve, in the list's order.
+func atOnceCmd(rest []string) error {
+	usage := fmt.Errorf("magpie provider at-once <id> [n|off|default]")
+	if len(rest) < 1 || len(rest) > 2 {
+		return usage
+	}
+	p, err := provider.Find(rest[0])
+	if err != nil {
+		return err
+	}
+	if len(rest) > 1 {
+		var n *int
+		switch s := strings.ToLower(strings.TrimSpace(rest[1])); s {
+		case "default", "plugin":
+		case "off", "none", "no", "-":
+			n = new(int)
+		default:
+			v, err := strconv.Atoi(s)
+			if err != nil {
+				return fmt.Errorf("accounts at once is a whole number, off or default, not %q", rest[1])
+			}
+			n = &v
+		}
+		if err := provider.SetAtOnce(p.ID, n); err != nil {
+			return err
+		}
+		if p, err = provider.Find(p.ID); err != nil {
+			return err
+		}
+	}
+	if n := p.AtOnce(); n > 0 {
+		fmt.Printf("%s · %d of its accounts or keys take requests at once, the first in the list; the others wait in reserve\n", p.Name, n)
+	} else {
+		fmt.Printf("%s · every account or key takes requests\n", p.Name)
 	}
 	return nil
 }
