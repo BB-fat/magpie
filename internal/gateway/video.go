@@ -260,14 +260,58 @@ func markedKey(p provider.Provider, by string) (provider.Provider, bool) {
 }
 
 // videomaker is the model a request that names none makes its video with:
-// AutoVideomaker's, unless the Settings turned image generation off, which
-// turns video off with it. None when it is off or no provider makes videos.
+// the Settings' VideoGen while it resolves, else AutoVideomaker's, unless
+// the Settings turned image generation off, which turns video off with
+// it. None when it is off or no provider makes videos.
 func videomaker() (string, bool) {
-	if settings.Load().ImageGen == "off" {
+	st := settings.Load()
+	if st.ImageGen == "off" {
 		return "", false
+	}
+	if v := st.VideoGen; v != "" && VideomakerMissingOf(v) == "" {
+		return v, true
 	}
 	m := AutoVideomaker()
 	return m, m != ""
+}
+
+// Videomaker is the model a request that names none makes its video with
+// (videomaker), as provider/model: "" when it is off or none can.
+func Videomaker() string {
+	m, _ := videomaker()
+	return m
+}
+
+// VideomakerMissing is the model Settings › Images › Video generation
+// names when magpie can't make videos with it any more, so that
+// AutoVideomaker's makes them in its place, as DrawerMissing is Image
+// generation's. "" when none is named or it resolves.
+func VideomakerMissing() string { return VideomakerMissingOf(settings.Load().VideoGen) }
+
+// VideomakerMissingOf is v, a Video generation pick, when magpie can't
+// make videos with it: its provider is gone, off or decide-only, or no
+// longer has it among its Videomakers (a custom provider's model the user
+// no longer marks a video model, #1399). A routing group resolves while
+// one of its members makes videos.
+func VideomakerMissingOf(v string) string {
+	if v == "" {
+		return ""
+	}
+	if provider.IsGroupRef(v) {
+		if _, _, ok := mediaGroupFirst(v, provider.KindVideo); ok {
+			return ""
+		}
+		return v
+	}
+	id, model, _ := strings.Cut(v, "/")
+	p, err := provider.Find(id)
+	if err != nil || !p.On() || p.DecideOnly() {
+		return v
+	}
+	if slices.ContainsFunc(Videomakers(*p), func(m catalog.Model) bool { return m.ID == model }) {
+		return ""
+	}
+	return v
 }
 
 // AutoVideomaker is the model a request that names none makes its video
@@ -1024,7 +1068,10 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Model, call.Model = m, m
 	}
-	p, model, ok := provider.Resolve(f.Model)
+	p, model, ok := mediaGroupFirst(f.Model, provider.KindVideo)
+	if !ok {
+		p, model, ok = provider.Resolve(f.Model)
+	}
 	if !ok {
 		p, model, ok = bareVideomaker(f.Model)
 	}
@@ -1036,13 +1083,18 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 		fail(404, fmt.Sprintf("magpie knows no model %q to make videos with", f.Model))
 		return
 	}
-	g, ms, isGroup := groupToMake(f.Model, p, model, provider.FindGroup)
+	g, ms, isGroup := mediaMembers(f.Model, provider.KindVideo)
+	if !isGroup {
+		g, ms, isGroup = groupToMake(f.Model, p, model, func(ref string) (provider.Group, []provider.Member, bool) {
+			return mediaMembers(ref, provider.KindVideo)
+		})
+	}
 	if isGroup {
 		r = heldByGroup(r, g) // held to the group's accounts, if it is
 	}
 	keyWho, keyHeld := keyHolds(r)
 	if keyHeld && named && (isGroup && !groupAllowed(keyWho, g, ms) || !isGroup && !modelAllowed(keyWho, p, model)) {
-		fail(403, keyModelError(keyWho, f.Model))
+		fail(keyModelRefusal(w, keyWho, f.Model))
 		return
 	}
 	if msg, off := modelOff(p, model, f.Model); off { // disabled by the user (#1867)
@@ -1063,9 +1115,9 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 		if keyHeld {
 			keeps = groupKeeps(keyWho, g, ms)
 		}
-		t := s.drawingTries(g, ms, keeps)
+		t := s.drawingTries(g, ms, keeps, servesKind(provider.KindVideo))
 		if len(t) == 0 && keeps != nil {
-			fail(403, keyModelError(keyWho, f.Model))
+			fail(keyGroupRefusal(w, keyWho, f.Model, ms))
 			return
 		}
 		if len(t) > 0 {
@@ -1207,6 +1259,8 @@ type videoStart struct {
 // failure before any vendor is asked (the model makes no videos, a key may
 // use none of the provider's keys) has asked unset.
 func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Provider, model string, f filming) (videoStart, int, error) {
+	// the headers the user gave the video model
+	ctx = provider.WithModel(ctx, p.ID, model)
 	// the provider's other keys to start the video on, when the first
 	// says it doesn't serve the model
 	var keys []candidate
@@ -1527,6 +1581,7 @@ func (s *Server) remoteVideoContent(ctx context.Context, w http.ResponseWriter, 
 		// vendors are told no caller
 		req.Header.Set("User-Agent", "magpie/"+Version)
 		passOnCaller(ctx, req)
+		passOnUA(req, callerUA(ctx))
 	}
 	if err := p.Sign(ctx, req, provider.Chat, nil); err != nil {
 		writeError(w, provider.Chat, 502, err.Error())

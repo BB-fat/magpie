@@ -47,13 +47,23 @@ func stubCodexApp(t *testing.T) *codexAppStub {
 		codexApp.Lock()
 		codexApp.seen, codexApp.route, codexApp.stale, codexApp.stuck, codexApp.switched, codexApp.auto = false, "", nil, false, false, false
 		codexApp.ended, codexApp.backBy, codexApp.spent, codexApp.why = nil, time.Time{}, false, ""
+		codexApp.back, codexApp.backAt = nil, time.Time{}
+		codexApp.crashSince, codexApp.crashBy, codexApp.snag, codexApp.snagPids = time.Time{}, time.Time{}, false, nil
 		codexApp.Unlock()
 	}
+	oldCrashed, oldRelaunch := CodexAppCrashed, CodexAppRelaunch
 	t.Cleanup(func() {
 		CodexAppRoute, codexAppServersOn, endCodexAppServer, codexTurnRunning = oldOn, oldList, oldEnd, oldTurn
 		CodexAppOpen, CodexAppReopen, codexSessionsQuiet, codexRestartsApp = oldOpen, oldReopen, oldQuiet, oldRestarts
+		CodexAppCrashed, CodexAppRelaunch = oldCrashed, oldRelaunch
 		reset()
 	})
+	// the app's logs as tests find them: no error page, and never reopened
+	CodexAppCrashed = func(time.Time) (time.Time, bool, bool) { return time.Time{}, false, true }
+	CodexAppRelaunch = func(context.Context) error {
+		t.Error("the Codex app relaunched")
+		return errors.New("not in this test")
+	}
 	reset()
 	// the user asked magpie to restart the app for its own changes too
 	// (RestartApp); TestCodexAppLeftRunningForMagpiesOwnChanges is without
@@ -1049,6 +1059,49 @@ func TestCodexHandSwitchOffAHeldAccountIsSpent(t *testing.T) {
 	}
 }
 
+// Codex keeps a session's file open while its app-server runs the
+// thread, and Windows stamps a file in its folder listing only as it is
+// closed. Read by the listing's time, a turn running in a thread opened
+// more than codexTurnWindow before counted as none, and the sessions as
+// quiet, so magpie ended the app-server under the turn (bitssly on X).
+// The file is held open here as Codex holds it, its stamp set back and
+// written to after, which on Windows leaves the listing on the old stamp
+// (red there on a listing's time).
+func TestCodexSessionHeldOpenReadAtItsOwnTime(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "sessions", "2026", "11", "06")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "rollout-2026-11-06T09-00-00-held.jsonl")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	started := `{"type":"event_msg","payload":{"type":"task_started","turn_id":"1"}}` + "\n"
+	done := `{"type":"event_msg","payload":{"type":"task_complete","turn_id":"1"}}` + "\n"
+	if _, err := f.WriteString(started + done); err != nil {
+		t.Fatal(err)
+	}
+	opened := time.Now().Add(-codexTurnWindow - time.Hour)
+	if err := os.Chtimes(p, opened, opened); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(started); err != nil {
+		t.Fatal(err)
+	}
+	// quiet first: reading the file, as codexTurnOpen does, closes a
+	// handle on it, and Windows brings the listing up to date then
+	now := time.Now()
+	if codexSessionsQuietFor(home, now, time.Minute) {
+		t.Fatal("a session Codex wrote to just now, held open: quiet")
+	}
+	if !codexTurnOpen(home, now, time.Time{}) {
+		t.Fatal("a turn running in a file Codex holds open: not open")
+	}
+}
+
 // codexSessionsQuietFor reads the sessions' write times: a file written
 // within d is not quiet, an older one or none is, and a sessions folder
 // that can't be read is not.
@@ -1160,5 +1213,78 @@ func TestCodexAppFirstLookOnAUsedUpAccountRestarts(t *testing.T) {
 	}
 	if got := codexAppStep(context.Background(), now, idle); got != nil {
 		t.Fatalf("after the first look: ended %v", got)
+	}
+}
+
+// With Restart the Codex app to follow off, magpie leaves the app's
+// app-server running when it gives Codex back its ChatGPT account at the
+// reset. That app-server started with magpie as Codex's provider and
+// answers account/read with no account, so the app shows no account name
+// and no usage until it restarts (練習^1.0beta by mail, 11-04). CodexAppBack
+// says so till that app-server is gone, and only for the takeover's end:
+// not for magpie's own account switch back, nor after the app restarted.
+func TestCodexAppBackSaidTillItRestarts(t *testing.T) {
+	signIn(t)
+	s := stubCodexApp(t)
+	codexRestartsApp = func() bool { return false }
+	now := time.Now()
+	idle := func() (int, time.Time) { return 0, now.Add(-time.Minute) }
+	step := func() []int { return codexAppStep(context.Background(), now, idle) }
+
+	s.running = []int{60}
+	step()
+	codexAppSwitched(false, true)
+	step()
+	if CodexAppBack() {
+		t.Fatal("magpie's own switch back among ChatGPT accounts reads as the takeover left")
+	}
+	s.on = true
+	if got := step(); !slices.Equal(got, []int{60}) {
+		t.Fatalf("the takeover: ended %v, want [60]", got)
+	}
+	step()
+	if CodexAppBack() {
+		t.Fatal("said while magpie is still Codex's provider")
+	}
+	s.on = false // the reset, the app left running on app-server 100
+	if got := step(); got != nil {
+		t.Fatalf("the reset with Restart off: ended %v", got)
+	}
+	if !CodexAppBack() {
+		t.Fatal("the app left on the takeover's app-server isn't said")
+	}
+	// still running at the next looks, listed again only every so often
+	now = now.Add(codexAppBackEvery)
+	step()
+	if !CodexAppBack() {
+		t.Fatal("forgotten while its app-server still runs")
+	}
+	// the user restarts the app: another app-server, which reads the account
+	s.running = []int{200}
+	now = now.Add(codexAppBackEvery / 2)
+	step()
+	if !CodexAppBack() {
+		t.Fatal("listed again before codexAppBackEvery")
+	}
+	now = now.Add(codexAppBackEvery)
+	step()
+	if CodexAppBack() {
+		t.Fatal("still said after the app-server it named went")
+	}
+
+	// a listing that fails keeps what was known
+	s.running = []int{300}
+	s.on = true
+	step()
+	s.on = false
+	step()
+	if !CodexAppBack() {
+		t.Fatal("the second reset isn't said")
+	}
+	s.listErr = errors.New("ps failed")
+	now = now.Add(2 * codexAppBackEvery)
+	step()
+	if !CodexAppBack() {
+		t.Fatal("a failed listing read as the app-server gone")
 	}
 }

@@ -353,14 +353,41 @@ let config = { provider: {} } // what the plugins' config hooks made of it
 let loadWait = 20 * 1000
 let listWait = 20 * 1000
 
+// watchHeavy says once when this host holds more than heavy.mb MiB, a
+// full collection run first so garbage not yet collected doesn't count:
+// magpie then starts a new host for the calls to come and stops this one
+// once its own are answered (host.go's heavyMB and recycle). It checks
+// every heavy.everyMillis, from heavy.afterMillis after the host started.
+function watchHeavy(heavy) {
+  const mb = Number(heavy?.mb)
+  if (!(mb > 0)) return
+  const every = Math.max(Number(heavy.everyMillis) || 60_000, 10)
+  const after = Math.max(Number(heavy.afterMillis) || 0, 0)
+  const rss = () => process.memoryUsage().rss / 1048576
+  const timer = setInterval(() => {
+    if (process.uptime() * 1000 < after || rss() <= mb) return
+    Bun.gc(true)
+    const held = rss()
+    if (held <= mb) return
+    clearInterval(timer)
+    send({ event: "heavy", count: Math.round(held) })
+  }, every)
+  timer.unref?.()
+}
+
 // late is what a step that took longer than ms gives instead of its own
 // result: an error saying so. The step goes on by itself; what it gives
-// later is dropped.
+// later is dropped. A step handed a signal of its own (a model hook's) has
+// its controller aborted here, so the I/O a deadline gives up on stops too
+// rather than waiting for a caller that has moved on (#4678).
 class Late extends Error {}
-function inTime(step, ms, what) {
+function inTime(step, ms, what, ctl) {
   let timer
   const late = new Promise((_, no) => {
-    timer = setTimeout(() => no(Object.assign(new Late(`${what} didn't finish in ${Math.round(ms / 1000)}s`), { plain: true })), ms)
+    timer = setTimeout(() => {
+      ctl?.abort()
+      no(Object.assign(new Late(`${what} didn't finish in ${Math.round(ms / 1000)}s`), { plain: true }))
+    }, ms)
   })
   return Promise.race([Promise.resolve().then(step), late]).finally(() => clearTimeout(timer))
 }
@@ -497,16 +524,134 @@ async function proxyFor(input) {
 // the first that got none
 const reach = new AsyncLocalStorage()
 
-async function sent(input, init) {
-  if (init && "proxy" in init) return bunFetch(input, init)
+// sent is a fetch as the plugin asked it, through each redirect it may
+// follow (followed); hop is one request of it, through its proxy.
+function sent(input, init) {
+  const redirect = init?.redirect ?? (input instanceof Request ? input.redirect : undefined) ?? "follow"
+  if (redirect !== "follow") return hop(input, init)
+  return followed(input, init)
+}
+
+// A plugin's request is followed through a redirect with its headers only
+// to its own origin (the scheme, host and port it was sent to), or from
+// http to https on the same host: provider.KeepsCredentials' rule, which
+// magpie's own requests take (redirect.go, #5508). Bun follows any
+// redirect anywhere and drops only Authorization and Cookie on a hop to
+// another origin, so x-api-key, x-goog-api-key and a vendor's own headers
+// went to wherever the vendor's Location named. A redirect elsewhere is
+// given back to the plugin as it came, Location and all, unless the
+// request carries nothing of its own (bare: no body, and only the headers
+// any client sends), as a download handed on to a CDN is. A fetch the
+// plugin asked with redirect "manual" or "error" is left as it asked.
+const REDIRECTS = new Set([301, 302, 303, 307, 308])
+const BARE_HEADERS = new Set(["accept", "accept-encoding", "accept-language", "user-agent", "cache-control", "pragma", "range", "if-range", "if-none-match", "if-modified-since"])
+const BODY_HEADERS = ["content-type", "content-length", "content-encoding", "content-language", "content-location"]
+
+// sameOrigin is provider.SameOrigin, for URLs: a URL leaves out its
+// scheme's own port.
+function sameOrigin(from, to) {
+  const port = (u) => u.port || (u.protocol === "http:" ? "80" : u.protocol === "https:" ? "443" : "")
+  if (!from.hostname || from.hostname.toLowerCase() !== to.hostname.toLowerCase()) return false
+  if (from.protocol === to.protocol) return port(from) === port(to)
+  // an upgrade: the request went over http already, to this same host
+  return from.protocol === "http:" && to.protocol === "https:" && port(from) === "80" && port(to) === "443"
+}
+
+async function followed(input, init) {
+  let url, opts
+  if (input instanceof Request) {
+    const body = init && "body" in init ? init.body : input.body ? await input.arrayBuffer() : undefined
+    opts = { method: input.method, headers: input.headers, signal: input.signal, ...init, body }
+    url = input.url
+  } else {
+    url = String(input instanceof URL ? input.href : input)
+    opts = { ...init }
+  }
+  const first = new URL(url)
+  let method = (opts.method ?? "GET").toUpperCase()
+  let headers = new Headers(opts.headers)
+  let body = opts.body
+  // a stream can be sent once: a redirect that would send it again is the answer
+  const replayable = body == null || !(body instanceof ReadableStream)
+  const bare = () => body == null && [...headers.keys()].every((k) => BARE_HEADERS.has(k))
+  for (let n = 0; ; n++) {
+    const res = await hop(url, { ...opts, method, headers, body, redirect: "manual" })
+    const at = res.headers.get("location")
+    if (!REDIRECTS.has(res.status) || at == null) return n ? said(res, url) : res
+    let next
+    try {
+      next = new URL(at, url)
+    } catch {
+      return n ? said(res, url) : res
+    }
+    if (next.protocol !== "http:" && next.protocol !== "https:") return n ? said(res, url) : res
+    if (!sameOrigin(first, next) && !bare()) return n ? said(res, url) : res
+    const drops = res.status === 303 ? method !== "HEAD" : (res.status === 301 || res.status === 302) && method === "POST"
+    if (!drops && body != null && !replayable) return n ? said(res, url) : res
+    if (n + 1 >= 10) {
+      res.body?.cancel().catch(() => {})
+      throw new TypeError("stopped after 10 redirects")
+    }
+    res.body?.cancel().catch(() => {})
+    if (drops) {
+      if (method !== "HEAD") method = "GET"
+      body = undefined
+      headers = new Headers(headers)
+      for (const k of BODY_HEADERS) headers.delete(k)
+    }
+    url = next.href
+  }
+}
+
+// said is a reply reached through a redirect as fetch says one: where it
+// came from, and that it was redirected.
+function said(res, url) {
+  try {
+    Object.defineProperty(res, "redirected", { value: true })
+    Object.defineProperty(res, "url", { value: url })
+  } catch {}
+  return res
+}
+
+async function hop(input, init) {
+  if (init && "proxy" in init) return bunFetch(input, init).catch((e) => throwTLS(e, input))
   const p = await proxyFor(input)
-  if (!p) return bunFetch(input, init)
+  if (!p) return bunFetch(input, init).catch((e) => throwTLS(e, input))
   return bunFetch(input, { ...init, proxy: p }).catch(async (e) => {
     if (e?.name === "AbortError" || init?.signal?.aborted) throw e
     const why = await proxyRefuses(p, input)
     if (why) throw Object.assign(new Error(`proxyconnect tcp: ${why}`), { code: e?.code, cause: e })
-    throw e
+    throwTLS(e, input)
   })
+}
+
+// The codes Bun gives a fetch whose server's certificate it didn't take.
+const tlsCodes = new Set([
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "CERT_UNTRUSTED",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+])
+
+// throwTLS throws e, its message saying which host's certificate the
+// plugin host refused and with what code, when that is why it failed:
+// Bun says only "unable to get issuer certificate", which read like the
+// vendor's own fault, for a chain that verified outside the host
+// (youyo.p_10001). The message Bun gave stays first, and the error is
+// the same one, its code and cause kept.
+function throwTLS(e, input) {
+  if (e && tlsCodes.has(e.code) && typeof e.message === "string" && !e.message.includes("plugin host's TLS")) {
+    const h = hostOf(input)?.host
+    try {
+      e.message = `${e.message} (${e.code}: the plugin host's TLS didn't verify ${h ? h + "'s" : "the server's"} certificate chain against the roots it trusts)`
+    } catch {}
+  }
+  throw e
 }
 
 // proxyRefuses is why the proxy p won't carry a request to input, "" when
@@ -1103,8 +1248,18 @@ function freshKey(provider) {
   }
 }
 
-function inScope(provider, key, fn) {
-  return scope.run({ provider, key }, fn)
+// inScope runs fn for provider's account key. had is whether the account
+// was signed in as fn began: a hook's auth.set for one signed out while it
+// ran (a models list spending a rotating token) doesn't sign it in again.
+// A sign-in's steps (signIn) save whatever they are given.
+function inScope(provider, key, fn, signIn = false) {
+  let had = false
+  if (!signIn) {
+    try {
+      had = key in readAuth()
+    } catch {}
+  }
+  return scope.run({ provider, key, had }, fn)
 }
 
 function whoOf(a) {
@@ -1197,7 +1352,11 @@ function makeClient() {
           // tokens over the old; nothing is merged. It goes to the
           // account the request is for.
           const key = keyFor(id)
+          const s = scope.getStore()
+          const had = s?.provider === id && s.had
           const kept = await changeAuth((all) => {
+            // signed out while the hook ran: it stays signed out
+            if (had && !(key in all)) return false
             if (JSON.stringify(all[key]) === JSON.stringify(body)) return false
             all[key] = body
           })
@@ -1556,6 +1715,8 @@ const signsIn = (spec) => [...new Set(hooks.filter((h) => h.spec === spec && h.h
 function withProviders(l) {
   const tools = l.error ? [] : toolList(l.spec)
   if (tools.length) l = { ...l, tools }
+  const searches = l.error ? [] : searchList(l.spec)
+  if (searches.length) l = { ...l, searches }
   const ids = l.error ? [] : signsIn(l.spec)
   if (!ids.length) return l
   const a = auths()
@@ -1719,6 +1880,107 @@ async function runTool({ spec, name, args, ms, agent }) {
   return { text: out === undefined ? "" : JSON.stringify(out) }
 }
 
+// ---- web search APIs --------------------------------------------------------
+//
+// A plugin's search hook adds web search APIs to magpie's own list (Tavily,
+// Brave, …): {search: {<id>: {name, keysURL?, keyOptional?, url?, execute}}}.
+// execute({query, count, key, url}, ctx) returns the pages found:
+// [{title, url, text?, age?}] (or {results: [...]}). A throw with a numeric
+// status (401, 402, 403, 429…) is the API refusing the key, which magpie
+// rests as it does a built-in's; retryAfter is its Retry-After.
+// magpie keeps the keys, order and limits, and masks the query before it.
+//
+// An entry may name auth: "<provider id>", one this plugin's auth hook
+// signs in to (a model provider, or an auth hook with no models of its
+// own). It then takes no key: magpie tries the provider's accounts that
+// are on, in their order, one per call, and the hook reads the one chosen
+// through ctx.getAuth(), renewed first if due (the wait counts within the
+// search's time). A refusal rests the account for search only, never for
+// its models.
+
+const SEARCH_ID = /^[a-z0-9][a-z0-9-]{0,31}$/
+
+function searchesOf(spec) {
+  const m = new Map()
+  for (const h of hooks) {
+    if (h.spec !== spec) continue
+    const t = h.hooks.search
+    if (!t || typeof t !== "object") continue
+    for (const [id, def] of Object.entries(t)) {
+      if (SEARCH_ID.test(id) && def && typeof def.execute === "function") m.set(id, def)
+    }
+  }
+  return m
+}
+
+function searchList(spec) {
+  const out = []
+  for (const [id, def] of searchesOf(spec)) {
+    out.push({
+      id,
+      name: typeof def.name === "string" && def.name ? def.name : id,
+      ...(typeof def.keysURL === "string" && /^https?:\/\//.test(def.keysURL) ? { keysURL: def.keysURL } : {}),
+      ...(def.keyOptional === true ? { keyOptional: true } : {}),
+      ...(def.url === true ? { needURL: true } : {}),
+      ...(searchAuthOf(spec, def) ? { auth: def.auth } : {}),
+    })
+  }
+  return out
+}
+
+// searchAuthOf is the provider a search entry signs in as: one the same
+// plugin's auth hooks name, "" for none (an id it doesn't sign in to is
+// none, so the entry stays a key's).
+function searchAuthOf(spec, def) {
+  return typeof def.auth === "string" && def.auth && signsIn(spec).includes(def.auth) ? def.auth : ""
+}
+
+async function runSearch({ spec, id, query, count, key, url, ms, account, proxy }) {
+  const def = searchesOf(spec).get(id)
+  if (!def) throw new Error(`${spec} has no search API ${id}`)
+  const abort = AbortSignal.timeout(ms > 0 ? ms : 60_000)
+  const late = new Promise((_, reject) => abort.addEventListener("abort", () => reject(new Error("no answer in time")), { once: true }))
+  late.catch(() => {})
+  const ctx = { directory, worktree: directory, abort }
+  const provider = searchAuthOf(spec, def)
+  let run = () => def.execute({ query, count, key: key ?? "", url: url ?? "" }, ctx)
+  if (provider) {
+    // the account magpie chose, and that one only: never the provider's
+    // first in its place, nor one of another provider
+    if (auths().get(provider)?.spec !== spec) throw new Error(`another plugin signs in to ${provider}`)
+    const k = typeof account === "string" && account && providerOf(account) === provider ? account : ""
+    if (!k || !(k in readAuth())) throw new Error(`not signed in to ${provider}`)
+    ctx.getAuth = async () => authCopy(k)
+    const execute = run
+    run = () =>
+      via.run(proxy ?? "", () =>
+        inScope(provider, k, async () => {
+          await Promise.race([fresh(provider, k), late])
+          if (!(k in readAuth())) throw new Error(`not signed in to ${provider}`)
+          return execute()
+        }),
+      )
+  }
+  let out
+  try {
+    out = await Promise.race([Promise.resolve().then(run), late])
+  } catch (e) {
+    const status = Number(e?.status)
+    if (Number.isInteger(status) && status >= 300 && status < 600) {
+      return { status, error: String(e?.message ?? e), retryAfter: e?.retryAfter == null ? "" : String(e.retryAfter) }
+    }
+    throw e
+  }
+  const rs = Array.isArray(out) ? out : Array.isArray(out?.results) ? out.results : null
+  if (!rs) throw new Error("the search returned neither a list nor {results}")
+  const str = (v) => (typeof v === "string" ? v : v == null ? "" : String(v))
+  return {
+    pages: rs.filter((r) => r && typeof r === "object").map((r) => ({
+      title: str(r.title), url: str(r.url), text: str(r.text ?? r.content ?? r.snippet), age: str(r.age ?? r.date),
+    })),
+  }
+}
+
 function authOf(provider) {
   const a = auths().get(provider)
   if (!a) throw new Error(`no plugin signs in to ${provider}`)
@@ -1827,8 +2089,10 @@ function fromModelsDev(p, m) {
 // lists them for account key (the first when none); strict fails where the
 // plugin's list does, rather than keeping the list it was given.
 // quiet asks no models hook (a provider switched off in magpie): the
-// list is told as fallen back, which keeps the one magpie had.
-async function info(id, key, strict, limit, quiet) {
+// list is told as fallen back, which keeps the one magpie had. The
+// listing's caller may give up (signal), which a hook is told through
+// its own options' signal too (#4678).
+async function info(id, key, strict, limit, quiet, signal) {
   const md = mdev()[id]
   const cfg = config.provider?.[id]
   const out = {
@@ -1896,11 +2160,16 @@ async function info(id, key, strict, limit, quiet) {
     const began = Date.now()
     await fresh(id, k)
     const all = readAuth()
+    // the hook's own signal: its listWait deadline aborts it, and so does
+    // the listing's caller going away, whichever comes first (#4678)
+    const ctl = new AbortController()
+    if (signal?.aborted) ctl.abort()
+    else signal?.addEventListener("abort", () => ctl.abort(), { once: true })
     try {
       const given = JSON.parse(JSON.stringify(out))
       const l = { tried: false, lastOk: false }
-      const ask = () => listing.run(l, () => inScope(id, k, () => ph.models(given, { auth: authCopy(k) })))
-      const next = limit > 0 ? await inTime(ask, Math.max(limit - (Date.now() - began), 0), "the plugin's model list") : await ask()
+      const ask = () => listing.run(l, () => inScope(id, k, () => ph.models(given, { auth: authCopy(k), signal: ctl.signal })))
+      const next = limit > 0 ? await inTime(ask, Math.max(limit - (Date.now() - began), 0), "the plugin's model list", ctl) : await ask()
       // a hook that asked its vendor, got no list and gave back the one it
       // was given fell back: magpie keeps the list it had, as a built-in
       // whose fetch failed keeps the one it fetched last; so does one that
@@ -1929,7 +2198,9 @@ async function info(id, key, strict, limit, quiet) {
       // magpie keeps the one it had, as for one that gave its defaults back
       out.fellBack = true
       out.listError = e?.message ?? String(e)
-      send({ event: "log", level: "error", message: `${h.spec}: provider.models: ${e?.message ?? e}` })
+      // a listing the caller gave up on says its abort itself, not as if
+      // the vendor had failed
+      if (!ctl.signal.aborted) send({ event: "log", level: "error", message: `${h.spec}: provider.models: ${e?.message ?? e}` })
     }
   }
   for (const [k, m] of Object.entries(cfg?.models ?? {})) if (m?.disabled) delete out.models[k]
@@ -1962,7 +2233,8 @@ const shown = (v, n) => (typeof v === "string" ? v.trim().slice(0, n) : "")
 
 // optionsOf are the switches a plugin declares for its provider, magpie's
 // own field (#2038, Vocllum): auth.options, each {key, label, description?,
-// default?, confirm?, labels?, descriptions?, confirms?, filtersModels?}.
+// default?, confirm?, labels?, descriptions?, confirms?, filtersModels?,
+// placement?}.
 // magpie shows each as an Off/On switch in the provider's editor and keeps
 // what the user sets; the plugin reads it with input.magpie.option(provider,
 // key). A switch is kept and handed over, and the models listed again (one
@@ -1973,7 +2245,9 @@ const shown = (v, n) => (typeof v === "string" ? v.trim().slice(0, n) : "")
 // "…"}), as a page's titles are (plugins#590): label stays a string beside
 // them, so an older magpie still reads the option. filtersModels says the
 // plugin's model list leaves models out while the switch is on, which the
-// editor says by the models.
+// editor says by the models. placement "top" draws the switch under the
+// accounts, above Routing, for one about the whole plugin (#5269); anything
+// else, or none, keeps it under the models, where an older magpie draws it.
 const MAX_OPTIONS = 16
 const OPTION_KEY = /^[a-z0-9_-]{1,40}$/
 // inLanguages are words by language, each capped at n, at most 16, without
@@ -2009,6 +2283,7 @@ function optionsOf(auth) {
       descriptions: inLanguages(o.descriptions, 300),
       confirms: inLanguages(o.confirms, 300),
       filtersModels: o.filtersModels === true,
+      placement: o.placement === "top" ? "top" : undefined,
     })
   }
   return out
@@ -2165,8 +2440,11 @@ function tiersOf(v) {
 
 // providers lists each provider and its accounts' models, each asked
 // through its proxy (proxies[provider][key], "" the provider's own), as a
-// built-in fetches each account's list through the account's.
-async function providers({ proxies, off } = {}) {
+// built-in fetches each account's list through the account's. A caller
+// that gave up (signal) has every hook it would still have asked told, so
+// a timed-out listing stops its vendor reads instead of multiplying them
+// (#4678).
+async function providers({ proxies, off } = {}, signal) {
   const stored = readAuth()
   // a provider switched off in magpie is asked nothing: its models hook
   // (and the sign-in renewal before it) would reach its vendor. It is
@@ -2187,12 +2465,12 @@ async function providers({ proxies, off } = {}) {
     // listWaits back to back took one provider past refreshDeadline twice
     // over (#4065)
     const [p, own] = await Promise.all([
-      via.run(through(), () => info(id, undefined, false, listWait)).then((q) => (keepInfo(keys[0] ?? id, q, gen), q)),
+      via.run(through(), () => info(id, undefined, false, listWait, false, signal)).then((q) => (keepInfo(keys[0] ?? id, q, gen), q)),
       // each account's own models, as the built-ins read each account's: a
       // plan may serve fewer, or others, than the first account's. One that
       // can't be read is taken to have them all, or the ones it was last
       // told to have, as a built-in account whose fetch failed keeps its own.
-      Promise.all(keys.slice(1).map((k) => via.run(through(k), () => info(id, k, true, listWait)).then((q) => (keepInfo(k, q, gen), q)).catch((e) => ({ failed: true, listError: e?.message ?? String(e) })))),
+      Promise.all(keys.slice(1).map((k) => via.run(through(k), () => info(id, k, true, listWait, false, signal)).then((q) => (keepInfo(k, q, gen), q)).catch((e) => ({ failed: true, listError: e?.message ?? String(e) })))),
     ])
     return rowOf(id, a, keys, stored, p, own)
   }
@@ -2227,6 +2505,10 @@ function rowOf(id, a, keys, stored, p, own) {
     // long before expires (keepSignedIn)
     renews: keepsAlive(a.auth),
     renewLead: keepsAlive(a.auth) ? leadOf(a.auth) : 0,
+    // the vendor spends a refresh token once: renewed, the old one is
+    // refused (invalid_grant). magpie never carries such a sign-in to
+    // another computer (#5583)
+    rotating: a.auth.rotating === true,
     options: optionsOf(a.auth),
     decide: p.decide === true,
     searches: p.searches === true,
@@ -2409,7 +2691,7 @@ function abortedSignIn() {
 // signingIn runs a plugin's sign-in step fn for key under proxy and
 // signal; it ends when signal aborts, whether fn does or not.
 function signingIn(signal, proxy, provider, key, fn) {
-  const step = via.run(proxy, () => inScope(provider, key, () => signInSignal.run(signal, fn)))
+  const step = via.run(proxy, () => inScope(provider, key, () => signInSignal.run(signal, fn), true))
   return signal ? bounded(Promise.resolve(step), signal) : step
 }
 
@@ -2733,18 +3015,20 @@ async function load({ provider, account, proxy }) {
 //       a clean read clears it)
 //   }
 // Run in the account's scope, a token it renews is saved to that account.
-async function usage({ provider, account, proxy }) {
-  return via.run(proxy ?? "", () => usageOf(provider, account))
+// A caller that gave up (signal) is what the hook is handed as its own
+// options, so a vendor read that supports stopping stops (#4678).
+async function usage({ provider, account, proxy }, signal) {
+  return via.run(proxy ?? "", () => usageOf(provider, account, signal))
 }
 
-async function usageOf(provider, account) {
+async function usageOf(provider, account, signal) {
   const a = auths().get(provider)?.auth
   if (typeof a?.usage !== "function") throw new Error(`${provider}'s plugin doesn't tell its usage`)
   const key = accountKey(provider, account)
   if (!readAuth()[key]) throw new Error("not signed in")
   await fresh(provider, key)
   const p = await infoOf(provider, key)
-  const u = (await inScope(provider, key, () => a.usage(async () => authCopy(key), JSON.parse(JSON.stringify(p))))) ?? {}
+  const u = (await inScope(provider, key, () => a.usage(async () => authCopy(key), JSON.parse(JSON.stringify(p)), signal === undefined ? undefined : { signal }))) ?? {}
   const when = (v) => {
     if (v === undefined || v === null || v === "") return ""
     const d = new Date(typeof v === "number" && v < 1e11 ? v * 1000 : v)
@@ -3021,14 +3305,17 @@ const handlers = {
     if (p.loadMillis > 0) loadWait = p.loadMillis
     if (p.listMillis > 0) listWait = p.listMillis
     await loadPlugins(p.plugins ?? [])
+    // from here on, when magpie holds this host as the one calls go to
+    watchHeavy(p.heavy)
     return { plugins: loaded.map(withProviders) }
   },
-  providers: (p) => providers(p ?? {}),
+  providers: (p, signal) => providers(p ?? {}, signal),
   prompt: async (p) => ({ prompt: await nextPrompt(p.provider, p.method, p.inputs ?? {}) }),
   validate: (p) => ({ error: validate(p.provider, p.method, p.key, p.value) }),
   authorize,
   callback,
   tool: runTool,
+  search: runSearch,
   apiKey,
   load,
   usage,
@@ -3049,13 +3336,13 @@ const handlers = {
   // vendor turned the sign-in away. A models hook may fall back to a list
   // it keeps when the vendor can't be reached, so a check that reached
   // none of the places it asked proves nothing, and fails.
-  async check(p) {
+  async check(p, signal) {
     const key = accountKey(p.provider, p.account)
     const r = { reached: false, failed: null, refused: null }
     return via.run(p.proxy ?? "", () => reach.run(r, async () => {
       await load({ provider: p.provider, account: key })
-      const pi = await info(p.provider, key, true)
-      const u = typeof auths().get(p.provider)?.auth?.usage === "function" ? await usageOf(p.provider, key) : null
+      const pi = await info(p.provider, key, true, undefined, false, signal)
+      const u = typeof auths().get(p.provider)?.auth?.usage === "function" ? await usageOf(p.provider, key, signal) : null
       if (r.failed && !r.reached) throw new Error(`couldn't reach ${pi.name}: ${r.failed?.message ?? r.failed}`)
       return { models: Object.keys(pi.models), usage: u, refused: r.refused ?? "" }
     }))
@@ -3155,6 +3442,7 @@ const gatewayInflight = new Map() // RPC id -> AbortController
 // plugin's wait ends or not (#5016).
 const signInSteps = new Set(["authorize", "callback", "apiKey"])
 const signInInflight = new Map() // RPC id -> AbortController
+const rpcInflight = new Map() // an ordinary RPC's id -> its AbortController (#4678)
 const rl = readline.createInterface({ input: process.stdin, terminal: false })
 rl.on("line", (line) => {
   if (!line.trim()) return
@@ -3170,6 +3458,7 @@ rl.on("line", (line) => {
     if (record) transitionFetch(record, "cancelled")
     gatewayInflight.get(id)?.abort()
     signInInflight.get(id)?.abort()
+    rpcInflight.get(id)?.abort()
     return
   }
   if (msg.method === "credit") {
@@ -3260,13 +3549,24 @@ rl.on("line", (line) => {
     done()
     return
   }
+  // An ordinary RPC is told when magpie gives up on it, as a fetch and a
+  // gateway request are: the handler is handed the signal, so the work
+  // that supports stopping stops (#4678), and its answer, nobody's then,
+  // is not sent. It stays pending until the handler ends all the same: a
+  // handler that ignores the signal may still be renewing or saving a
+  // sign-in, and a host whose stdin closed must not exit under it.
+  const ctl = new AbortController()
+  rpcInflight.set(msg.id, ctl)
   wait
-    .then(() => fn(msg.params ?? {}))
+    .then(() => fn(msg.params ?? {}, ctl.signal))
     .then(
-      (result) => send({ id: msg.id, result: result ?? null }),
-      (e) => send({ id: msg.id, error: { message: String(e?.message ?? e) } }),
+      (result) => { if (!ctl.signal.aborted) send({ id: msg.id, result: result ?? null }) },
+      (e) => { if (!ctl.signal.aborted) send({ id: msg.id, error: { message: String(e?.message ?? e) } }) },
     )
-    .finally(done)
+    .finally(() => {
+      rpcInflight.delete(msg.id)
+      done()
+    })
 })
 rl.on("close", () => {
   closed = true

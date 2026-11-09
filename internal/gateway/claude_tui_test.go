@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/yetone/magpie/internal/claudebridge"
 	"github.com/yetone/magpie/internal/provider"
@@ -275,17 +274,6 @@ func TestClaudeTUIKeepsTheTokenOffTheCommandLine(t *testing.T) {
 	if !strings.Contains(string(args), `"mcpServers":{"`+claudebridge.MCPServerName()+`"`) || !strings.Contains(string(args), "/callback") {
 		t.Fatalf("the MCP helper isn't given its callback file: %s", args)
 	}
-}
-
-func waitFor(t *testing.T, what string, ok func() bool) {
-	t.Helper()
-	for i := 0; i < 500; i++ {
-		if ok() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("%s: never", what)
 }
 
 // A Chat client's history of calls with no tools offered reaches the TUI

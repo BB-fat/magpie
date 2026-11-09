@@ -38,6 +38,9 @@ func syncHome(t *testing.T) string {
 	t.Setenv("DEVECO_CONFIG_DIR", "")
 	t.Setenv("HANA_HOME", "")
 	t.Setenv("DSH_HOME", "")
+	t.Setenv("DS_BOT_HOME", "")
+	t.Setenv("DS_BOT_SHELL_DATA", "")
+	t.Setenv("OMB_DATA_DIR", "")
 	t.Setenv("OMO_CODING_AGENT_DIR", "")
 	t.Setenv("SENPI_CODING_AGENT_DIR", "")
 	t.Setenv("PRIME_AGENT_CODING_AGENT_DIR", "")
@@ -292,7 +295,7 @@ func TestSyncCatalogAgesCodexCache(t *testing.T) {
 		t.Errorf("stale cache: %+v", c)
 	}
 
-	fresh := `{"fetched_at":"2026-09-25T10:00:00Z","etag":` + string(must(json.Marshal(codexcat.WithTag(`W/"v1"`, codexcat.Tag(provider.CodexListed()))))) + `,"models":[]}`
+	fresh := `{"fetched_at":"2026-09-25T10:00:00Z","etag":` + string(must(json.Marshal(codexcat.WithTag(`W/"v1"`, provider.CodexListTag())))) + `,"models":[]}`
 	writeFile(t, cache, fresh)
 	SyncCatalog()
 	if got := readFile(cache); got != fresh {

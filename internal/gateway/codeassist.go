@@ -341,7 +341,13 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 	}
 	names := map[string]string{}
 	var contents []map[string]any
-	for _, m := range dropSecondAnswers(r.Messages) {
+	msgs := dropSecondAnswers(r.Messages)
+	if ag {
+		// a model turn that carried its call written out in the text goes
+		// as the answer it repeated (dropPseudoCalls)
+		msgs = dropPseudoCalls(msgs, r.Tools)
+	}
+	for _, m := range msgs {
 		role := "user"
 		if m.Role == "assistant" {
 			role = "model"
@@ -1113,15 +1119,25 @@ func plainSchema(raw json.RawMessage) json.RawMessage {
 						out["maxItems"] = 0
 					}
 				case "enum":
-					// Google takes string enums only
+					// Google takes string enums only, and none of them
+					// blank: Portainer's "" (no operation running) turned
+					// the whole turn away ("enum[3]: cannot be empty",
+					// #5235). A blank value is left out; an enum with
+					// nothing else in it is left out whole.
 					if es, ok := v.([]any); ok {
 						strs := make([]any, 0, len(es))
+						all := true
 						for _, e := range es {
-							if s, ok := e.(string); ok {
+							s, ok := e.(string)
+							if !ok {
+								all = false
+								break
+							}
+							if strings.TrimSpace(s) != "" {
 								strs = append(strs, s)
 							}
 						}
-						if len(strs) == len(es) {
+						if all && len(strs) > 0 {
 							out[k] = strs
 						}
 					}
@@ -1132,7 +1148,7 @@ func plainSchema(raw json.RawMessage) json.RawMessage {
 				}
 			}
 			if c, ok := x["const"]; ok {
-				if s, ok := c.(string); ok {
+				if s, ok := c.(string); ok && strings.TrimSpace(s) != "" {
 					out["enum"] = []any{s}
 				}
 			}
@@ -1357,7 +1373,10 @@ func (d *codeAssistDecoder) decode(data string, emit func(Event)) error {
 		return nil
 	}
 	if ch.Error != nil {
-		emit(Event{Kind: KError, Text: cmp.Or(ch.Error.Message, streamErrorText(data))})
+		// at the status it names, Google's code: a 400 INVALID_ARGUMENT
+		// is the request's fault, never asked again nor the account's
+		// (sse_bare.go)
+		emit(Event{Kind: KError, Text: cmp.Or(ch.Error.Message, streamErrorText(data)), Status: namedStatus([]byte(data))})
 		return nil
 	}
 	c := ch.geminiChunk

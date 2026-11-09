@@ -1,12 +1,7 @@
-// Plugins: the market of OpenCode provider plugins — subscriptions magpie
-// signs in to through someone else's code. Discover lists the plugins
-// magpie suggests (the community repo's list, with what npm says of each
-// now) and finds the rest on npm; Installed is what was added, to sign in
-// with, update, switch off or remove. Each part is drawn as it comes
-// (#488): what's installed from /api/plugins, the plugins suggested from
-// /api/plugins/listings, and what npm says of them (versions, downloads)
-// from /api/plugins/npm after; a sign-in happens in the Providers add
-// sheet, as every other subscription's does.
+// Plugins: the market of OpenCode plugins. Discover lists the suggested
+// ones and finds the rest on npm; Installed is what was added. Each part is
+// drawn as it comes (#488): /api/plugins, /api/plugins/listings, then
+// /api/plugins/npm; a sign-in happens in the Providers add sheet.
 (() => {
   const page = $("#view-plugins");
   if (!page) return;
@@ -94,11 +89,7 @@
     openProtoMenu(b, outs.map((x) => ({ v: x.id, name: subName(x), literalName: true, note: "" })), "",
       (id, e) => pluginSignIn(id, e), "Sign in to which subscription", "", "right");
   };
-  // whether version a comes after b, in semver's order, the same as
-  // update.Newer, which puts the dot on Plugins: a pre-release before its
-  // release, numbers in it as numbers ("beta.10" after "beta.9"), a number
-  // before a word, a shorter list first; build metadata ("+…") ignored. A
-  // version that isn't x.y.z is never newer.
+  // whether version a comes after b in semver's order, as update.Newer
   const newer = (a, b) => {
     const p = (v) => {
       const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([^+]*))?(?:\+.*)?$/.exec(String(v || "").trim());
@@ -120,14 +111,7 @@
   };
 
   function glyph(d, size = 14, stroke = 1.5) { return svg(d, size, stroke); }
-  // kindChip says what a plugin is: a provider ("pv") signs in to a
-  // subscription and serves its models; middleware ("mw") runs in the
-  // gateway on every agent's requests and replies, whatever serves them;
-  // an agent ("ag") is one magpie has no wiring of its own for, which it
-  // then connects as it does its own; tools ("tl") are given to every
-  // agent through magpie's plugin tools MCP server; a page ("pg") is a
-  // page of its own in the window's sidebar (pluginpages.js); panels
-  // ("pn") are its parts in magpie's own pages
+  // kindChip says what a plugin is, as KINDS' words say
   const KINDS = {
     pv: [PLUG, "Provider", "Signs in to a subscription and serves its models"],
     mw: [PIPE, "Middleware", "Runs in magpie's gateway on the requests your agents send and on the replies"],
@@ -172,18 +156,16 @@
   }
   // a repository tagged magpie-plugin as the market's cards read a
   // listing: its owner as the publisher, its version, and installed by its
-  // spec (its npm name when its author published it there from the
-  // repository, else github:owner/repo)
+  // spec (its npm name when published there from the repository, else
+  // github:owner/repo); its name and summary its package.json's own (#3608)
   const ghListing = (r) => ({
-    package: r.spec, name: r.repo.split("/")[1], kind: r.kind, github: r, icon: r.icon || undefined,
-    summary: r.description ? { en: r.description } : undefined,
+    package: r.spec, name: r.name || r.repo.split("/")[1], kind: r.kind, github: r, icon: r.icon || undefined,
+    summary: r.summary || r.description ? { ...(r.description && { en: r.description }), ...r.summary } : undefined,
+    own: !!(r.name || r.summary),
     npm: { version: r.version || "", publisher: r.owner, repository: r.url, license: r.license, weekly: 0 },
   });
-  // A failed ask is said, with why, whether or not a list was had before:
-  // an empty list was read as there being no unofficial plugins (till on
-  // Discord: GitHub unreachable from their desktop, the section gone).
-  // A list had before stands through a failed ask that brings none.
-  // again: Try again, which has magpie ask GitHub at once.
+  // A failed ask is said, with why, list or not (till on Discord); a list
+  // had before stands. again: Try again, which asks GitHub at once.
   async function loadTagged(again) {
     try {
       const r = await api("plugins/github" + (again ? "?again=1" : ""));
@@ -585,6 +567,11 @@
     const sum = el("p", "pm-sum", summary(l));
     const meta = el("div", "pm-meta");
     meta.append(kindChip(kindOf(l), l.kind === "hooks" && "Request hook"));
+    if (l.own) {
+      const o = el("span", "pm-chip", t("Its own words"));
+      o.title = t("Its name and summary are what the package says of itself in its package.json: nobody reviewed them");
+      meta.append(o);
+    }
     if (l.github) meta.append(stars(l.github.stars));
     if (l.npm?.weekly) {
       const d = el("span", "pm-dl");
@@ -1230,7 +1217,7 @@
     if (e.tools?.length) nm.append(kindChip("tl"));
     if (e.page) nm.append(kindChip("pg"));
     if (e.panels?.length) nm.append(kindChip("pn"));
-    if (e.providers?.length || !(e.gatewayOnly || e.middlewareOnly || e.inMagpieOnly || toolsOnly || (mw && !e.isMiddleware) || (ag && !e.isAgent))) nm.append(kindChip("pv"));
+    if (e.providers?.length || !(e.gatewayOnly || e.middlewareOnly || e.inMagpieOnly || e.isAgent || toolsOnly || (mw && !e.isMiddleware) || (ag && !e.isAgent))) nm.append(kindChip("pv"));
     who.append(nm);
     const subs = subsOf(pkg);
     const sub = el("div", "sub");
@@ -1277,7 +1264,7 @@
     if (mw && !e.off && !ask) who.append(mwLine(mw));
     if (gw && !e.off && !ask) who.append(gatewayLine(gw));
     if (ag && !e.off && !ask) who.append(agentLine(ag));
-    if (e.tools?.length && !e.off && !ask) who.append(toolsLine(e.tools));
+    if (e.tools?.length && !e.off && !ask) who.append(toolsLine(e.tools, e));
     // off too: what its page may read is said before it is turned on
     if (e.page && !ask) who.append(pageLine(e.page));
     if (e.panels?.length && !ask) who.append(panelsLine(e.panels, e.panelReads));
@@ -1285,7 +1272,7 @@
     if ((mw || e.isGateway || ownOpts) && !e.off && !ask && editing?.pkg === pkg) who.append(optionsEditor(e));
     // the plugin's own picture (package.json's magpie.icon) before its
     // first provider's, which a plugin of several gives each its own (#1775)
-    r.append(logo(l?.icon || l?.npm?.icon || e.icon || subs[0]?.icon || ag?.icon, false, e.middlewareOnly ? "mw" : e.inMagpieOnly && e.isAgent && !e.isMiddleware ? "ag" : e.inMagpieOnly && (e.page || e.panels?.length) && !e.isAgent && !e.isMiddleware ? "pg" : toolsOnly && !e.page && !mw && !ag ? "tl" : ""), who);
+    r.append(logo(l?.icon || l?.npm?.icon || e.icon || subs[0]?.icon || ag?.icon, false, e.middlewareOnly ? "mw" : e.isAgent && !e.isMiddleware && !e.providers.length ? "ag" : e.inMagpieOnly && (e.page || e.panels?.length) && !e.isAgent && !e.isMiddleware ? "pg" : toolsOnly && !e.page && !mw && !ag ? "tl" : ""), who);
     const val = el("div", "val");
     const b = busy.get(pkg) || busy.get(e.spec);
     // npm's newer version, or a git one's repository at a newer commit
@@ -1333,6 +1320,8 @@
       r.append(val);
       return r;
     }
+    const flip = e.tools?.length && !e.off && toolsFlip(e);
+    if (flip) val.append(flip);
     if ((e.isGateway || (mw && !mw.error) || ownOpts) && !e.off && editing?.pkg !== pkg) {
       const o = el("button", "text", t("Options"));
       o.title = e.options ? t("The options it runs with") : t("It runs with no options; its package suggests some");
@@ -1469,6 +1458,12 @@
       d.title = a.error;
       return d;
     }
+    // not found here, so Agents has no row (zzZ): say so, and the plugin's notice
+    if (a.missing) {
+      d.classList.add("pm-clash");
+      d.textContent = d.title = [t("{name} isn't in Agents: magpie doesn't find it in {path}", { name: a.name, path: a.looks || "~" }), a.notice].filter(Boolean).join(" ");
+      return d;
+    }
     d.textContent = d.title = t("Adds {name} to Agents", { name: a.name });
     return d;
   }
@@ -1476,15 +1471,30 @@
   // toolsLine is the tools a plugin gives, which magpie's plugin tools MCP
   // server offers every agent: each by the name an agent sees, its
   // description on hover, and the server's address to copy into an agent
-  function toolsLine(tools) {
-    const d = el("div", "sub pm-mw pm-tools");
-    d.append(el("span", "", t("Tools for every agent: {names}", { names: tools.map((x) => x.mcp || x.name).join(t(", ")) })));
+  // and, with its Library server (toolsServer), a switch for every agent
+  function toolsLine(tools, e) {
+    const d = el("div", "sub pm-mw pm-tools"), sv = e.toolsServer;
+    const names = tools.map((x) => x.mcp || x.name).join(t(", "));
+    d.append(el("span", "", t(!sv ? "Tools for every agent: {names}" : sv.on ? "Tools for agents: {names}" : "Tools, hidden from agents: {names}", { names })));
     d.title = tools.map((x) => (x.mcp || x.name) + (x.description ? " — " + x.description : "")).join("\n");
     const url = mcpAddress(state.settings || {}, "/mcp/magpie/tools");
     const b = copyBtn(url, t("MCP server address"));
     b.title = t("Copy the MCP server's address ({url}): add it to an agent as an MCP server (Streamable HTTP)", { url });
     d.append(b);
     return d;
+  }
+  // toolsFlip gives a plugin's tools to every agent or hides them, among
+  // the row's buttons (on the tools line it sat a line below them)
+  function toolsFlip(e) {
+    const sv = e.toolsServer;
+    if (!sv || gatewayMode || featuresOff.has("library")) return null;
+    const f = el("button", "text pm-tools-flip", t(sv.on ? "Hide from agents" : "Give to agents"));
+    f.onclick = (ev) => {
+      ev.stopPropagation();
+      f.disabled = true;
+      api("library/servers/plugin-on", { name: sv.plugin, on: !sv.on }).then(refresh, (err) => { f.disabled = false; statusErr(err); });
+    };
+    return f;
   }
 
   // what a plugin's page may read of magpie's: what its package.json's
@@ -1781,8 +1791,8 @@
         wait.leave();
       }
       holdModal();
-      d.animate([{ height: h + "px", top: y, overflow: "hidden" }, { height: d.offsetHeight + "px", top: d.style.top, overflow: "hidden" }], { duration: 570, easing: SPRING });
-      n.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: "ease-out" });
+      d.animate([{ height: h + "px", top: y, overflow: "hidden" }, { height: d.offsetHeight + "px", top: d.style.top, overflow: "hidden" }], { duration: 460, easing: SPRING });
+      n.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240, easing: "ease-out" });
     };
     try {
       const p = await api("plugins/page?name=" + encodeURIComponent(l.package));

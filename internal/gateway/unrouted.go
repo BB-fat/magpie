@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"runtime/pprof"
 	"strconv"
@@ -17,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/provider"
 )
@@ -98,6 +98,11 @@ func unroutedProto(path string) provider.Protocol {
 	return provider.Chat
 }
 
+// heldAnswered, when set, is called as giveUp has answered a request, its
+// client free to read the answer and close: a test holds it there.
+// A pointer, as a giveUp of a test's request may run on after it.
+var heldAnswered atomic.Pointer[func(u *unroutedHold)]
+
 // errUnrouted ends a request's context when magpie stopped holding it.
 var errUnrouted = errors.New("magpie held the request too long before routing it")
 
@@ -176,16 +181,26 @@ func (h *heldWriter) FlushError() error {
 // Unwrap is for http.ResponseController's deadlines.
 func (h *heldWriter) Unwrap() http.ResponseWriter { return h.w }
 
-// answer writes magpie's own reply, whole, unless the handler began one.
-// Its length is said, so the client has all of it while the handler may
-// still be held: a reply of no length ends only when the handler does.
-func (h *heldWriter) answer(proto provider.Protocol, status int, msg string) bool {
+// claim takes the reply for magpie, unless the handler began one: from
+// here the handler's writes go nowhere, and send writes magpie's answer.
+// Between the two its route is ended (#4200), so a client that has the
+// answer finds the request's route done.
+func (h *heldWriter) claim() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.wrote || h.gaveUp {
 		return false
 	}
 	h.gaveUp = true
+	return true
+}
+
+// send writes magpie's own reply, whole, once claim took it. Its length
+// is said, so the client has all of it while the handler may still be
+// held: a reply of no length ends only when the handler does.
+func (h *heldWriter) send(proto provider.Protocol, status int, msg string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	rec := httptest.NewRecorder()
 	writeError(rec, proto, status, msg)
 	out := h.w.Header()
@@ -197,7 +212,6 @@ func (h *heldWriter) answer(proto provider.Protocol, status int, msg string) boo
 	h.w.WriteHeader(status)
 	h.w.Write(rec.Body.Bytes())
 	_ = http.NewResponseController(h.w).Flush()
-	return true
 }
 
 // unroutedHold is one watched request's watch: the route that shows it
@@ -216,6 +230,9 @@ type unroutedHold struct {
 	shown  *Route       // under f.mu
 	ended  bool         // under f.mu: answered by magpie
 	over   bool         // under f.mu: its handler returned
+	// saved is closed once giveUp, having answered, has written its
+	// report: a test waits for it before its temp HOME goes
+	saved chan struct{}
 	// masking counts the maskings under way for it: one held there waits
 	// for Settings → Privacy's local model, and its error says so
 	masking atomic.Int32
@@ -586,7 +603,7 @@ func (s *Server) watchUnrouted(w http.ResponseWriter, r *http.Request, f *inflig
 		return w, r, func() {}
 	}
 	ctx, cancel := context.WithCancelCause(r.Context())
-	u := &unroutedHold{s: s, f: f, w: newHeldWriter(w), cancel: cancel, agent: callerFrom(r).agent}
+	u := &unroutedHold{s: s, f: f, w: newHeldWriter(w), cancel: cancel, agent: callerFrom(r).agent, saved: make(chan struct{})}
 	r = r.WithContext(context.WithValue(ctx, unroutedKey{}, u))
 	if r.Body != nil && r.Body != http.NoBody {
 		r.Body = waitedBody{r.Body, u}
@@ -595,17 +612,34 @@ func (s *Server) watchUnrouted(w http.ResponseWriter, r *http.Request, f *inflig
 	f.mu.Lock()
 	f.unrouted = u
 	f.mu.Unlock()
+	// The timers reach u through held alone, let go as the handler
+	// returns. A stopped timer is not gone: the runtime keeps it, and its
+	// func, in the timer heap of the P that set it until its time comes
+	// or that P next tidies its heap, and an idle P never does. Through u
+	// a stopped timer kept the request, its body and its context's values
+	// up to unroutedMost after the handler returned (#5250: a socket's
+	// last 256 KB turn body was kept that way).
+	held := new(atomic.Pointer[unroutedHold])
+	held.Store(u)
+	via := func(m func(*unroutedHold)) func() {
+		return func() {
+			if u := held.Load(); u != nil {
+				m(u)
+			}
+		}
+	}
 	u.wmu.Lock()
-	u.unknown = time.AfterFunc(unroutedUnknown, u.checkUnknown)
-	u.most = time.AfterFunc(unroutedMost, u.checkMost)
+	u.unknown = time.AfterFunc(unroutedUnknown, via((*unroutedHold).checkUnknown))
+	u.most = time.AfterFunc(unroutedMost, via((*unroutedHold).checkMost))
 	u.wmu.Unlock()
-	show := time.AfterFunc(unroutedShow, u.show)
+	show := time.AfterFunc(unroutedShow, via((*unroutedHold).show))
 	return u.w, r, func() {
 		show.Stop()
 		u.wmu.Lock()
 		u.unknown.Stop()
 		u.most.Stop()
 		u.wmu.Unlock()
+		held.Store(nil)
 		f.mu.Lock()
 		// a timer that fired as the handler returned does nothing now
 		u.over = true
@@ -645,7 +679,7 @@ func (u *unroutedHold) showLocked() {
 	if u.f.redacting() {
 		rt.Phase = phaseRedact
 	}
-	rt.callerKey = access.Caller(u.r.Context()).KeyID
+	rt.CallerKey, rt.CallerKeyName = callerKeyOf(u.r.Context())
 	u.shown = u.s.trace.begin(rt)
 }
 
@@ -684,41 +718,66 @@ func (u *unroutedHold) giveUp(unknown bool) {
 		where = " its body still arriving (" + u.bodySaid() + ")"
 		msg, status = unroutedBodyMsg(held, u.bodySaid()), http.StatusRequestTimeout
 	}
-	if !u.w.answer(unroutedProto(u.r.URL.Path), status, msg) {
+	f.mu.Unlock()
+	// The report is taken while it is still held, so before it is
+	// answered: the answer says Connection: close, and once its client
+	// has it and closes, the request's context ends and what held it lets
+	// go (#4300). Taken after, it could name no wait under way, and the
+	// stacks would show it gone. It is taken out of f.mu: the goroutine
+	// dump is no wait for what begins a route.
+	asked, _ := u.asked.Load().(string)
+	who := cmpOr(u.agent, cmpOr(f.agent, "?"))
+	said := cmpOr(where, " not masking it")
+	waits := u.waitsSaid()
+	report := u.s.heldReport(u, held, status, who, asked, said)
+	// Saved before it is answered too, so the route the answer finds
+	// names it (#4200); out of f.mu, as it is a file written.
+	name, err := writeHeld(report)
+	f.mu.Lock()
+	if len(f.begun) > 0 || u.ended || u.over || !u.w.claim() {
+		// routed, answered or let go meanwhile, or the handler is
+		// answering: the report is of nothing stopped
 		f.mu.Unlock()
-		return // the handler is answering
+		if err == nil {
+			os.Remove(filepath.Join(HeldDir(), name))
+		}
+		return
 	}
+	u.ended = true
+	defer close(u.saved)
+	if u.shown == nil {
+		u.showLocked()
+	}
+	shown := u.shown
+	// The route is final before the answer goes (#4200): a client that
+	// reads the 504 and looks at the Routing page at once finds the
+	// request stopped, with its error and its report, not still routing.
+	saved := ""
+	if err != nil {
+		saved = "; its report could not be saved: " + err.Error()
+		name = ""
+	} else {
+		saved = "; its report is " + filepath.Join(HeldDir(), name)
+	}
+	u.s.trace.update(shown, func(r *Route) {
+		r.Done, r.Status, r.Error, r.Millis = true, status, msg, time.Since(r.Time).Milliseconds()
+		if name != "" {
+			r.Held = name
+		}
+	})
+	u.w.send(unroutedProto(u.r.URL.Path), status, msg)
 	if status == http.StatusRequestTimeout {
 		// and the handler reads no more of it: its read ends now, not at
 		// the next idle limit, and the connection goes with the answer
 		u.bodyStopped.Store(true)
 		_ = http.NewResponseController(u.w.w).SetReadDeadline(time.Now())
 	}
-	u.ended = true
-	if u.shown == nil {
-		u.showLocked()
-	}
-	shown := u.shown
 	f.mu.Unlock()
-	u.s.trace.update(shown, func(r *Route) {
-		r.Done, r.Status, r.Error, r.Millis = true, status, msg, time.Since(r.Time).Milliseconds()
-	})
-	// the report is taken while it is still held: once its context ends,
-	// what held it lets go, and the stacks would show it gone
-	asked, _ := u.asked.Load().(string)
-	who := cmpOr(u.agent, cmpOr(f.agent, "?"))
-	where = cmpOr(where, " not masking it")
-	report := u.s.heldReport(u, held, status, who, asked, where)
-	u.cancel(errUnrouted)
-	name, err := writeHeld(report)
-	saved := ""
-	if err != nil {
-		saved = "; its report could not be saved: " + err.Error()
-	} else {
-		saved = "; its report is " + filepath.Join(HeldDir(), name)
-		u.s.trace.update(shown, func(r *Route) { r.Held = name })
+	if hook := heldAnswered.Load(); hook != nil {
+		(*hook)(u)
 	}
-	log.Printf("gateway: %s %s for %s from %s held %s before routing,%s%s; stopped with %d%s%s", u.r.Method, u.r.URL.Path, cmpOr(asked, "?"), who, held, where, u.waitsSaid(), status, saved, unroutedStacks())
+	u.cancel(errUnrouted)
+	log.Printf("gateway: %s %s for %s from %s held %s before routing,%s%s; stopped with %d%s%s", u.r.Method, u.r.URL.Path, cmpOr(asked, "?"), who, held, said, waits, status, saved, unroutedStacks())
 }
 
 // unroutedMsg is the error of a request held for held before routing:

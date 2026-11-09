@@ -150,6 +150,12 @@ type Provider struct {
 	// 5 minutes when not said), as the host reckons it (RenewAt).
 	Renews    bool  `json:"renews,omitempty"`
 	RenewLead int64 `json:"renewLead,omitempty"`
+	// Rotating is the auth hook declaring that the vendor spends a refresh
+	// token once (auth.rotating): renewed, the old one is refused
+	// (invalid_grant). Two computers holding a copy would race to renew it
+	// and the loser is signed out for good, so its sign-ins are never
+	// carried by a backup or a sync (provider.CollectSignIns, #5583).
+	Rotating bool `json:"rotating,omitempty"`
 	// Options are the switches the plugin declares for the provider
 	// (auth.options, #2038), as the host checked them
 	Options []Option `json:"options,omitempty"`
@@ -214,6 +220,10 @@ type Option struct {
 	// the switch is on (WorkBuddy's "Free models only"): the editor says
 	// so by the models
 	FiltersModels bool `json:"filtersModels,omitempty"`
+	// Placement is where the editor draws the switch: "top" under the
+	// accounts, above Routing, for a switch about the whole plugin
+	// (#5269); "" under the models
+	Placement string `json:"placement,omitempty"`
 }
 
 // OptionOn is option o of a provider as it stands with the user's values
@@ -668,9 +678,7 @@ func Cached() []Provider {
 	good := provGood
 	provMu.Unlock()
 	if ps == nil {
-		if b, err := steady.ReadFile(providersPath()); err == nil {
-			_ = json.Unmarshal(b, &ps)
-		}
+		ps = savedProviders()
 	}
 	if len(l.Plugins) == 0 {
 		return nil
@@ -723,6 +731,21 @@ func Cached() []Provider {
 		}
 	}
 	return out
+}
+
+// savedProviders is plugin-providers.json, what the plugins last listed,
+// parsed once for each version of the file: while the host hasn't
+// listed them (just started, or it can't start, offline or a plugin that
+// fails), every Cached read and decoded the whole file again, a few
+// hundred KB for each look at a model of a plugin. What it gives is
+// shared: the caller must not change it.
+func savedProviders() []Provider {
+	ps, _ := filememo.Read("plugin-providers", providersPath(), func(b []byte) ([]Provider, error) {
+		var ps []Provider
+		_ = json.Unmarshal(b, &ps) // what decodes is kept, as it always was
+		return ps, nil
+	})
+	return ps
 }
 
 type storedAuth struct {

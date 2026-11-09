@@ -57,6 +57,9 @@ type KeyInfo struct {
 	// Spend is the spend cap set on it and what it has spent in its
 	// period; nil with none.
 	Spend *KeySpend `json:"spend,omitempty"`
+	// Balance is the balance the user typed for it and what is left of
+	// it by magpie's count (key_balance_own.go); nil with none.
+	Balance *BalanceEstimate `json:"balance,omitempty"`
 }
 
 // KeySpend is a key's spend cap as its row tells it: the cap, what magpie
@@ -87,6 +90,9 @@ type KeyRest struct {
 	Model string `json:"model,omitempty"`
 	// Error: what the vendor said
 	Error string `json:"error,omitempty"`
+	// Rate: the vendor called it a rate limit and named when it lifts
+	// (gateway.Rest.Rate): the page says rate limited, not quota used up
+	Rate bool `json:"rate,omitempty"`
 }
 
 // RestKey is what the gateway rests the key k of a provider by: the
@@ -336,7 +342,7 @@ func (p *Provider) setFirst(k KeyAccount) {
 
 func keyProtocolOK(proto Protocol) error {
 	switch proto {
-	case "", Chat, Responses, Anthropic:
+	case "", Chat, Responses, Anthropic, Gemini:
 		return nil
 	}
 	return fmt.Errorf("unknown protocol %q", proto)
@@ -449,6 +455,11 @@ func (p Provider) WithKey(k KeyAccount) Provider {
 					p.Anthropic = ""
 				}
 			}
+		}
+		// a custom provider's Gemini API, kept for a key made for it only
+		// (a relay's key per protocol, corddis_114 on Discord)
+		if k.Protocol != Gemini {
+			p.Gemini = ""
 		}
 	}
 	return p
@@ -654,9 +665,11 @@ func ReplaceKey(id, keyRef, key string) (was, now string, err error) {
 		p.Keys[i].Key = key
 	}
 	moveKeyed(p.AccountModels, keyRef, now)
+	moveKeyed(p.AccountModelsAll, keyRef, now)
 	moveKeyed(p.AccountProxies, keyRef, now)
 	moveKeyed(p.AccountConcurrency, keyRef, now)
 	moveKeyed(p.KeySpendCaps, keyRef, now)
+	moveKeyed(p.KeyOwnBalances, keyRef, now)
 	return keyRef, now, Save(*p)
 }
 

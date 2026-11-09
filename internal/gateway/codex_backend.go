@@ -220,6 +220,12 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 			// array too long", and Codex shows it as the turn's error
 			// (jue on Discord). A summary magpie made goes as its text.
 			body, _ = codexInput(body, false)
+			// a compaction another provider sealed: the sign-in can't
+			// read it, and nothing here can compact it but its writer
+			if cp, foreign := foreignToSignin(body); foreign {
+				writeError(w, provider.Responses, 400, checkpointError(model, cp))
+				return
+			}
 			// a key held to some accounts (#905) may not spend the sign-in
 			// compaction still relays on: refused as its turns are (#967),
 			// with nothing asked of OpenAI — and refused when the sign-in
@@ -287,6 +293,20 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, _ = codexInput(body, false)
+		// a compaction another provider sealed (Copilot's, native) is
+		// never relayed to the sign-in, which can't read it: a call
+		// beside the conversation goes without it, a turn is refused
+		// with why, as one routed is (#1099; echo_ts: every auto-review
+		// on codex-auto-review answered 400 invalid_encrypted_content)
+		if cp, foreign := foreignToSignin(body); foreign {
+			if !compactionAside(kind, model) {
+				writeError(w, provider.Responses, 400, checkpointError(model, cp))
+				return
+			}
+			if b, ok := withoutCompaction(body); ok {
+				body = b
+			}
+		}
 		if r.Header.Get(AccountHeader) != "" {
 			// relayed as it came, it would go to Codex's own sign-in only
 			writeError(w, provider.Responses, 400, AccountHeader+" names one of magpie's Codex accounts, and Codex isn't signed in to ChatGPT here with any on in magpie")
@@ -947,6 +967,11 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 // codexUpstreamOn is codexUpstream signed by the account on instead of
 // Codex's own sign-in, when on isn't nil (compactOn).
 func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest string, body []byte, on *provider.Provider) {
+	// a gateway key's turn on Codex's own sign-in waits for its key's slot
+	// here, outside serve (key_slots.go); its agent gone, nothing is sent
+	if _, err := keySlot(r.Context()); err != nil {
+		return
+	}
 	start := time.Now()
 	usage.Saw(agentOf(r))
 	// Codex's own turns come here from the mux, not through serve: the
@@ -1237,7 +1262,9 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 			sent = provider.CodexCompressed(req, body)
 			// counted for the request's ledger row, as forwardOnce's are (#4456)
 			sentUp(r.Context(), sent, len(body))
-			if res, err = s.client.Do(req); err != nil {
+			res, err = s.client.Do(req)
+			res = gotDown(r.Context(), res)
+			if err != nil {
 				msg := "OpenAI: " + err.Error()
 				if overload && busyAgain < lastRetries && droppedUnanswered(r.Context(), err) {
 					// the connection closed with nothing of a reply (a
@@ -1588,6 +1615,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	failedWith(&rec, call.Status, call.Error, errType)
 	if up := upBytesOf(r.Context()); up != nil {
 		rec.UpBytes, rec.PlainBytes = up.wire, up.plain
+		rec.DownBytes = up.downOf()
 	}
 	appendUsage(r, rec)
 }
@@ -1642,7 +1670,8 @@ func codexAccountOut(status int, body []byte) bool {
 
 // codexFallsBack says Codex's turn on one of its own models has fallbacks
 // to go on to (codexFallBack): the Codex subscription's, set in magpie, at
-// least one of them found. A turn compacting natively is the backend's to
+// least one of them found, or a routing group the user built with the
+// model in it (provider.GroupsAfter). A turn compacting natively is the backend's to
 // answer, and goes nowhere else.
 func (s *Server) codexFallsBack(model string, body []byte) bool {
 	if model == "" || strings.Contains(model, "/") || compactionTriggerIn(body) {
@@ -1652,7 +1681,7 @@ func (s *Server) codexFallsBack(model string, body []byte) bool {
 	if !ok || p.Account == nil || p.Account.Agent != "codex" {
 		return false
 	}
-	return len(provider.FallbackModels(p)) > 0
+	return len(provider.FallbackModels(p)) > 0 || len(provider.GroupsAfter(p.ID+"/"+model)) > 0
 }
 
 // codexFallBack serves Codex's turn on its own sign-in, which the backend
@@ -2027,7 +2056,7 @@ func callKind(h http.Header) string {
 		v = threadSource(h.Get("x-codex-turn-metadata"))
 	}
 	if v == "" && dshCompacts(h) {
-		v = "compact" // DSH's compaction of its context
+		v = KindCompact // DSH's compaction of its context
 	}
 	if v == "" && h.Get("User-Agent") == SearchAgent {
 		v = "web_search"
@@ -2072,7 +2101,9 @@ func threadSource(meta string) string {
 
 func copyHeaders(dst, src http.Header) {
 	for k, vs := range src {
-		if !hopHeader(k) && http.CanonicalHeaderKey(k) != "Host" && http.CanonicalHeaderKey(k) != AccountHeader {
+		// what a proxy in front of magpie says of the caller isn't the
+		// ChatGPT backend's (proxyIdentity)
+		if !hopHeader(k) && !proxyIdentity(k) && http.CanonicalHeaderKey(k) != "Host" && http.CanonicalHeaderKey(k) != AccountHeader {
 			dst[k] = vs
 		}
 	}
@@ -2281,6 +2312,17 @@ func (s *Server) codexModels(w http.ResponseWriter, r *http.Request) {
 // provider, with magpie's models after them. The entries are written into.
 func codexMerged(own []any, cached bool) []any {
 	defer provider.Hold()()
+	// the slugs the sign-in's list has, before the user's narrowing: a
+	// ChatGPT account's model it lacks is listed by magpie's id after it
+	// (provider.CodexListedBeside)
+	backend := make(map[string]bool, len(own))
+	for _, m := range own {
+		if o, ok := m.(map[string]any); ok {
+			if slug, _ := o["slug"].(string); slug != "" {
+				backend[slug] = true
+			}
+		}
+	}
 	// the windows the user set on the codex provider, as /v1/models says
 	// them (#674); a cached entry, which keeps what magpie handed Codex
 	// last, takes the account's own list's back when none is set
@@ -2363,15 +2405,21 @@ func codexMerged(own []any, cached bool) []any {
 	// keeps to its own models (#1385: 62 of magpie's were in its list)
 	var ms []catalog.Model
 	if !codexOwnOnly() {
-		ms = provider.CodexListed()
+		ms = provider.CodexListedBeside(backend)
 	}
-	// Codex's own, as the user left them in its list
+	// Codex's own, as the user left them in its list, and a ChatGPT
+	// account's that the sign-in's list lacks
 	mine := make(map[string]bool, len(own))
 	for _, m := range own {
 		if o, ok := m.(map[string]any); ok {
 			if slug, _ := o["slug"].(string); slug != "" {
 				mine[slug] = true
 			}
+		}
+	}
+	for _, m := range ms {
+		if codexcat.ChatGPTOwn(m.ID) {
+			mine[m.ID] = true
 		}
 	}
 	all := append(own, codexcat.Entries(ms, len(own)+100)...)
@@ -3077,17 +3125,70 @@ func validatesItemIDs(p provider.Provider) bool {
 const itemIDCap = 64
 
 // boundItemID is id, of at most itemIDCap characters, as an upstream that
-// checks item ids takes it: one longer goes as its kind's prefix ("msg_",
-// "rs_") and the sha256 of the whole of it, cut to fit. The same id goes
-// to the same shorter one every turn, and no two ids land on one (a plain
-// cut could: ids of a vendor can begin alike).
-func boundItemID(id string) string {
+// checks item ids takes it: one longer goes as its kind's prefix and the
+// sha256 of the whole of it, cut to fit. The kind comes from typ
+// (itemKindPrefix, openaiItemPrefix's for a call), and only an item of another
+// kind takes a prefix from its id: Copilot's own ids can be opaque, + and
+// / in them and no prefix at the front, and a bare digest passed the
+// length and the characters and still had the whole request turned away
+// with an empty "invalid_request_body" (#5266). The same id goes to the
+// same shorter one every turn, and no two ids land on one (a plain cut
+// could: ids of a vendor can begin alike).
+func boundItemID(id, typ string) string {
 	sum := sha256.Sum256([]byte(id))
 	digest := hex.EncodeToString(sum[:])
-	if i := strings.IndexByte(id, '_'); i > 0 && i <= 4 && safeID([]byte(id[:i])) {
-		return id[:i+1] + digest[:itemIDCap-i-1]
+	prefix := openaiItemPrefix[typ]
+	if prefix == "" {
+		prefix = itemKindPrefix[typ]
 	}
-	return digest
+	if prefix == "" {
+		if i := strings.IndexByte(id, '_'); i > 0 && i <= 4 && safeID([]byte(id[:i])) {
+			prefix = id[:i+1]
+		}
+	}
+	return prefix + digest[:itemIDCap-len(prefix)]
+}
+
+// idOptional are the kinds of input item whose id OpenAI's /responses
+// takes left out ("" is a message given with no type), as OpenAI's own SDK
+// has them (openai-go v3.42.0's ResponseInputItemUnionParam: the id is
+// param.Opt on each of these, required on the rest). One of these with an
+// id too long goes without it, which every upstream that checks ids takes:
+// Copilot answered a message's and a call's overlong id left out with 200,
+// and the same id as a bare digest with an empty 400 "invalid_request_body"
+// (isnine on #4525, echo_ts after Codex's compaction). A call and its
+// output keep their call_id, which pairs them.
+var idOptional = map[string]bool{
+	"": true, "message": true,
+	"function_call": true, "function_call_output": true,
+	"custom_tool_call": true, "custom_tool_call_output": true,
+	"tool_search_call": true, "tool_search_output": true,
+	"computer_call_output": true,
+	"shell_call":           true, "shell_call_output": true,
+	"apply_patch_call": true, "apply_patch_call_output": true,
+	"mcp_approval_response": true,
+	"additional_tools":      true,
+	"compaction":            true,
+}
+
+// itemKindPrefix is the prefix OpenAI gives the id of each kind of input
+// item that can't go without one (openai-go's id "required"), which
+// boundItemID binds an overlong id under. Copilot hands these out opaque
+// too: a web_search_call's id ~450 characters of Base64 with no ws_ at the
+// front, which as a bare digest had the whole request turned away with the
+// same empty 400 "invalid_request_body" (echo_ts, native web search on
+// Copilot). A kind not here (local_shell_call, item_reference, program)
+// keeps the prefix its own id has.
+var itemKindPrefix = map[string]string{
+	"reasoning":             "rs_",
+	"web_search_call":       "ws_",
+	"file_search_call":      "fs_",
+	"computer_call":         "cu_",
+	"image_generation_call": "ig_",
+	"code_interpreter_call": "ci_",
+	"mcp_call":              "mcp_",
+	"mcp_list_tools":        "mcpl_",
+	"mcp_approval_request":  "mcpr_",
 }
 
 // plainItemIDs is a Responses request whose input items' ids are of
@@ -3101,9 +3202,10 @@ func boundItemID(id string) string {
 // encrypted_content is another vendor's, which it couldn't read either.
 // Reasoning of the characters they take, but longer than they take
 // (Copilot's own, #4525), keeps its place, its id bound; any other item (a
-// message, a call) keeps what it says, its id bound when it was long
-// (boundItemID) or with each other character as "_"; a call's call_id,
-// which its output names it by, stays as it was.
+// message, a call) keeps what it says, its id left out when it was long and
+// may be (idOptional), bound when it was long and may not (boundItemID), or
+// with each other character as "_"; a call's call_id, which its output
+// names it by, stays as it was.
 func plainItemIDs(body []byte) []byte {
 	if !bytes.Contains(body, []byte(`"id"`)) {
 		return body
@@ -3138,12 +3240,14 @@ func plainItemIDs(body []byte) []byte {
 		if json.Unmarshal(it["type"], &typ) == nil && typ == "reasoning" && !safeIDChars.MatchString(id) {
 			continue
 		}
-		if len(id) > itemIDCap {
-			id = boundItemID(id)
-		} else {
-			id = unsafeToolID.ReplaceAllString(id, "_")
+		switch {
+		case len(id) > itemIDCap && idOptional[typ]:
+			delete(it, "id")
+		case len(id) > itemIDCap:
+			it["id"], _ = json.Marshal(boundItemID(id, typ))
+		default:
+			it["id"], _ = json.Marshal(unsafeToolID.ReplaceAllString(id, "_"))
 		}
-		it["id"], _ = json.Marshal(id)
 		b, err := marshalPlain(it)
 		if err != nil {
 			return body
@@ -3446,6 +3550,16 @@ func developerItemsAsSystem(body []byte) []byte {
 
 func userMessage(text string) map[string]any { return codexsummary.UserMessage(text) }
 
+// compactWithin is how long a compaction's summary is waited for before
+// magpie's own goes in its place. Codex hears nothing while the summary is
+// made, and gives up on a stream that says nothing for 300s
+// (stream_idle_timeout_ms; agentQuietMost): a summary later than that is
+// never read, and the local one written after it reached nobody, so Codex
+// sent the same ~3MB history again, each time waiting 300s (#5275,
+// hayden4608: a slow uplink still sending it at 299s). A minute short of
+// it, as agentQuietMost.
+var compactWithin = 4 * time.Minute
+
 // codexCompact compacts a conversation held by a magpie model: the model
 // summarises it, and the summary goes back to Codex as the compaction item
 // the backend would have made, marked as magpie's so magpie reads it back
@@ -3453,7 +3567,9 @@ func userMessage(text string) map[string]any { return codexsummary.UserMessage(t
 //
 // A provider that answers the summary 404 — a relay that serves the
 // conversation turn by turn but not the summary of it, "Upstream request
-// failed" (#866) — or 405 or 501 (lacksEndpoint), or 400 for an item of it it doesn't have (#1008) is
+// failed" (#866) — or 405 or 501 (lacksEndpoint), or 400 for an item of it it doesn't have (#1008),
+// or a kind of item it doesn't take (inputKindRefused: Command Code's
+// "unsupported_input_item", #5181, #5259) is
 // asked once more with the conversation as plain text, none of its items'
 // ids or sealed reasoning in it; when that fails too the summary is
 // magpie's own, the conversation's user messages and last reply,
@@ -3492,6 +3608,22 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 		r = r.Clone(r.Context())
 		r.Header.Set(turnMetadataHeader, turn)
 	}
+	// the summary has compactWithin, Codex hearing nothing meanwhile: past
+	// it, the summary is magpie's own, which Codex still takes (#5275)
+	client := r.Context()
+	budget, stop := context.WithCancelCause(client)
+	timer := time.AfterFunc(compactWithin, func() { stop(sideTimedOut{"compaction summary", compactWithin}) })
+	defer func() {
+		timer.Stop()
+		stop(context.Canceled)
+	}()
+	late := func() bool { _, ok := sideTimeout(budget); return ok }
+	lateSummary := func() string {
+		why := fmt.Sprintf("no summary came in %s, and Codex stops waiting at 5 minutes", compactWithin)
+		log.Printf("codex compaction: %s: %s; compacting locally", model, why)
+		return localSummary(body, why)
+	}
+	r = r.WithContext(budget)
 	r = askWhole(r)
 	r = askCompaction(r)
 	ask := func(b []byte) (*recorder, compactResult, error) {
@@ -3510,7 +3642,10 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 	}
 	rec, res, err := ask(body)
 	local := ""
-	if first := rec.status; lacksEndpoint(first) || itemNotFound(rec) || upstreamFailed(rec) || protectionRefused(first, rec.body.Bytes()) ||
+	if late() {
+		local = lateSummary()
+		rec, res, err = &recorder{header: http.Header{}, status: 200}, compactResult{}, nil
+	} else if first := rec.status; lacksEndpoint(first) || itemNotFound(rec) || inputKindRefused(rec, err) || upstreamFailed(rec) || protectionRefused(first, rec.body.Bytes()) ||
 		summaryTooLarge(rec) || err != nil && protectionWords.MatchString(err.Error()) {
 		who, msg := compactFailure(body, rec)
 		if err != nil {
@@ -3518,7 +3653,10 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 		}
 		log.Printf("codex compaction: %s answered %d (%s); asking again with the conversation as text", who, first, msg)
 		rec, res, err = ask(plainCompact(body))
-		if rec.status >= 400 || err != nil {
+		if late() {
+			local = lateSummary()
+			rec, res, err = &recorder{header: http.Header{}, status: 200}, compactResult{}, nil
+		} else if rec.status >= 400 || err != nil {
 			again := ""
 			if err != nil {
 				again = "broken off: " + err.Error()
@@ -3617,6 +3755,8 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 		log.Printf("codex compaction: %s wrote no summary%s; asking again with the conversation as text", who, called)
 		prec, pres, perr := ask(plainCompact(body))
 		switch {
+		case late():
+			local = lateSummary()
 		case perr == nil && prec.status < 400 && pres.Status != "incomplete" && strings.TrimSpace(pres.summary()) != "":
 			rec, res = prec, pres
 		default:
@@ -3644,6 +3784,18 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 		why := "the model wrote no summary" + answeredWith(res.Output)
 		s.compactFails.failed(key, http.StatusBadGateway, why)
 		writeError(w, provider.Responses, 502, "compaction: "+why)
+		return
+	}
+	if client.Err() != nil {
+		// Codex left before it was answered: what was made never reaches
+		// it, so the conversation is no shorter and is no success; Codex
+		// asks the same huge summary again (#5275)
+		why := "Codex left before the summary reached it"
+		if local != "" {
+			why += " (magpie's own)"
+		}
+		log.Printf("codex compaction: %s: %s", model, why)
+		s.compactFails.failed(key, 499, why)
 		return
 	}
 	s.compactFails.done(key)
@@ -3736,6 +3888,30 @@ func itemNotFound(rec *recorder) bool {
 	return rec.status == http.StatusBadRequest && unreadableItem.Match(b) && bytes.Contains(bytes.ToLower(b), []byte("not found"))
 }
 
+// inputKindRefused is a summary request turned away for a kind of item in
+// its input the provider doesn't take, whatever else the conversation
+// holds: Command Code's /responses takes messages, function calls, their
+// outputs and reasoning, and answers anything else 400
+// "unsupported_input_item" with param "input" (#5181, Edward4226; #5259,
+// Mmx233, a Codex subagent's history), and Grok's backend an
+// agent_message 422 "unknown item type". It comes as that status, as
+// another magpie's message in front of it ("Remote magpie: Command Code:
+// {…}", a 400 or its 502), or as an error event in the summary's stream.
+// The conversation as text is messages alone, which it takes. A refusal
+// of the key or account (401, 403, 429) is no such answer.
+func inputKindRefused(rec *recorder, err error) bool {
+	switch rec.status {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusBadGateway:
+	default:
+		if err == nil || rec.status >= 400 {
+			return false
+		}
+	}
+	return inputKindWords.Match(rec.body.Bytes())
+}
+
+var inputKindWords = regexp.MustCompile(`(?i)unsupported_input_item|unknown item type`)
+
 // compactFailure names who answered a summary request with a failure — the
 // provider, the model and the provider's base URL — and what it said.
 func compactFailure(body []byte, rec *recorder) (who, msg string) {
@@ -3782,6 +3958,11 @@ func itemText(it map[string]any) (role, text string) {
 	switch str(it["type"]) {
 	case "message", "":
 		return cmp.Or(str(it["role"]), "user"), parts(it["content"])
+	case "agent_message":
+		// a Codex subagent's task, or a message between agents: the
+		// user's turn for the agent that receives it, as a translated
+		// request reads it (#5259)
+		return "user", parts(it["content"])
 	case "function_call", "custom_tool_call":
 		return "tool call", str(it["name"]) + " " + cmp.Or(str(it["arguments"]), str(it["input"]))
 	case "function_call_output", "custom_tool_call_output":

@@ -846,6 +846,7 @@ func hashes(b backup.Bundle) map[string]string {
 	ps := slices.Clone(b.Providers)
 	for i := range ps { // this computer's own: kept by Mirror, never synced
 		ps[i].KeepLogin, ps[i].KeepLoginAs, ps[i].SwitchOnly, ps[i].RestartApp = false, "", false, false
+		ps[i].KeepSelf = false
 	}
 	providers := []any{ps, b.Icons, b.Groups}
 	if b.Searches != nil && len(*b.Searches) > 0 { // as before them, without one
@@ -866,6 +867,11 @@ func hashes(b backup.Bundle) map[string]string {
 		c.Subagents = nil
 		lib = &c
 	}
+	if lib != nil && lib.Hooks != nil && len(*lib.Hooks) == 0 { // as before them, without one
+		c := *lib
+		c.Hooks = nil
+		lib = &c
+	}
 	out := map[string]string{
 		"providers": h(providers),
 		"settings":  settingsHash,
@@ -877,6 +883,52 @@ func hashes(b backup.Bundle) map[string]string {
 		out["signins"] = h(b.SignIns.Hashes())
 	}
 	return out
+}
+
+// unset says whether b holds nothing of its own in part p: no provider
+// or routing group, settings as a new magpie has them, no profile, a
+// library with nothing in it. A computer joining a folder whose file's
+// part is unset is joining a folder whose first writer had none of that
+// part, not one where it was removed (#5642): a part is said unset only
+// when nothing a user made is in it, so a part with anything in it is
+// merged as before. The agents' part is never unset: it holds the models
+// every installed agent reads as it is now, set up or not.
+func unset(b backup.Bundle, p string) bool {
+	switch p {
+	case "providers":
+		return len(b.Providers) == 0 && len(b.Groups) == 0
+	case "settings":
+		var s settings.Settings
+		if b.Settings != nil {
+			s = *b.Settings
+		}
+		d := settings.Defaults()
+		s.KeepOwn(settings.Settings{})
+		d.KeepOwn(settings.Settings{})
+		j, _ := json.Marshal(s)
+		dj, _ := json.Marshal(d)
+		return bytes.Equal(j, dj)
+	case "profiles":
+		return len(b.Profiles) == 0
+	case "library":
+		l := b.Library
+		if l == nil {
+			return false // from a magpie before the library went: handled apart
+		}
+		for _, t := range l.Texts {
+			if strings.TrimSpace(t) != "" {
+				return false
+			}
+		}
+		for _, t := range l.Extra {
+			if strings.TrimSpace(t) != "" {
+				return false
+			}
+		}
+		return len(l.MCP) == 0 && len(l.Skills) == 0 &&
+			(l.Subagents == nil || len(*l.Subagents) == 0) && (l.Hooks == nil || len(*l.Hooks) == 0)
+	}
+	return false
 }
 
 func orEmpty[V any](m map[string]V) map[string]V {
@@ -925,15 +977,13 @@ func take(to *backup.Bundle, from backup.Bundle, part string) {
 		}
 		searches := from.Searches
 		if searches != nil && !keys && (to.Keys || (to.ProvidersKeys != nil && *to.ProvidersKeys)) && to.Searches != nil { // the same for the search APIs
-			keys := map[string]string{}
+			keys := map[string]provider.SearchAPI{}
 			for _, a := range *to.Searches {
-				keys[a.Vendor] = a.Key
+				keys[a.Vendor] = a
 			}
 			ss := slices.Clone(*searches)
 			for i, a := range ss {
-				if a.Key == "" {
-					ss[i].Key = keys[a.Vendor]
-				}
+				ss[i].KeepKeysOf(keys[a.Vendor]) // those switched off too
 			}
 			searches = &ss
 		}
@@ -1280,6 +1330,16 @@ func syncOnce(ctx context.Context, c Config, st *state) error {
 			if p == "agents" {
 				keepServersOwn(&merged, remote, keep)
 			}
+		case rc && !lc && first && unset(remote, p) && !unset(local, p):
+			// Joining a file whose part holds nothing of its own (its
+			// first writer had no providers, no settings of its own, an
+			// empty library): what this computer has goes up, never the
+			// empty part down over it (#5642: three computers syncing the
+			// library, and the one with providers and routing groups lost
+			// them to a fresh one that wrote the file first). After the
+			// join, a part emptied on purpose spreads as before.
+			take(&merged, local, p)
+			there = append(there, p)
 		case rc && !lc:
 			if first && p == "settings" {
 				keepUnseenGatewayKeys(&remote, local)

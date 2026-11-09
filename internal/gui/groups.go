@@ -12,6 +12,7 @@ import (
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // groupsJSON is what the Routing view manages: the routing groups, the
@@ -57,6 +58,15 @@ type groupsJSON struct {
 	// to (Group.Accounts), as a gateway key's list has them (#905): each
 	// provider with more than one, or one a group names already
 	Accounts map[string][]keyModelJSON `json:"accounts"`
+	// Defaults: what every group follows when it sets no value of its own
+	// (settings.GroupSink, GroupFirstToken, GroupPatience)
+	Defaults groupDefaultsJSON `json:"defaults"`
+}
+
+type groupDefaultsJSON struct {
+	Sink       bool `json:"sink"`
+	FirstToken int  `json:"firstToken"`
+	Patience   int  `json:"patience"`
 }
 
 type skippableJSON struct {
@@ -175,11 +185,16 @@ type modelRef struct {
 	// whichever is named (a ChatGPT account's, #1865), which Settings ›
 	// Images says
 	VendorPicks bool `json:"vendorPicks,omitempty"`
+	// Free: it costs its subscription nothing (the vendor's word); Zero: its
+	// provider lists it at $0 (provider.PricedFree). The add-a-model picker
+	// says free by either (jiangguochao666 on X)
+	Free bool `json:"free,omitempty"`
+	Zero bool `json:"zero,omitempty"`
 }
 
 // servedRef is a served model as the Routing page lists it
-func servedRef(e provider.Entry) modelRef {
-	return modelRef{ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon, Context: e.Context, Efforts: e.Efforts, CanFast: provider.CanFast(e.Provider, e.Model), OwnFast: provider.OwnFast(e.Provider, e.Model), Images: seesImages(e), ImagesUnknown: imagesUnknown(e), Sub: e.Provider.Account != nil}
+func servedRef(e provider.Entry, s settings.Settings) modelRef {
+	return modelRef{Free: e.Free, Zero: !e.Free && e.Provider.PricedFree(s, e.Model), ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon, Context: e.Context, Efforts: e.Efforts, CanFast: provider.CanFast(e.Provider, e.Model), OwnFast: provider.OwnFast(e.Provider, e.Model), Images: seesImages(e), ImagesUnknown: imagesUnknown(e), Sub: e.Provider.Account != nil}
 }
 
 type poolJSON struct {
@@ -288,6 +303,8 @@ func groupsState() groupsJSON {
 	_, offset := time.Now().Zone()
 	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Drawers: []modelRef{}, Found: provider.AutoGroupsOn(), Templates: provider.Templates(),
 		Clock: clockJSON{Zone: provider.LocalZone(), Offset: offset}}
+	def := settings.Load()
+	out.Defaults = groupDefaultsJSON{Sink: def.GroupSink, FirstToken: def.GroupFirstToken, Patience: def.GroupPatience}
 	for i := range out.Templates {
 		if out.Templates[i].Group.Members == nil {
 			out.Templates[i].Group.Members = []string{} // one that can't be made has none
@@ -309,10 +326,11 @@ func groupsState() groupsJSON {
 	out.Accounts = groupAccounts(all)
 	served := provider.Served()
 	chat := map[string]bool{}
+	set := settings.Shared() // the prices the user set, for each model's free tag
 	for _, e := range served {
 		if e.Group == "" {
 			chat[e.ID] = true
-			out.Models = append(out.Models, servedRef(e))
+			out.Models = append(out.Models, servedRef(e, set))
 		}
 	}
 	// the image models, as Settings › Images lists them: each provider's
@@ -488,6 +506,9 @@ func groupRoutes(mux *http.ServeMux) {
 			Kind string `json:"kind"`
 			// import: a group shared as text (provider.ShareGroup)
 			Text string `json:"text"`
+			// Replace: the text's id, when it is a group of the user's,
+			// replaces that group (provider.ImportGroupOver)
+			Replace bool `json:"replace"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			fail(rw, err)
@@ -539,7 +560,11 @@ func groupRoutes(mux *http.ServeMux) {
 			shared, err = provider.ShareGroup(in.ID)
 		case "import":
 			var res provider.Imported
-			if res, err = provider.ImportGroup(body.Text); err == nil {
+			imp := provider.ImportGroup
+			if body.Replace {
+				imp = provider.ImportGroupOver
+			}
+			if res, err = imp(body.Text); err == nil {
 				imported = &res
 			}
 		case "template":
@@ -549,6 +574,10 @@ func groupRoutes(mux *http.ServeMux) {
 			err = provider.SwitchGroup(in.ID, body.On)
 		case "arrange":
 			err = provider.SetGroupOrder(body.Order)
+		case "defaults":
+			// what every group follows when it sets no value of its own
+			// (jiezhengj on Discord: set once, not in each group)
+			err = settings.SetGroupDefaults(in.Sink, in.FirstToken, in.Patience)
 		case "pick":
 			// a Manual group's member every request goes to, and nothing
 			// else of it (#2489: the tray panel switches it)

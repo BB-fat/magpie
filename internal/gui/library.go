@@ -14,6 +14,7 @@ import (
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/mcpauth"
+	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -31,6 +32,36 @@ type libraryJSON struct {
 	// Problems are every one still standing, the page's list of what an
 	// agent couldn't be given: not only those a chip can carry
 	Problems []library.Problem `json:"problems,omitempty"`
+	// SubagentModels are what a subagent's model may be set to: the models
+	// and routing groups Codex's lists show, the only agent that takes one
+	// (library.Subagent.Model). CodexSubagentModel is the model the
+	// gateway puts every Codex subagent on when set on the Agents page,
+	// which a subagent's own then gives way to.
+	SubagentModels     []subagentModel `json:"subagentModels"`
+	CodexSubagentModel string          `json:"codexSubagentModel,omitempty"`
+}
+
+// subagentModel is a model a subagent may be set to run on.
+type subagentModel struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Note  string `json:"note,omitempty"`
+	Group bool   `json:"group,omitempty"`
+}
+
+func subagentModels() []subagentModel {
+	out := []subagentModel{}
+	for _, e := range provider.CodexSubagentModels() {
+		m := subagentModel{ID: e.ID, Name: e.Name, Note: e.Provider.Name, Group: e.Group != ""}
+		if a := e.Provider.Account; a != nil && a.User != "" {
+			m.Note = a.User
+		}
+		if m.Group {
+			m.Note = ""
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func libraryView(res *library.Result) (libraryJSON, error) { return libraryRead(res, false) }
@@ -51,7 +82,8 @@ func libraryRead(res *library.Result, glance bool) (libraryJSON, error) {
 	}
 	v, err := read(p)
 	home, _ := os.UserHomeDir()
-	return libraryJSON{View: v, Result: res, Home: home, Problems: p}, err
+	return libraryJSON{View: v, Result: res, Home: home, Problems: p,
+		SubagentModels: subagentModels(), CodexSubagentModel: provider.CodexSubagentModel()}, err
 }
 
 // instructionsJSON answers a change to the instructions: what the page's
@@ -498,6 +530,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			// what the router says of itself to the agents, this
 			// computer's own (settings.RouterNote)
 			err = settings.SetRouterNote(in.Note)
+		case "servers/hub-tools":
+			// every tool given whole, not on demand (settings.RouterAllTools)
+			err = settings.SetRouterAllTools(in.On)
 		case "servers/hub-open":
 			// the hub added to another app through its install link,
 			// built here: the page names the app, never the link
@@ -508,6 +543,10 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		case "servers/tools":
 			// the tools its agents leave out (nf1qaz2w on Discord)
 			res, err = library.ServerTools(in.Name, in.Names)
+		case "servers/plugin-on":
+			// a plugin's tools off for every agent, or on again, from its
+			// row on the Plugins page (Name is the plugin's)
+			res, err = library.PluginServerOn(in.Name, in.On)
 		case "servers/agents-all":
 			res, err = library.EveryServerAgents(in.Agents, in.On)
 		case "servers/agents-some":
@@ -595,6 +634,12 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		case "skills/where":
 			// each agent's own folder, or ~/.agents/skills too (skills_shared.go)
 			res, err = library.SetSkillsWhere(in.How)
+		case "skills/router":
+			// magpie's one skill listing the rest (skill_router.go)
+			res, err = library.SetSkillRouter(in.On)
+		case "skills/router-direct":
+			// a skill kept out of the router, each agent's own link
+			res, err = library.SkillRouterHow(in.Name, in.On)
 		case "skills/keep-own":
 			res, err = library.KeepAgentSkills(oneOrMore(in.Name, in.Names), in.Agent)
 		case "market/server":
