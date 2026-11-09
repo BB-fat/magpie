@@ -81,6 +81,9 @@ export const FakePlugin = async ({ client }) => ({
         "fake-gemini": { name: "Fake Gemini", provider: { npm: "@ai-sdk/google" }, reasoning: true, modalities: { input: ["text"], output: ["text"] }, limit: { context: 3000, output: 300 } },
       },
     }
+    // $FAKE_KIRO: a Claude model named as Kiro's plugin names it, on
+    // Anthropic's Messages API
+    if (process.env.FAKE_KIRO) cfg.provider[ID].models["claude-opus-5.5"] = { name: "Claude Opus 5.5", provider: { npm: "@ai-sdk/anthropic" }, reasoning: true, modalities: { input: ["text", "image"], output: ["text"] }, limit: { context: 200000, output: 32000 } }
     // $FAKE_RESPONSES: one model more, on OpenAI's Responses (Grok's)
     // $FAKE_FAST=1: fake-1 has a fast one, as Cursor's plugin 0.1.x lists
     // a model's -fast (=tier: see the models hook)
@@ -95,6 +98,13 @@ export const FakePlugin = async ({ client }) => ({
     if (process.env.FAKE_SENSENOVA) {
       cfg.provider[ID].models["sensenova-u1.5-lite"] = { name: "sensenova-u1.5-lite", limit: { context: 131072, output: 32768 } }
       cfg.provider[ID].models["flux-2"] = { name: "Flux 2", provider: { npm: "@ai-sdk/anthropic" }, limit: { context: 1000, output: 100 } }
+    }
+    // $FAKE_DECLARED_DRAWS: image models whose names say nothing, on the
+    // provider's openai-compatible: one that says it gives images alone,
+    // and one that answers in text and images, which chats (maonekone)
+    if (process.env.FAKE_DECLARED_DRAWS) {
+      cfg.provider[ID].models["jimeng-4.0"] = { name: "Jimeng 4.0", modalities: { input: ["text", "image"], output: ["image"] }, limit: { context: 1000, output: 100 } }
+      cfg.provider[ID].models["fake-canvas"] = { name: "Fake Canvas", modalities: { input: ["text"], output: ["text", "image"] }, limit: { context: 1000, output: 100 } }
     }
     // $FAKE_LOOMY: iFlytek's Loomy gateway's three image generators as its
     // /v1/models lists them (#4913), on the provider's openai-compatible;

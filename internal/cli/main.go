@@ -34,6 +34,7 @@ import (
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/sessions"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/shortcut"
 	"github.com/yetone/magpie/internal/tui"
 	"github.com/yetone/magpie/internal/update"
 )
@@ -324,6 +325,10 @@ func run(args []string) error {
 	if ok, err := claudeLaunchCmd(args); ok {
 		return err
 	}
+	// Claude Magpie.app (claude_desktop_launch_cli.go), --help too
+	if ok, err := claudeDesktopLaunchCmd(args); ok {
+		return err
+	}
 	// before anything is read, moved or started: --help on any command
 	// prints its usage and does nothing else
 	if helpAsked(args) {
@@ -418,6 +423,9 @@ func run(args []string) error {
 	// a model Claude Code names that magpie doesn't serve goes to the one
 	// it is set to use for that tier
 	gateway.StandIn = agent.StandIn
+	// a bare name an agent asks for goes to its own subscription, unless
+	// magpie set the agent to the group magpie found by that name
+	gateway.SetToGroup = agent.SetToGroup
 	// and its auto mode classifier, on a sonnet tier that follows a main
 	// model /model has moved, to the model it moved to
 	gateway.ClassifierStandIn = agent.ClassifierStandIn
@@ -580,6 +588,11 @@ func run(args []string) error {
 	case "restore":
 		return restoreCmd(args[1:])
 	case "uninstall":
+		// Windows' Installed apps: the app's window asks (shortcut.UninstallArgs)
+		if hasGUI && slices.Equal(args, shortcut.UninstallArgs) {
+			gateway.Serves = "app"
+			return runUninstallWindow()
+		}
 		return uninstallCmd(args[1:])
 	case "webdav", "dav":
 		return webdavCmd(args[1:])

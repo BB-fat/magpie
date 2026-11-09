@@ -204,7 +204,8 @@ function renderGatewayKeys() {
   // a drag in progress keeps its rows: the list is drawn when it ends
   if (gatewayKeysArranging) { gatewayKeysRenderPending = true; return; }
   const box = $("#gatewayKeys");
-  $("#gatewayKeysBlock").hidden = !providers?.gateway.lan;
+  $("#gatewayKeysBlock").hidden = !gwKeysShown();
+  $("#gatewayKeysOff").hidden = gwKeysShown();
   box.replaceChildren();
   $("#addGatewayKey").onclick = () => { gatewayKeyDraft = ""; renderGatewayKeys(); };
   // keys: a badge left unset folds away until the row is pointed at, as
@@ -975,7 +976,27 @@ function gatewayLimitEditor(k) {
   }
   foot.append(cancel, save);
   if (which) box.append(which);
-  box.append(fields, hint, err);
+  // the limits are the Key limits built-in's: off, Save was refused with
+  // "turn the plugin on" and nothing here said where (the scattered
+  // settings audit after netube99 on X); the line shows only while it is
+  // off (data-feature-off) and turns it on in place
+  const off = el("div", "klf-off");
+  off.dataset.featureOff = "budget";
+  const on = el("button", "text", t("Turn on"));
+  on.type = "button";
+  on.onclick = async (e) => {
+    e.stopPropagation();
+    on.disabled = true;
+    try {
+      applyFeatures(prefs.builtins = await api("plugins/builtin", { id: "budget", on: true }));
+      status(t("Saved"), "ok", 1500);
+    } catch (err) {
+      status(t(err.message), "err");
+    }
+    on.disabled = false;
+  };
+  off.append(el("span", "", t("Off in Plugins › Built-in")), on);
+  box.append(off, fields, hint, err);
   if (used) {
     // count from 0 again, tokens and cost together (#1509)
     const zero = el("button", "text klf-reset", t("Reset usage"));

@@ -1508,7 +1508,8 @@ async function loadPlugins(list) {
     let gateway
     if (p.gateway) {
       gateway = await import(pathToFileURL(p.gateway).href)
-      if (typeof gateway.onRequest !== "function") throw new Error("magpie.hooks exports no onRequest")
+      // a hook that only listens for sign-ins needs no onRequest
+      if (typeof gateway.onRequest !== "function" && typeof gateway.onSignIn !== "function") throw new Error("magpie.hooks exports no onRequest")
     }
     let fns = []
     // A gateway-only package needs no OpenCode entry. Mixed packages
@@ -1541,20 +1542,47 @@ async function loadPlugins(list) {
     }
     for (const x of r.got) hooks.push(x)
     if (r.gateway) gatewayHooks.push({ spec: p.spec, options: p.options ?? {}, onRequest: r.gateway.onRequest,
-      onResponse: r.gateway.onResponse,
+      onResponse: r.gateway.onResponse, onSignIn: r.gateway.onSignIn,
       state: { calls: 0, failures: 0, totalMillis: 0, lastOutcome: "idle", lastBytes: 0 } })
     if (!isPi) loaded.push({ spec: p.spec })
   }
   config = { provider: {}, ...structuredClone(userConfig) }
+  ownConfig = new Map()
   for (const h of hooks) {
     if (typeof h.hooks.config !== "function") continue
+    // a provider the plugin signs in to is built from the user's own
+    // entry, or what this plugin made of it before, never from another
+    // plugin's that signs in to it too: a third party's that set it
+    // first (models: {}) left the other's `??=` nothing to add, and the
+    // provider no models (豆包工作, two plugins of doubao-work)
+    const ids = signsIn(h.spec)
+    for (const id of ids) {
+      const own = ownConfig.get(ownKey(h.spec, id)) ?? structuredClone(userConfig.provider?.[id])
+      if (own === undefined) delete config.provider[id]
+      else config.provider[id] = own
+    }
     try {
       // one at a time, as each may build on the last, but none for long
       await inTime(() => h.hooks.config(config), loadWait, "config hook")
     } catch (e) {
       send({ event: "log", level: "error", message: `${h.spec}: config hook: ${e?.message ?? e}` })
     }
+    for (const id of ids) ownConfig.set(ownKey(h.spec, id), config.provider?.[id])
   }
+}
+
+// ownConfig is each provider's config entry as the config hook of each
+// plugin that signs in to it made it, by ownKey(spec, id). The plugin
+// serving the provider (auths) is the one whose entry counts.
+let ownConfig = new Map()
+const ownKey = (spec, id) => spec + "\0" + id
+
+// providerConfig is the config entry of provider id: the serving plugin's
+// own, or what the config hooks made of it when no plugin signs in to it.
+function providerConfig(id) {
+  const server = auths().get(id)?.spec
+  const k = server && ownKey(server, id)
+  return k && ownConfig.has(k) ? ownConfig.get(k) : config.provider?.[id]
 }
 
 // A bounded await detaches its listener even when the plugin ignores the
@@ -1598,6 +1626,7 @@ async function gatewayBegin(p, signal) {
   const total = AbortSignal.any([signal, run.controller.signal, AbortSignal.timeout(gatewayBudget())])
   for (const h of gatewayHooks) {
     if (total.aborted) break
+    if (typeof h.onRequest !== "function") continue
     const ctl = new AbortController()
     const timer = setTimeout(() => ctl.abort(), gatewayTimeout(h))
     const ownSignal = AbortSignal.any([total, ctl.signal])
@@ -1681,8 +1710,34 @@ async function gatewayFinish(run, p, signal) {
   return null
 }
 
+// An account that has to be signed in again, or whose sign-in ends soon,
+// told to each hook's onSignIn once, as magpie's own alert is. The event
+// holds the provider, the account's label and the state, never a token.
+async function gatewaySignIn(p, signal) {
+  const ev = p.event
+  if (!ev || typeof ev !== "object") return null
+  const total = AbortSignal.any([signal, AbortSignal.timeout(gatewayBudget())])
+  for (const h of gatewayHooks) {
+    if (total.aborted) break
+    if (typeof h.onSignIn !== "function") continue
+    const ctl = new AbortController()
+    const timer = setTimeout(() => ctl.abort(), gatewayTimeout(h))
+    const ctx = { options: structuredClone(h.options), signal: AbortSignal.any([total, ctl.signal]) }
+    try {
+      await bounded(Promise.resolve().then(() => h.onSignIn(structuredClone(ev), ctx)), ctx.signal)
+    } catch {
+      if (!signal.aborted) send({ event: "log", level: "warn", message: `${h.spec}: gateway sign-in hook failed or timed out` })
+    } finally {
+      clearTimeout(timer)
+      ctl.abort()
+    }
+  }
+  return null
+}
+
 async function gatewayRequest(p, signal) {
   if (p.operation === "begin") return gatewayBegin(p, signal)
+  if (p.operation === "signIn") return gatewaySignIn(p, signal)
   const run = gatewayRuns.get(p.id)
   if (!run || run.closed || run.token !== p.token) return null
   if (p.operation === "close") { closeGateway(run); return null }
@@ -2094,7 +2149,7 @@ function fromModelsDev(p, m) {
 // its own options' signal too (#4678).
 async function info(id, key, strict, limit, quiet, signal) {
   const md = mdev()[id]
-  const cfg = config.provider?.[id]
+  const cfg = providerConfig(id)
   const out = {
     id,
     name: cfg?.name ?? md?.name ?? id,
@@ -2363,6 +2418,24 @@ function optionValue(provider, key) {
   return optionValues(provider)[key] === true
 }
 
+// byLang is a sign-in word by language, magpie's own field beside
+// OpenCode's English one (a method's labels, a question's messages, a
+// choice's labels and hints: {"zh": "…", "zh-TW": "…"}), as { [name]: map }
+// to spread, or {}: codes of 1–16 characters, at most 16, empty and
+// non-string ones left out, as a page's titles are (plugin.titles).
+function byLang(v, name) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {}
+  const out = {}
+  let n = 0
+  for (const [k, x] of Object.entries(v)) {
+    const code = k.trim(), text = shown(x, 300)
+    if (!code || code.length > 16 || !text || n === 16) continue
+    out[code] = text
+    n++
+  }
+  return n ? { [name]: out } : {}
+}
+
 // methods are the auth hook's ways to sign in. An "api" one may say what
 // its key looks like (placeholder, magpie's own: OpenCode's dialog says
 // "API key"); its label titles the key's field, as OpenCode's does.
@@ -2370,6 +2443,7 @@ function methods(auth) {
   return (auth.methods ?? []).map((m) => ({
     type: m.type,
     label: m.label,
+    ...byLang(m.labels, "labels"),
     ...(m.type === "api" && m.keyless === true && typeof m.authorize === "function" ? { keyless: true } : {}),
     ...(m.type === "api" && shown(m.placeholder, 200) ? { placeholder: shown(m.placeholder, 200) } : {}),
   }))
@@ -2602,8 +2676,9 @@ async function nextPrompt(provider, index, inputs) {
       type: p.type,
       key: p.key,
       message: p.message,
+      ...byLang(p.messages, "messages"),
       placeholder: p.placeholder ?? "",
-      options: p.type === "select" ? p.options.map((o) => ({ label: o.label, value: o.value, hint: o.hint ?? "" })) : undefined,
+      options: p.type === "select" ? p.options.map((o) => ({ label: o.label, value: o.value, hint: o.hint ?? "", ...byLang(o.labels, "labels"), ...byLang(o.hints, "hints") })) : undefined,
     }
   }
   return null

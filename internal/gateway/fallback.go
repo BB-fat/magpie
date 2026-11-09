@@ -107,10 +107,14 @@ type candidate struct {
 // renews (zero when one doesn't say). noCredits: it is a Codex account
 // held at 100% as it is set not to spend its credits (cap is 100 then).
 type capHold struct {
-	cap       int
-	used      float64
-	back      time.Time
-	noCredits bool
+	cap  int
+	used float64
+	// amount: held at a window's fixed amount (provider.CapHold.Amount),
+	// count of it used, in unit
+	amount, count float64
+	unit          string
+	back          time.Time
+	noCredits     bool
 	// unread: held by a careful provider as its usage can't be told, why
 	// (carefulDoubt), cap then the account's own
 	unread string
@@ -954,7 +958,7 @@ func capHeld(p, acct provider.Provider, model string, now time.Time) *capHold {
 		}
 		return nil
 	}
-	return &capHold{cap: h.Cap, used: h.Used, back: h.Back, noCredits: h.Credits}
+	return &capHold{cap: h.Cap, used: h.Used, back: h.Back, noCredits: h.Credits, amount: h.Amount, count: h.Count, unit: h.Unit}
 }
 
 // cappedError says why a request for model went nowhere when every account
@@ -1013,6 +1017,9 @@ func heldReasons(ws []Weighed, now time.Time) ([]string, time.Time) {
 			continue
 		}
 		s := fmt.Sprintf("%s (%s) is at %.0f%% of a usage window, past its %d%% cap", w.Name, w.Who, w.Used, w.Capped)
+		if w.CapAmount > 0 {
+			s = fmt.Sprintf("%s (%s) has used %s %s of a usage window, past its cap of %s", w.Name, w.Who, amountText(w.CapCount), w.CapUnit, amountText(w.CapAmount))
+		}
 		if w.SpendCap > 0 {
 			s = fmt.Sprintf("%s (%s) has spent %s of the %s spend cap set on it %s, as magpie's usage prices its calls", w.Name, w.Who, usd(w.Spent), usd(w.SpendCap), spendPeriod(w.SpendPeriod, w.SpendSince, now))
 		}
@@ -1050,6 +1057,12 @@ func spendOnly(ws []Weighed) bool {
 		n++
 	}
 	return n > 0
+}
+
+// amountText is a window's count as a cap at a fixed amount says it: whole
+// when it is, else to two places.
+func amountText(v float64) string {
+	return strconv.FormatFloat(math.Round(v*100)/100, 'f', -1, 64)
 }
 
 // usd is an amount in dollars as a spend cap is told: cents kept.
@@ -1170,6 +1183,7 @@ func barredOf(cs []candidate, q provider.Provider, fallback bool, from provider.
 		w.Unlisted, w.Via = true, via
 		if h := c.capped; h != nil {
 			w.Capped, w.Used, w.NoCredits, w.Unread = h.cap, h.used, h.noCredits, h.unread
+			w.CapAmount, w.CapCount, w.CapUnit = h.amount, h.count, h.unit
 			if sp := h.spend; sp != nil {
 				w.SpendCap, w.Spent, w.SpendPeriod = sp.usd, sp.spent, sp.period
 				if sp.period == provider.SpendTotal {
@@ -1364,6 +1378,56 @@ func quotaHeld(cs []candidate) (Rest, time.Time, bool) {
 		}
 	}
 	return first, back, len(cs) > 0
+}
+
+// timedHeld is, when every candidate of cs rests on a 429 for as long as
+// its vendor said (vendorTimed), the rest of the first, and when the first
+// of them is back. Asked before then, each is refused the same, and asked
+// every time the agent tries again it is the vendor's to judge: hsjzg58958
+// on X, two accounts each limited for 300 seconds were asked again about
+// every half a second, as the agent retried, until the vendor flagged them
+// both. A key or an account alike, out of its rate or its allowance: the
+// time is the vendor's own, not one magpie guessed (quotaHeld's first
+// refusal asked again). Not a subscription account that spends its resets
+// by itself (autoReset), nor another computer's model (Rest.there).
+func timedHeld(cs []candidate) (Rest, time.Time, bool) {
+	var first Rest
+	var back time.Time
+	now := time.Now()
+	for i, c := range cs {
+		r, ok := restingOf(c)
+		if !ok || !vendorTimed(c, r) {
+			return Rest{}, time.Time{}, false
+		}
+		at := r.asksAt(now)
+		if !now.Before(at) {
+			return Rest{}, time.Time{}, false
+		}
+		if i == 0 {
+			first = r
+		}
+		if back.IsZero() || at.Before(back) {
+			back = at
+		}
+	}
+	return first, back, len(cs) > 0
+}
+
+// vendorTimed says whether r, c's rest, is a 429's for the time its vendor
+// named: its Retry-After or rate-limit reset headers, or the reset its
+// refusal gave (rateRest, Rest.By "retry-after" or "resets").
+func vendorTimed(c candidate, r Rest) bool {
+	if r.there || r.Status != http.StatusTooManyRequests || r.By != "retry-after" && r.By != "resets" {
+		return false
+	}
+	switch r.Why {
+	case failRate:
+		return true
+	case failQuota, failCredit:
+		a := c.p.Account
+		return a == nil || !provider.AutoResetsWeek(a.Agent, a.User)
+	}
+	return false
 }
 
 // quotaStatus is a status a vendor says a key is out of its allowance with.

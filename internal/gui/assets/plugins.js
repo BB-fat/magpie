@@ -1499,7 +1499,7 @@
 
   // what a plugin's page may read of magpie's: what its package.json's
   // magpie.permissions declares, each a read with no secret in it
-  const READS = { "usage:summary": "your usage totals, by model", "providers:list": "your providers' names" };
+  const READS = { "usage:summary": "your usage totals, by model", "usage:day": "your usage by day, agent and model", "providers:list": "your providers' names" };
   const PAGES = { sessions: "Sessions", library: "Library", routing: "Routing", usage: "Usage" };
   function pageLine(p) {
     const d = el("div", "sub pm-mw pm-page");
@@ -1766,9 +1766,12 @@
     const bar = el("div", "bar");
     bar.append(el("span", "note", t("Plugins are other people's code: they sign in and make the requests, or see them as middleware.")), el("span", "grow"));
     const close = el("button", "text", t("Close"));
-    close.onclick = () => { stop(); closeModal(); };
+    close.onclick = () => { stop(); closeConfirmAsk(); };
     bar.append(close);
     ed.append(bar);
+    // Escape and the backdrop close it, as every dialog borrowing #modal
+    // outside Providers (#3779)
+    confirmAsk = ed;
     openModal(ed);
     // the button follows an install or a sign-in made while it's open
     const tick = setInterval(() => { if (!ed.isConnected) return stop(); redrawAct(); }, 600);

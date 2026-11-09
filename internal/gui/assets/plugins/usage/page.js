@@ -151,7 +151,12 @@ function archivePanel(name, id, redraw) {
   return box;
 }
 
-const PERIODS = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["all", "All"]];
+// "24 hours" is the day up to now rather than since midnight (mahiro233 on
+// Discord), the server's rolling window (#2075). The reader's pick of these
+// is kept for the next time the page opens; picked days are not, as they
+// go stale.
+const PERIODS = [["today", "Today"], ["last:24h", "24 hours"], ["7d", "7 days"], ["30d", "30 days"], ["all", "All"]];
+try { const v = localStorage.getItem("magpie.usagePeriod"); if (PERIODS.some(([id]) => id === v)) period = v; } catch {}
 
 // The reader's time zone, which magpie reads the period's days, the chart's
 // hours and a picked day in: magpie web may be read from another zone than
@@ -240,9 +245,10 @@ function renderPeriod(loading) {
     if (b.classList.contains("open")) return closeProtoMenu();
     // on a phone the strip is hidden behind the head's menu, which opens it
     openRangeMenu(b.offsetParent ? b : $("#usageRangeMenu"), range, (from, to) => {
+      const picked = periodDays(from + ".." + to);
       for (const x of seg.querySelectorAll(".opt")) x.classList.toggle("on", x === b);
-      b.lastChild.textContent = rangeName({ from, to });
-      b.title = t("Days picked: {days}", { days: rangeName({ from, to }) });
+      b.lastChild.textContent = rangeName(picked);
+      b.title = t("Days picked: {days}", { days: rangeName(picked) });
       b.setAttribute("aria-label", b.title);
       slide(seg, "period");
       pickPeriod(from + ".." + to);
@@ -287,21 +293,34 @@ function renderPeriod(loading) {
 
 function pickPeriod(id) {
   period = id; ledDay = ""; ledOffset = 0;
+  if (PERIODS.some(([p]) => p === id)) try { localStorage.setItem("magpie.usagePeriod", id); } catch {}
   loadUsage().catch((e) => status(e.message, "err"));
 }
 
 const dayKeyOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 // rangeName says picked days short: "Oct 1 – Oct 7", the year only when it
-// isn't this one, one day alone as itself
-function rangeName({ from, to }) {
+// isn't this one, one day alone as itself, and the minutes an end names
+// after its day: "Oct 1 09:30 – 18:00" within one day
+function rangeName({ from, to, fromAt = "", toAt = "" }) {
   const year = new Date().getFullYear();
   const name = (k) => dayOfKey(k).toLocaleDateString(intlLang(), { month: "short", day: "numeric", ...(dayOfKey(k).getFullYear() !== year ? { year: "numeric" } : {}) });
-  return from === to ? name(from) : name(from) + " – " + name(to);
+  if (!fromAt && !toAt) return from === to ? name(from) : name(from) + " – " + name(to);
+  const end = from === to ? toAt || "24:00" : name(to) + (toAt ? " " + toAt : "");
+  return name(from) + " " + (fromAt || "00:00") + " – " + end;
+}
+// typedTime reads a time typed into the range menu, "9:30", "0930" or "09:30",
+// as "09:30"; "" when empty, null when it isn't one. The end's "24:00" is
+// its day's end, which is no minute of its own.
+function typedTime(v, end) {
+  v = v.trim();
+  if (!v || (end && /^24:?00$/.test(v))) return "";
+  const m = /^([01]?\d|2[0-3]):?([0-5]\d)$/.exec(v);
+  return m ? m[1].padStart(2, "0") + ":" + m[2] : null;
 }
 // noCallsIn is what an empty page says of the period it is on
 function noCallsIn(p) {
   if (periodDays(p)) return "No calls on the days picked.";
-  return { today: "No calls today.", "7d": "No calls in the last 7 days.", "30d": "No calls in the last 30 days.", all: "No calls yet." }[p] || "No calls yet.";
+  return { today: "No calls today.", "last:24h": "No calls in the last 24 hours.", "7d": "No calls in the last 7 days.", "30d": "No calls in the last 30 days.", all: "No calls yet." }[p] || "No calls yet.";
 }
 
 // openRangeMenu is the app's own menu for picking days (#1492): a few
@@ -345,7 +364,37 @@ function openRangeMenu(anchor, current, choose) {
   nav.append(prev, month, next);
   const grid = el("div", "rm-grid");
   grid.setAttribute("role", "grid");
-  box.append(head, quick, nav, grid);
+  // the minutes the first day begins at and the last ends at, a whole day
+  // each when left empty; Enter applies them to the days already picked
+  const times = el("div", "rm-times");
+  const timeIn = (v, hint, label) => {
+    const i = el("input", "rm-time");
+    Object.assign(i, { type: "text", inputMode: "numeric", maxLength: 5, placeholder: hint, value: v || "", spellcheck: false, autocomplete: "off" });
+    i.setAttribute("aria-label", t(label));
+    i.oninput = () => i.removeAttribute("aria-invalid");
+    i.onkeydown = (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const r = start ? null : current;
+      if (r) withTimes(r.from, r.to);
+    };
+    return i;
+  };
+  const fromT = timeIn(current?.fromAt, "00:00", "Start time"), toT = timeIn(current?.toAt, "24:00", "End time");
+  times.append(svg("M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2 1.3", 12, 1.4), fromT, el("span", "rm-dash", "–"), toT);
+  // the two days with the minutes typed, chosen; false when a time isn't
+  // one or the range would end before it begins
+  const withTimes = (fromDay, toDay) => {
+    const a = typedTime(fromT.value, false), z = typedTime(toT.value, true);
+    if (a == null) fromT.setAttribute("aria-invalid", "true");
+    if (z == null) toT.setAttribute("aria-invalid", "true");
+    if (a == null || z == null) return false;
+    if (fromDay === toDay && z && (a || "00:00") >= z) { toT.setAttribute("aria-invalid", "true"); return false; }
+    closeProtoMenu();
+    choose(fromDay + (a ? "T" + a : ""), toDay + (z ? "T" + z : ""));
+    return true;
+  };
+  box.append(head, quick, nav, grid, times);
   const draw = (focusDay) => {
     head.textContent = start ? t("Now the last day") : t("Pick the first day, then the last");
     month.textContent = shown.toLocaleDateString(intlLang(), { year: "numeric", month: "long" });
@@ -371,8 +420,7 @@ function openRangeMenu(anchor, current, choose) {
         e.stopPropagation();
         if (!start) { start = k; draw(k); return; }
         const [from, to] = start <= k ? [start, k] : [k, start];
-        closeProtoMenu();
-        choose(from, to);
+        if (!withTimes(from, to)) { start = null; draw(); }
       };
       cells.push(b);
     }
@@ -609,6 +657,10 @@ const USAGE_FOLD_TITLES = {
   keys: ["Show the gateway keys", "Fold the gateway keys away"],
 };
 function mountUsageFolds() {
+  // how the allowances are shown, and their alerts, are set in
+  // Settings › Allowances
+  const toSet = $("#usageToSet");
+  if (toSet) toSet.onclick = (e) => openSettingsAt(e, "usage", "#quotaLeftRow");
   for (const b of $$("#usagePane .row-head .fold[data-fold]")) {
     b.prepend(svg(CHEV_R, 11, 1.6));
     b.onclick = () => {
@@ -726,7 +778,7 @@ function renderUsage() {
   const hit = u.cache_read && hitRate !== null ? t("hit rate {p}", { p: Math.round(100 * hitRate) + "%" }) : "";
   tile(fmtN(u.cache_read), t("cache read"), hit, u.cache_write ? t("{n} written", { n: fmtN(u.cache_write) }) + cacheTTLs(u, fmtN) : "");
   tile(fmtN(u.reasoning), t("reasoning"), t("inside output"));
-  tile(String(u.calls), t(u.calls === 1 ? "call" : "calls"), [u.credited ? ledCredits(u).textContent : "", u.errors ? t("{n} failed", { n: u.errors }) : "", u.retried ? t("{n} answered on a retry", { n: u.retried }) : "", u.canceled ? t("{n} canceled", { n: u.canceled }) : "", u.unpriced ? t("{n} unpriced", { n: u.unpriced }) : ""].filter(Boolean).join(" · "), u.unpriced ? unpricedCallsWhy(u.unpriced) : "");
+  tile(String(u.calls), t(u.calls === 1 ? "call" : "calls"), [u.credited ? ledCredits(u).textContent : "", u.errors ? t("{n} failed", { n: u.errors }) : "", u.retried ? t("{n} answered on a retry", { n: u.retried }) : "", u.canceled ? t("{n} canceled", { n: u.canceled }) : "", u.unpriced ? unpricedCalls(u.unpriced) : ""].filter(Boolean).join(" · "), u.unpriced ? unpricedCallsWhy(u.unpriced) : "");
 
   // the timeline: one bar per hour, day or week; output sits on top of input
   const chart = $("#chart");
@@ -1695,7 +1747,9 @@ function renderLedgerDash(l) {
     strip.lastChild.append(io);
   }
   const c = fmtCost(l);
-  block("Cost", c ? "≈" + c : "—", line(l.unpriced ? t(l.unpriced === 1 ? "{n} call had no known price and is not counted" : "{n} calls had no known price and are not counted", { n: l.unpriced }) : t("effective prices")), c ? "cost" : "");
+  // the count in the words the quick panel uses too, the whole sentence on
+  // hover (tenacious_eagle on Discord)
+  block("Cost", c ? "≈" + c : "—", line(l.unpriced ? unpricedCalls(l.unpriced) : t("effective prices")), c ? "cost" : "", l.unpriced ? unpricedCallsWhy(l.unpriced) : "");
   const hit = block("Cache hit rate", rate === null ? "—" : (100 * rate).toFixed(1) + "%", cacheLeftOut(l) ? line(cacheLeftOut(l)) : null, "", t("The share of the prompt read from the cache"));
   const meter = el("div", "meter"), fill = el("i");
   fill.style.width = (100 * (rate || 0)).toFixed(1) + "%";
@@ -2061,10 +2115,13 @@ function ledFollowed(e, other) {
   if (box.scrollLeft !== echo) ledFollow(other(), box);
 }
 // the table's scrollbar, kept in view at the window's foot (#799): as wide
-// as the table can go sideways, and moving it as the table moves it
+// as the table can go sideways, and moving it as the table moves it. A
+// finger moves the table itself, and a touch screen draws no bar in the
+// box, so there it stood as an empty band at the screen's foot (#4943)
+const ledTouch = matchMedia("(hover: none) and (pointer: coarse)");
 function ledHScroll() {
   const wrap = $("#ledWrap"), bar = $("#ledHScroll");
-  const over = !!wrap.querySelector("table") && wrap.scrollWidth > wrap.clientWidth + 1;
+  const over = !!wrap.querySelector("table") && wrap.scrollWidth > wrap.clientWidth + 1 && !ledTouch.matches;
   bar.hidden = !over;
   if (!over) return;
   bar.firstElementChild.style.width = wrap.scrollWidth - wrap.clientWidth + bar.clientWidth + "px";

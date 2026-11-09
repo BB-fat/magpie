@@ -931,6 +931,10 @@ body.window .field.solo { grid-column: auto; }
 .field .chev { color: var(--faint); display: inline-flex; margin-left: auto; padding-left: 1px; }
 .field:hover .chev, .field.open .chev { color: var(--muted); }
 .field.flash, .subscription-card.flash, .pq-card.flash, .row.pref.flash { animation: flash 1.2s ease-out; }
+/* a lit row's ring keeps its corners: the list's rounded clip cut them off
+   (the owner, 11-10), so it is rounded as the list is inside its border */
+.row.pref.flash { border-radius: 11px; }
+body.panel .row.pref.flash { border-radius: 10px; }
 @keyframes flash { 0%, 35% { box-shadow: inset 0 0 0 1px var(--green); background: var(--green-soft); } 100% {} }
 
 /* ---- usage ---------------------------------------------------------------- */
@@ -1282,6 +1286,9 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
 /* the last label can be wider than its bar's column: let it spill left, not off the card */
 .chart .labels span:last-child { display: flex; justify-content: flex-end; }
 .row.stat .who { flex: 0 0 180px; }
+/* the line under a name (a sign-in's id, its calls, credits and speed) is
+   read whole at every width, not cut where the column ends */
+.row.stat .who .sub { white-space: normal; overflow-wrap: anywhere; }
 .row.stat .who .name.faint { color: var(--faint); font-weight: 400; }
 .row.stat .share { flex: 1 1 auto; height: 4px; border-radius: 2px; background: var(--pill); overflow: hidden; margin: 0 6px; }
 .row.stat .share i { display: block; height: 100%; border-radius: 2px; background: var(--accent); opacity: .7; }
@@ -3010,6 +3017,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 #gatewayKeys .klf input { width: 100%; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--fg); font: inherit; font-size: 12px; }
 #gatewayKeys .klf-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-2); }
 #gatewayKeys .klf-err { color: var(--red); }
+#gatewayKeys .klf-off { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--fg-2); margin-bottom: 8px; }
 #gatewayKeys .klf .klf-period, #gatewayKeys .klf .klf-pick { width: 100%; max-width: none; height: 28px; justify-content: space-between; color: var(--fg); }
 #gatewayKeys .klf.with-days { grid-template-columns: minmax(0, 1fr) minmax(0, 0.6fr) minmax(0, 1fr) minmax(0, 1fr); }
 #gatewayKeys .klf-days[hidden] { display: none; }
@@ -3089,6 +3097,13 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .range-menu .rm-day.in { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 0; }
 .range-menu .rm-day.end { background: var(--accent); color: var(--accent-fg, #fff); }
 .range-menu .rm-day:disabled { color: var(--faint); opacity: .5; }
+/* the minutes the first day begins at and the last ends at */
+.range-menu .rm-times { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding: 7px 2px 0; border-top: 1px solid var(--line-2); color: var(--muted); }
+.range-menu .rm-times svg { flex: none; }
+.range-menu .rm-time { width: 52px; height: 24px; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 6px; background: transparent; color: var(--fg); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; text-align: center; }
+.range-menu .rm-time:focus { outline: none; border-color: var(--accent); }
+.range-menu .rm-time[aria-invalid="true"] { border-color: var(--red); }
+.range-menu .rm-dash { color: var(--faint); }
 @media (max-width: 640px) { .range-opt:not(.on) > span { display: none; } }
 /* a subscription's allowance, under its name */
 .accts .acc.with-aq { flex-wrap: wrap; row-gap: 3px; padding-top: 7px; padding-bottom: 8px; }
@@ -4256,6 +4271,9 @@ body.panel .modal { padding: 16px 12px; }
   body.web .proxy-controls, body.web .proxy-auth { justify-content: flex-start; }
   body.web .usage-head { height: auto; min-height: 44px; flex-wrap: wrap; gap: 8px; }
   body.web .usage-head > .segs { max-width: 100%; flex-wrap: wrap; }
+  /* Requests' Split by (#4943): its five choices ran 86px past a phone */
+  body.web .led-split { max-width: 100%; flex-wrap: wrap; }
+  body.web .led-split > .segs { max-width: 100%; flex-wrap: wrap; }
   body.web .usage-head > .grow, body.web .sess-tools > .grow { display: none; }
   /* the head on a phone: the tabs across it, and under them one line, the
      days as a menu, the sum, and the refresh as a dot and its figure */
@@ -4289,7 +4307,6 @@ body.panel .modal { padding: 16px 12px; }
   body.web .kpi small { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
   body.web .row.stat { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 6px 8px; }
   body.web .row.stat .who { grid-column: 2; grid-row: 1; }
-  body.web .row.stat .who .sub { white-space: normal; }
   body.web .row.stat .cost { grid-column: 3; grid-row: 1; }
   body.web .row.stat .num { grid-column: 2 / 4; grid-row: 2; min-width: 0; align-items: flex-start; }
   body.web .row.stat .num small { max-width: 100%; white-space: normal; }
@@ -4795,8 +4812,8 @@ body.window .row + .row.agent.conn > .who { min-height: 41px; } /* the line abov
 .ag-menu-cap > .ag-dot { margin-top: calc(0.8em - 3px); }
 .ag-menu-cap > span:last-child { flex: 1; min-width: 0; }
 /* Claude Desktop's "largest window only" switch (#1272): its words beside it, the hint after them */
-.ag-longest { cursor: pointer; }
-.ag-longest-say { color: var(--fg-2); }
+.ag-longest, .ag-isolated { cursor: pointer; }
+.ag-longest-say, .ag-isolated-say { color: var(--fg-2); }
 /* which copy is left on the old list: a sentence that wraps as one, under the warning's words */
 .ag-vl.ag-stale-copy { display: block; padding-left: 14px; font-size: 12px; line-height: 1.6; color: var(--fg-2); }
 /* Codex's daemon: restarted from its line, a button that sits in the sentence */
@@ -4922,7 +4939,7 @@ input[type="checkbox"]:disabled { opacity: .45; }
 
 /* a disabled model's pattern, as typed (#1867): an id or a glob */
 .disabled-model .name { font-family: var(--code); font-size: 12px; overflow-wrap: anywhere; }
-/* Settings › Images: the way to the Magpie Image tool, under its words (#2091) */
+/* Settings › Models › Images: the way to the Magpie Image tool, under its words (#2091) */
 .lib-way .link { padding-left: 0; padding-right: 0; white-space: normal; text-align: start; }
 /* Settings › Proxy's Test result (#2076): under the row's text */
 .row.pref .sub.proxy-check { margin-top: 3px; white-space: normal; overflow-wrap: anywhere; }
@@ -4950,6 +4967,9 @@ body .row.agent .ag-prefs .row.pref .who { display: block; }
 .editor .prov-prefs[hidden] { display: none; }
 .prov-prefs .list.prefs { margin: 0; }
 .prov-prefs .list.prefs[hidden] { display: none; }
+/* the editor's Claude Code runs as row switches it; magpie web as a
+   gateway has that row's switch off, so this one shows there */
+.prov-prefs #claudeRunList:not(.gw) #claudeTuiRow { display: none; }
 .prov-prefs .row.pref .sub { white-space: normal; }
 .prov-prefs .row.pref { flex-wrap: wrap; row-gap: 8px; }
 .prov-prefs .row.pref .who { flex: 1 1 240px; min-width: 0; }

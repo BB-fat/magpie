@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 
@@ -985,6 +986,16 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	if apiKey(r.Header) && rest != "/models" {
 		base = codexAPIBase
 	}
+	// the account ChatGPT limited till a time it named is not asked again
+	// before it: Codex's retries are answered here (codexHolds)
+	holdKey := ""
+	if r.Method == http.MethodPost && (rest == "/responses" || rest == "/responses/compact") {
+		holdKey = codexHoldKey(base, on)
+		if h, ok := codexHeld(holdKey, start); ok {
+			s.writeCodexHeld(w, r, h, base, on, modelOf(body), start)
+			return
+		}
+	}
 	var maskedHits maskHits
 	// the ChatGPT sign-in the user set to go unmasked, and its fallbacks
 	// (codexFallBack masks for its own route), gets the turn as written
@@ -1407,6 +1418,9 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 		if (rest == "/responses" || rest == "/responses/compact") && res.StatusCode >= 400 {
 			msg, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 			res.Body = io.NopCloser(bytes.NewReader(msg))
+			// its credits and resets looked at above, a 429 that names
+			// when the account is back holds it till then (codexHolds)
+			noteCodexHold(holdKey, res.StatusCode, res.Header, msg)
 			if overload && codexBusy(res.StatusCode, msg) && s.codexFallsBack(modelOf(body), body) {
 				// still too busy once asked again: the fallbacks answer
 				said := provider.APIError(msg, res.Status)
@@ -3099,7 +3113,24 @@ func callItemIDs(body []byte) []byte {
 // "Invalid 'input[1].id': 'rs_6aca2fc7533c979d5f0e4f7a:rs_01a125caa544754e9a3c70080100b009'.
 // Expected an ID that contains letters, numbers, underscores, or dashes,
 // but this value contained additional characters."
-var itemIDRefusal = regexp.MustCompile(`(?s)Invalid 'input\[\d+\]\.id'.{0,1000}?Expected an ID that contains letters, numbers, underscores, or dashes`)
+// It is the tail within 1000 characters of the head: the regexp
+// .{0,1000}? it was unrolled to 88kB of program, held from start to exit.
+func itemIDRefusal(b []byte) bool {
+	const tail = "Expected an ID that contains letters, numbers, underscores, or dashes"
+	for _, at := range itemIDRefusalHead.FindAllIndex(b, -1) {
+		rest, end := b[at[1]:], 0
+		for n := 0; n < 1000 && end < len(rest); n++ {
+			_, w := utf8.DecodeRune(rest[end:])
+			end += w
+		}
+		if bytes.Contains(rest[:min(len(rest), end+len(tail))], []byte(tail)) {
+			return true
+		}
+	}
+	return false
+}
+
+var itemIDRefusalHead = regexp.MustCompile(`Invalid 'input\[\d+\]\.id'`)
 
 // itemIDsRefused is how unfit remembers a provider turning away, for
 // model, an input item id with another character in it (plainItemIDs).
