@@ -148,6 +148,9 @@ func TestRemoteUpdateNeedsAFullKey(t *testing.T) {
 // when it is behind. The row keeps what it answered.
 func TestRemoteMagpieAskedToFollow(t *testing.T) {
 	t.Setenv("MAGPIE_ADDR", "")
+	// the custom fork's settings keep automatic updates off unless
+	// official updates are allowed (forkbuild.SelfUpdateDisabled)
+	t.Setenv("MAGPIE_UPDATE_ALLOW_OFFICIAL", "1")
 	provider.ForgetRemoteUpdatesForTest()
 	t.Cleanup(provider.ForgetRemoteUpdatesForTest)
 	was := Version
