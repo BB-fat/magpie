@@ -114,3 +114,59 @@ func TestSocketMetadataTakenOut(t *testing.T) {
 		}
 	}
 }
+
+// A turn that continued a reply on a socket is given back the reply's
+// output items as the relay streamed them, metadata {turn_id} on each
+// (the request archive's 11-09 turns, from Codex Desktop through two
+// magpies and from codex-tui on this one). The relay answered them 400
+// request_shape_not_codex, "input[].metadata, input[].metadata.turn_id",
+// or 403 "native codex clients only", and the same turn without it 200.
+// Codex's turn goes without metadata, every other byte as it came; another
+// client's goes as it came.
+func TestCodexReplayedItemsReachARelayWithoutMetadata(t *testing.T) {
+	c := loadCodexSocketTurn(t)
+	f := &fake{t: t, ctype: "application/json", reply: `{"id":"r","object":"response","status":"completed","output":[]}`}
+	setup(t, provider.Responses, f)
+	input := `[{"type":"message","role":"user","content":[{"type":"input_text","text":"go on"}]},` +
+		`{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"e","metadata":{"turn_id":"t1"}},` +
+		`{"type":"custom_tool_call","call_id":"c1","name":"exec","input":"ls","metadata":{"turn_id":"t1"},"status":"completed"},` +
+		`{"type":"custom_tool_call_output","call_id":"c1","output":"a"}]`
+	want := `[{"type":"message","role":"user","content":[{"type":"input_text","text":"go on"}]},` +
+		`{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"e"},` +
+		`{"type":"custom_tool_call","call_id":"c1","name":"exec","input":"ls","status":"completed"},` +
+		`{"type":"custom_tool_call_output","call_id":"c1","output":"a"}]`
+	send := func(ua string) string {
+		t.Helper()
+		body := `{"model":"fake/m1","input":` + input + `,"stream":false}`
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body))
+		req.Header.Set("User-Agent", ua)
+		if ua == c.UserAgent {
+			req.Header.Set("Originator", c.Originator)
+		}
+		rec := httptest.NewRecorder()
+		New().Handler().ServeHTTP(rec, req)
+		if rec.Code != 200 || f.calls == 0 {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+		return gjson.GetBytes(f.got, "input").Raw
+	}
+	if got := send(c.UserAgent); got != want {
+		t.Errorf("Codex's turn reached the relay with input\n%s\nwant\n%s", got, want)
+	}
+	if got := send("curl/8.5.0"); got != input {
+		t.Errorf("another client's input changed:\n%s", got)
+	}
+}
+
+func TestItemMetadataTakenOut(t *testing.T) {
+	got := string(withoutItemMetadata([]byte(`{"model":"m","input":[{"type":"reasoning","metadata":{"turn_id":"t"},"summary":[]}, "x" ,{"metadata":1}],"metadata":{"k":"v"}}`)))
+	want := `{"model":"m","input":[{"type":"reasoning","summary":[]},"x",{}],"metadata":{"k":"v"}}`
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+	for _, b := range []string{`{"model":"m"}`, `{"input":"metadata"}`, `{"input":[{"type":"message","content":"metadata"}]}`, `{"input":[{"type":"message","content":[{"metadata":1}]}]}`} {
+		if got := string(withoutItemMetadata([]byte(b))); got != b {
+			t.Errorf("%s changed to %s", b, got)
+		}
+	}
+}

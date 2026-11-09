@@ -27,8 +27,16 @@ import (
 //     socket was sent on with them. The turn's own is in the body's
 //     client_metadata; socketTurnMetadata is it as Codex puts it in the
 //     header, without tool_namespaces_info.
+//   - input[].metadata: a turn that continued a reply on a socket
+//     (previous_response_id) is given that reply's output items as the
+//     relay streamed them (responses_ws.go, here or on the magpie that
+//     sent it on), and the relay puts metadata {turn_id} on each. Codex
+//     reads that output over HTTP too, and never sends metadata back: the
+//     relay answered such a turn 400 request_shape_not_codex
+//     ("input[].metadata, input[].metadata.turn_id"), or 403 "native codex
+//     clients only". withoutItemMetadata takes it out.
 //
-// An HTTP turn has neither key, and its header is already its body's.
+// An HTTP turn has none of them, and its header is already its body's.
 
 // socketOnlyMetadata says a client_metadata key is one Codex sends over a
 // websocket alone, other than the Lite marker (withoutLiteMetadata).
@@ -53,6 +61,39 @@ func withoutSocketMetadata(body []byte) []byte {
 		return body
 	}
 	return withMembers(body, map[string][]byte{"client_metadata": cm})
+}
+
+// withoutItemMetadata is body without the metadata member of each input
+// item, every other member and item byte for byte and in order. A body
+// with no item that has one is returned as it was.
+func withoutItemMetadata(body []byte) []byte {
+	r, found, ok := topMember(body, "input")
+	if !found || !ok || len(r) == 0 || r[0] != '[' || !bytes.Contains(r, []byte(`"metadata"`)) {
+		return body
+	}
+	var out bytes.Buffer
+	out.WriteByte('[')
+	changed := false
+	n := 0
+	gjson.ParseBytes(r).ForEach(func(_, it gjson.Result) bool {
+		item := []byte(it.Raw)
+		if it.IsObject() {
+			if kept, dropped := withoutKeys(item, func(k string) bool { return k == "metadata" }); dropped {
+				item, changed = kept, true
+			}
+		}
+		if n > 0 {
+			out.WriteByte(',')
+		}
+		out.Write(item)
+		n++
+		return true
+	})
+	if !changed {
+		return body
+	}
+	out.WriteByte(']')
+	return withMembers(body, map[string][]byte{"input": out.Bytes()})
 }
 
 // socketTurnMetadata is the x-codex-turn-metadata header Codex sends with

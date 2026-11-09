@@ -5769,8 +5769,10 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	}
 	if p.Account == nil && to == provider.Responses && fromCodex(in) {
 		// as Codex sends the turn over HTTP: without what it adds to
-		// client_metadata over a websocket (codex_socket_relay.go)
-		body = withoutSocketMetadata(body)
+		// client_metadata over a websocket, nor the metadata a relay put
+		// on the output items a socket turn was given back
+		// (codex_socket_relay.go)
+		body = withoutItemMetadata(withoutSocketMetadata(body))
 	}
 	base := p.Base(to)
 	zenFree := p.IsOpenCode() && p.OpenCodeFree(gjson.GetBytes(body, "model").String())
