@@ -5767,6 +5767,11 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		}
 		path, body = at, b
 	}
+	if p.Account == nil && to == provider.Responses && fromCodex(in) {
+		// as Codex sends the turn over HTTP: without what it adds to
+		// client_metadata over a websocket (codex_socket_relay.go)
+		body = withoutSocketMetadata(body)
+	}
 	base := p.Base(to)
 	zenFree := p.IsOpenCode() && p.OpenCodeFree(gjson.GetBytes(body, "model").String())
 	if zenFree {
@@ -5837,6 +5842,18 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 			if codexClientHeader(k) {
 				req.Header[k] = slices.Clone(vs)
 				seen[k] = vs
+			}
+		}
+		if to == provider.Responses && req.Header.Get("X-Codex-Turn-Metadata") != "" {
+			// the turn's own, not a websocket warm-up's it came on with
+			// (codex_socket_relay.go)
+			if v, ok := socketTurnMetadata(body); ok && !sameJSONText(v, req.Header.Get("X-Codex-Turn-Metadata")) {
+				for k := range req.Header {
+					if strings.EqualFold(k, "X-Codex-Turn-Metadata") {
+						delete(req.Header, k)
+					}
+				}
+				req.Header.Set("X-Codex-Turn-Metadata", v)
 			}
 		}
 		if ua != "" {
