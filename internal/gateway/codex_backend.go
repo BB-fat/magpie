@@ -3344,18 +3344,18 @@ var keepsSeal = map[string]bool{`"reasoning"`: true, `"compaction"`: true, `"com
 // output.encrypted_content in its include,
 // and the sealed output (encrypted_content) on a message or call that an
 // OpenAI model wrote earlier in the conversation; and, for a summary ask
-// of magpie's own (compaction, codexCompact), with its developer messages
-// as the system ones they are (developerItemsAsSystem) — Codex's own turns
+// of magpie's own whose model refused developer, with its developer messages
+// as system ones (developerItemsAsSystem) — Codex's own turns
 // keep the role, which a relay may be checking them by (#350, #1758).
 // A relay that checks it is Codex's turned the lot away ("invalid codex
 // request", #292), and Copilot the include (echo_ts). OpenAI's API and the
 // ChatGPT backend get it as it came; so does anything else, byte for byte,
 // when none of them is in it.
-func forVendor(p provider.Provider, body []byte, compaction bool) []byte {
+func forVendor(p provider.Provider, body []byte, systemRole bool) []byte {
 	if p.Account != nil && p.Account.Agent == "codex" || strings.HasSuffix(p.Host(), "openai.com") {
 		return body
 	}
-	if compaction {
+	if systemRole {
 		body = developerItemsAsSystem(body)
 	}
 	if !slices.ContainsFunc(openaiOnly, func(k []byte) bool { return bytes.Contains(body, k) }) || !forVendorChanges(body) {
@@ -3507,10 +3507,10 @@ func forVendorChanges(body []byte) bool {
 // around it, carrying no developer message, passed. Zed's cloud turned
 // the whole request away over one (ZedBody), and a Chat Completions
 // upstream is given the messages as system for the same reason
-// (developerAsSystem). A developer message says what a system one says,
-// and every Responses backend takes system; the ChatGPT backend, which
-// takes developer alone, never comes here. The message stays where it
-// stood, so a thread's cached prefix keeps its shape (#502).
+// (developerAsSystem). This is used only after an explicit developer-role
+// refusal: relays to the ChatGPT backend can reject system messages.
+// The message stays where it stood, so a thread's cached prefix keeps
+// its shape (#502).
 func developerItemsAsSystem(body []byte) []byte {
 	if !bytes.Contains(body, []byte(`"developer"`)) {
 		return body

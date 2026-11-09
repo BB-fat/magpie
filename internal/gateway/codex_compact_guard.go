@@ -126,9 +126,8 @@ func wantsWhole(ctx context.Context) bool {
 }
 
 // compactionAskKey marks a request that is magpie's own summary ask for a
-// compaction (codexCompact). It is not Codex's turn: a provider that
-// isn't OpenAI's is given its developer messages as the system ones they
-// are (forVendor), while Codex's own turns keep the role the client sent.
+// compaction (codexCompact). Only this ask may retry developer messages
+// as system after an explicit role refusal; Codex's own turns keep their role.
 type compactionAskKey struct{}
 
 func asksCompaction(ctx context.Context) bool {

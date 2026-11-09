@@ -6205,7 +6205,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		if p.Account == nil || p.Account.Agent != "codex" {
 			body, searchFn = searchAsFunction(body)
 		}
-		body = forVendor(p, body, asksCompaction(r.Context()))
+		body = forVendor(p, body, asksCompaction(r.Context()) && !s.fits(p.ID, compactDeveloperRefused(model), proto))
 		// Ark takes web_search in the shape its docs give, and only the include
 		// values it knows (search_ark.go)
 		body = forArkSearch(p, body)
@@ -6524,6 +6524,24 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		u.RequestID = requestID(res.Header)
 		status, msg := passError(w, p, proto, proto, res, u)
 		return status, msg, true
+	}
+	// A summary keeps Codex's developer role unless this model explicitly
+	// refuses it. Codex relays can reject system messages instead.
+	if proto == provider.Responses && asksCompaction(r.Context()) && !codexAsSent(p, r.Header) && badRequest(res.StatusCode) {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		res.Body = io.NopCloser(bytes.NewReader(b))
+		if compactDeveloperRoleRefusal(b) {
+			if nb := forVendor(p, body, true); !bytes.Equal(nb, body) {
+				body = nb
+				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
+					return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
+				}
+				if res.StatusCode < 400 {
+					s.markUnfit(p.ID, compactDeveloperRefused(model), proto)
+				}
+			}
+		}
 	}
 	// structured output turned away (Xiaomi MiMo's Token Plan takes no
 	// json_schema, only text and json_object, #2126): a schema is asked
