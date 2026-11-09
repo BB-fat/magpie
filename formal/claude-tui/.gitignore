@@ -1,1 +1,5 @@
 __pycache__/
+
+# Keep private rollout inventories out of public verification artifacts.
+results/*deployment*.json
+results/*rollout*.json

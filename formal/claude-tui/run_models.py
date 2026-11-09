@@ -10,6 +10,8 @@ import subprocess
 import tempfile
 import time
 
+from public_evidence import redact_tlc_output
+
 ROOT = Path(__file__).resolve().parent
 SHA256 = '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88'
 parser = argparse.ArgumentParser()
@@ -44,7 +46,9 @@ for case in cases:
             output, code = run.stdout, run.returncode
         except subprocess.TimeoutExpired as err:
             output, code = (err.stdout or b'').decode(errors='replace'), 124
-    log.write_text(output)
+    captured_digest = hashlib.sha256(output.encode()).hexdigest()
+    public_output = redact_tlc_output(output)
+    log.write_text(public_output)
     error = re.search(r'Error: Invariant (\w+) is violated', output)
     violated = error.group(1) if error else None
     expected = case['expected']
@@ -54,13 +58,15 @@ for case in cases:
               'seconds': round(time.monotonic() - started, 3),
               'generated': int(states[1].replace(',', '')) if states else None,
               'distinct': int(states[2].replace(',', '')) if states else None,
-              'log_sha256': hashlib.sha256(log.read_bytes()).hexdigest()}
+              'log_sha256': hashlib.sha256(log.read_bytes()).hexdigest(),
+              'captured_log_sha256': captured_digest,
+              'log_redaction': 'Local machine details and absolute paths omitted; checker results unchanged.'}
     results.append(result)
     failed |= not ok
     print(name, 'OK' if ok else 'UNEXPECTED', 'exit', code, 'invariant', violated,
           'distinct', result['distinct'], flush=True)
     if not ok:
-        print(output[-3500:], flush=True)
+        print(public_output[-3500:], flush=True)
 (ROOT / 'results' / ('summary-selected.json' if args.case else 'summary.json')).write_text(json.dumps({
     'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
     'checker': 'TLC 1.7.4', 'jar_sha256': SHA256, 'cases': results}, indent=2) + '\n')

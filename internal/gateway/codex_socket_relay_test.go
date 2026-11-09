@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 // header, and the turn's client_metadata as Codex wrote it
 // (testdata/codex-ws-turn-metadata.json, captured from codex exec).
 type codexSocketTurn struct {
+	Source     string `json:"source"`
 	Prewarm    string `json:"prewarm_turn_metadata"`
 	Handshake  string `json:"turn_handshake_turn_metadata"`
 	UserAgent  string `json:"user_agent"`
@@ -34,6 +36,36 @@ func loadCodexSocketTurn(t *testing.T) codexSocketTurn {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// Public captures retain the transport shape, not an installation's identity.
+func TestCodexSocketFixtureUsesSyntheticIdentifiers(t *testing.T) {
+	c := loadCodexSocketTurn(t)
+	if !strings.HasPrefix(strings.ToLower(c.Source), "sanitized ") {
+		t.Error("fixture must identify itself as a sanitized capture")
+	}
+	ids := regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`).FindAllString(c.Prewarm+c.Handshake+c.Metadata, -1)
+	if len(ids) == 0 {
+		t.Fatal("fixture lost its installation and session relationships")
+	}
+	for _, id := range ids {
+		if !strings.HasPrefix(id, "00000000-0000-7000-8000-") {
+			t.Error("fixture contains a non-synthetic installation or session identifier")
+			break
+		}
+	}
+	for _, raw := range []string{c.Prewarm, c.Handshake, gjson.Get(c.Metadata, "x-codex-turn-metadata").String()} {
+		if gjson.Get(raw, "model").String() != "example/test-model" {
+			t.Error("fixture model must use the example namespace")
+		}
+		if gjson.Get(raw, "agent_name").String() != "/example" {
+			t.Error("fixture must not identify the captured user's agent")
+		}
+	}
+	if gjson.Get(c.Handshake, "turn_started_at_unix_ms").Int() != 1700000000000 ||
+		gjson.Get(c.Metadata, "x-codex-ws-stream-request-start-ms").Int() != 1700000000001 {
+		t.Error("fixture must use synthetic timestamps")
+	}
 }
 
 // A Codex websocket turn relayed to a keyed Responses relay goes as Codex

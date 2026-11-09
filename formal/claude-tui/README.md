@@ -4,7 +4,7 @@ Audit date: 2026-11-02, Asia/Shanghai.
 
 Target: `c01714ae69df64537a96b6c8a4602954ffd28720`, including the activity
 summary fix. This is not the old `custom` worktree or an assertion about
-what is currently deployed on a reported deployment. No retained production implementation change, commit, push, or deployment
+any current deployment. No retained runtime implementation change, commit, push, or deployment
 was made during this audit. The temporary observation hooks used by the
 witness runner were restored byte-for-byte before the ordinary suite ran.
 
@@ -74,7 +74,22 @@ Unrelated runtime behavior has not been altered to conceal these failures.
 Desktop build/vet additionally require development packages absent on this
 host. Windows execution and GUI browser/native-webview tests were not run.
 
-Deployment inventories and operational rollout details are omitted from public audit evidence.
+## Public Evidence
+
+Deployment inventories, process IDs, binary fingerprints and rollback locations
+are not published with this audit. The retained results describe historical
+local checks, not a current service deployment or a full-suite-green release.
+
+TLC logs omit machine banners and absolute filesystem paths. Their recorded
+checker outcomes and state counts are unchanged. Each summary records both
+the captured log digest and the digest of the sanitized public log. Source
+manifests identify the historical audited source, not the current checkout.
+`run_models.py` applies the same redaction to future logs. Check the redactor
+with:
+
+```sh
+python3 -m unittest discover -s formal/claude-tui -p '*_test.py'
+```
 
 ## Findings First
 

@@ -105,3 +105,16 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nogui -trimpath \
 
 Copy it to the host, check its sha256 there, keep the old binary as
 `magpie.bak.<version>`, replace it and restart the service.
+
+## Public fixtures and verification records
+
+This fork is public. Captures checked into it must replace installation,
+session and thread identifiers, account labels, private model aliases and
+capture timestamps with explicitly synthetic values while preserving protocol
+relationships. `TestCodexSocketFixtureUsesSyntheticIdentifiers` guards the
+Codex transport capture.
+
+Keep deployment inventories, production rollback paths and real credentials
+out of verification artifacts. The TLA runner sanitizes local machine banners
+and filesystem paths before publishing logs and records that redaction beside
+the log digests. A sanitized fixture or log is not a new live verification run.
